@@ -35,16 +35,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsSheet } from '@/components/settings-sheet';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -1280,7 +1270,7 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
+      <Dialog
         open={Boolean(deletingConversation)}
         onOpenChange={(open) => {
           if (!open && !conversationActionBusy) {
@@ -1289,21 +1279,26 @@ export default function Home() {
           }
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除这段对话？</AlertDialogTitle>
-            <AlertDialogDescription>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>删除这段对话？</DialogTitle>
+            <DialogDescription>
               “{deletingConversation?.title}”将从对话历史中移除。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </DialogDescription>
+          </DialogHeader>
           {conversationActionError ? (
             <p className="text-sm text-red-600">{conversationActionError}</p>
           ) : null}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={conversationActionBusy}>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={conversationActionBusy}
+              onClick={() => setDeletingConversation(null)}
+            >
               取消
-            </AlertDialogCancel>
-            <AlertDialogAction
+            </Button>
+            <Button
               type="button"
               disabled={conversationActionBusy}
               className="bg-red-600 text-white hover:bg-red-700"
@@ -1313,10 +1308,10 @@ export default function Home() {
                 <Loader2 className="animate-spin" />
               ) : null}
               删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
     </main>
