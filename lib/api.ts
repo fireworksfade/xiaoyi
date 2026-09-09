@@ -1,5 +1,5 @@
 const API_ROOT =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api/backend/api/v1';
 
 const CSRF_STORAGE_KEY = 'xiaoyi.csrf-token';
 
