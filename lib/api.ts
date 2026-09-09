@@ -36,21 +36,6 @@ export type ConversationMessage = {
   created_at: string;
 };
 
-export type RepairProposal = {
-  id: string;
-  run_id: string | null;
-  version: number;
-  target: Record<string, unknown>;
-  action: string;
-  parameters: Record<string, unknown>;
-  reason: string;
-  impact: string;
-  verification: Record<string, unknown>;
-  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated';
-  expires_at: string;
-  task_status?: string;
-};
-
 export type ModelConfiguration = {
   provider_name: string;
   base_url: string;
@@ -295,36 +280,6 @@ export async function streamAgentRun(
 
     if (done) break;
   }
-}
-
-export async function getRepairProposal(proposalId: string) {
-  return request<RepairProposal>(`/repair-proposals/${proposalId}`);
-}
-
-export async function decideRepairProposal(
-  proposalId: string,
-  decision: 'approved' | 'rejected',
-  expectedVersion: number,
-) {
-  return request<RepairProposal>(
-    `/repair-proposals/${proposalId}/decision`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ decision, expected_version: expectedVersion }),
-    },
-    true,
-  );
-}
-
-export async function getRepairTaskForProposal(proposalId: string) {
-  const page = await request<{
-    items: Array<{ id: string; proposal_id: string; status: string }>;
-  }>('/repair-tasks?page=1&page_size=100');
-  const task = page.items.find((item) => item.proposal_id === proposalId);
-  if (!task) return null;
-  return request<{ id: string; proposal_id: string; status: string }>(
-    `/repair-tasks/${task.id}`,
-  );
 }
 
 export async function getModelConfiguration() {

@@ -22,7 +22,6 @@ import {
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   Sparkles,
   Trash2,
   Wrench,
@@ -55,16 +54,12 @@ import {
 import {
   ApiError,
   createConversation,
-  decideRepairProposal,
   deleteConversation,
   ensureDemoSession,
-  getRepairProposal,
-  getRepairTaskForProposal,
   listAgentToolSources,
   listConversationMessages,
   listConversations,
   type Conversation,
-  type RepairProposal,
   type UploadedAttachment,
   streamAgentRun,
   submitAgentMessage,
@@ -78,7 +73,6 @@ type Message = {
   text: string;
   tools?: { name: string; result: string }[];
   citation?: string;
-  approval?: RepairProposal;
   attachments?: UploadedAttachment[];
 };
 
@@ -102,23 +96,6 @@ const suggestions = [
   },
   { icon: Gauge, label: '查看设备状态', prompt: '查看当前设备运行状态' },
 ];
-
-const proposalStatusLabels: Record<RepairProposal['status'], string> = {
-  pending: '待审批',
-  approved: '已批准',
-  rejected: '已拒绝',
-  expired: '已过期',
-  invalidated: '已失效',
-};
-
-const taskStatusLabels: Record<string, string> = {
-  queued: '待执行',
-  running: '执行中',
-  verifying: '验证中',
-  succeeded: '修复成功',
-  failed: '执行失败',
-  unknown: '结果未知',
-};
 
 function displayValue(value: unknown, fallback = '') {
   return ['string', 'number', 'boolean'].includes(typeof value)
@@ -156,7 +133,6 @@ export default function Home() {
     string | null
   >(null);
   const [running, setRunning] = useState(false);
-  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
@@ -436,17 +412,6 @@ export default function Home() {
             ],
           }));
         }
-        if (event.type === 'approval.required') {
-          const proposalId = displayValue(event.data.proposal_id);
-          if (proposalId) {
-            void getRepairProposal(proposalId).then((proposal) => {
-              updateAssistant((message) => ({
-                ...message,
-                approval: proposal,
-              }));
-            });
-          }
-        }
         if (event.type === 'run.failed') {
           const error = event.data.error as
             | { message?: string }
@@ -506,56 +471,6 @@ export default function Home() {
             (source) => source.id === toolSelection.slice('server:'.length),
           )?.name ?? '指定服务')
         : '工具自动选择';
-
-  async function handleApprovalDecision(
-    messageId: Message['id'],
-    proposal: RepairProposal,
-    decision: 'approved' | 'rejected',
-  ) {
-    setApprovalBusy(proposal.id);
-    try {
-      await ensureDemoSession();
-      const updated = await decideRepairProposal(
-        proposal.id,
-        decision,
-        proposal.version,
-      );
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === messageId
-            ? { ...message, approval: updated }
-            : message,
-        ),
-      );
-      if (decision === 'approved') {
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-          const task = await getRepairTaskForProposal(proposal.id);
-          if (task) {
-            setMessages((current) =>
-              current.map((message) =>
-                message.id === messageId && message.approval
-                  ? {
-                      ...message,
-                      approval: {
-                        ...message.approval,
-                        task_status: task.status,
-                      },
-                    }
-                  : message,
-              ),
-            );
-            if (['succeeded', 'failed', 'unknown'].includes(task.status)) break;
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 400));
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '审批请求失败';
-      window.alert(message);
-    } finally {
-      setApprovalBusy(null);
-    }
-  }
 
   function startNewChat() {
     if (running) return;
@@ -925,104 +840,6 @@ export default function Home() {
                             </span>
                           ))}
                         </div>
-                      ) : null}
-                      {message.approval ? (
-                        <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                              <span className="grid size-7 place-items-center rounded-md bg-amber-50 text-amber-700">
-                                <ShieldCheck className="size-4" />
-                              </span>
-                              <div>
-                                <p className="text-sm font-medium text-slate-900">
-                                  修复方案
-                                </p>
-                                <p className="text-xs text-slate-400">
-                                  需要管理员明确审批
-                                </p>
-                              </div>
-                            </div>
-                            <Badge
-                              variant="outline"
-                              className="shrink-0 border-slate-200 bg-slate-50 font-normal text-slate-600"
-                            >
-                              {message.approval.task_status
-                                ? taskStatusLabels[
-                                    message.approval.task_status
-                                  ] || message.approval.task_status
-                                : proposalStatusLabels[message.approval.status]}
-                            </Badge>
-                          </div>
-                          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                            <div>
-                              <dt className="text-xs text-slate-400">目标</dt>
-                              <dd className="mt-1 text-slate-700">
-                                {displayValue(
-                                  message.approval.target.device_id ??
-                                    message.approval.target.collector_id ??
-                                    '受控服务',
-                                )}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt className="text-xs text-slate-400">操作</dt>
-                              <dd className="mt-1 text-slate-700">
-                                {message.approval.action ===
-                                'update_reporting_interval'
-                                  ? `调整上报间隔为 ${String(message.approval.parameters.seconds)} 秒`
-                                  : message.approval.action}
-                              </dd>
-                            </div>
-                            <div className="sm:col-span-2">
-                              <dt className="text-xs text-slate-400">影响</dt>
-                              <dd className="mt-1 leading-6 text-slate-700">
-                                {message.approval.impact}
-                              </dd>
-                            </div>
-                            <div className="sm:col-span-2">
-                              <dt className="text-xs text-slate-400">验证</dt>
-                              <dd className="mt-1 text-slate-700">
-                                {message.approval.verification.samples
-                                  ? `检查后续 ${displayValue(message.approval.verification.samples)} 次上报间隔`
-                                  : '执行后检查服务健康与数据恢复'}
-                              </dd>
-                            </div>
-                          </dl>
-                          {message.approval.status === 'pending' ? (
-                            <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 pt-3">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={approvalBusy === message.approval.id}
-                                onClick={() =>
-                                  void handleApprovalDecision(
-                                    message.id,
-                                    message.approval!,
-                                    'rejected',
-                                  )
-                                }
-                              >
-                                拒绝
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={approvalBusy === message.approval.id}
-                                className="bg-slate-900 text-white hover:bg-slate-700"
-                                onClick={() =>
-                                  void handleApprovalDecision(
-                                    message.id,
-                                    message.approval!,
-                                    'approved',
-                                  )
-                                }
-                              >
-                                批准执行
-                              </Button>
-                            </div>
-                          ) : null}
-                        </section>
                       ) : null}
                       {message.citation ? (
                         <button
