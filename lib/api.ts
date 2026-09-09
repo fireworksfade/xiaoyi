@@ -83,11 +83,7 @@ export type MCPTool = {
   model_alias: string;
   description: string;
   enabled: boolean;
-  risk_policy:
-    | 'read_only'
-    | 'proposal_only'
-    | 'approval_required'
-    | 'disabled';
+  risk_policy: 'read_only' | 'proposal_only' | 'approval_required' | 'disabled';
 };
 
 export class ApiError extends Error {
@@ -180,6 +176,25 @@ export async function listConversations() {
 export async function listConversationMessages(conversationId: string) {
   return request<{ items: ConversationMessage[] }>(
     `/conversations/${conversationId}/messages`,
+  );
+}
+
+export async function updateConversation(
+  conversationId: string,
+  title: string,
+) {
+  return request<Conversation>(
+    `/conversations/${conversationId}`,
+    { method: 'PATCH', body: JSON.stringify({ title }) },
+    true,
+  );
+}
+
+export async function deleteConversation(conversationId: string) {
+  return request<{ deleted: boolean }>(
+    `/conversations/${conversationId}`,
+    { method: 'DELETE' },
+    true,
   );
 }
 

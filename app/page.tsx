@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   Bot,
@@ -18,22 +18,44 @@ import {
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   Search,
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Wrench,
   X,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsSheet } from '@/components/settings-sheet';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -44,6 +66,7 @@ import {
   ApiError,
   createConversation,
   decideRepairProposal,
+  deleteConversation,
   ensureDemoSession,
   getRepairProposal,
   getRepairTaskForProposal,
@@ -55,6 +78,7 @@ import {
   type UploadedAttachment,
   streamAgentRun,
   submitAgentMessage,
+  updateConversation,
   uploadAttachment,
 } from '@/lib/api';
 
@@ -125,11 +149,22 @@ export default function Home() {
   const [conversationQuery, setConversationQuery] = useState('');
   const [conversationListBusy, setConversationListBusy] = useState(true);
   const [conversationBusy, setConversationBusy] = useState(false);
-  const [conversationError, setConversationError] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedConversation, setSelectedConversation] = useState<string | null>(
+  const [conversationError, setConversationError] = useState<string | null>(
     null,
   );
+  const [editingConversation, setEditingConversation] =
+    useState<Conversation | null>(null);
+  const [deletingConversation, setDeletingConversation] =
+    useState<Conversation | null>(null);
+  const [conversationTitleDraft, setConversationTitleDraft] = useState('');
+  const [conversationActionBusy, setConversationActionBusy] = useState(false);
+  const [conversationActionError, setConversationActionError] = useState<
+    string | null
+  >(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedConversation, setSelectedConversation] = useState<
+    string | null
+  >(null);
   const [running, setRunning] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([]);
@@ -160,7 +195,9 @@ export default function Home() {
     const page = await listConversations();
     setConversations(page.items);
     const nextId = preferredId ?? selectedConversation;
-    return page.items.find((conversation) => conversation.id === nextId) ?? null;
+    return (
+      page.items.find((conversation) => conversation.id === nextId) ?? null
+    );
   }
 
   async function openConversation(conversation: Conversation) {
@@ -192,6 +229,65 @@ export default function Home() {
       );
     } finally {
       if (conversationLoadRef.current === loadId) setConversationBusy(false);
+    }
+  }
+
+  function beginRename(conversation: Conversation) {
+    setEditingConversation(conversation);
+    setConversationTitleDraft(conversation.title);
+    setConversationActionError(null);
+  }
+
+  async function renameConversation(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = conversationTitleDraft.trim();
+    if (!editingConversation || !title || conversationActionBusy) return;
+    setConversationActionBusy(true);
+    setConversationActionError(null);
+    try {
+      await ensureDemoSession();
+      const updated = await updateConversation(editingConversation.id, title);
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === updated.id ? updated : conversation,
+        ),
+      );
+      setEditingConversation(null);
+    } catch (error) {
+      setConversationActionError(
+        error instanceof Error ? error.message : '无法重命名对话',
+      );
+    } finally {
+      setConversationActionBusy(false);
+    }
+  }
+
+  async function removeConversation() {
+    if (!deletingConversation || conversationActionBusy) return;
+    const target = deletingConversation;
+    setConversationActionBusy(true);
+    setConversationActionError(null);
+    try {
+      await ensureDemoSession();
+      await deleteConversation(target.id);
+      const remaining = conversations.filter(
+        (conversation) => conversation.id !== target.id,
+      );
+      setConversations(remaining);
+      setDeletingConversation(null);
+      if (selectedConversation === target.id) {
+        if (remaining[0]) {
+          await openConversation(remaining[0]);
+        } else {
+          startNewChat();
+        }
+      }
+    } catch (error) {
+      setConversationActionError(
+        error instanceof Error ? error.message : '无法删除对话',
+      );
+    } finally {
+      setConversationActionBusy(false);
     }
   }
 
@@ -372,7 +468,9 @@ export default function Home() {
     } catch (error) {
       const code = error instanceof ApiError ? `（${error.code}）` : '';
       const errorMessage = error instanceof Error ? error.message : '未知错误';
-      updateAssistant(replaceMessageText(`连接后端失败：${errorMessage}${code}`));
+      updateAssistant(
+        replaceMessageText(`连接后端失败：${errorMessage}${code}`),
+      );
     } finally {
       setRunning(false);
       try {
@@ -404,7 +502,9 @@ export default function Home() {
       const page = await listAgentToolSources();
       setToolSources(page.items);
     } catch (error) {
-      setComposerError(error instanceof Error ? error.message : '无法读取工具列表');
+      setComposerError(
+        error instanceof Error ? error.message : '无法读取工具列表',
+      );
     }
   }
 
@@ -564,26 +664,64 @@ export default function Home() {
             </p>
           ) : null}
           {visibleConversations.map((conversation) => (
-            <button
+            <div
               key={conversation.id}
-              type="button"
-              disabled={running}
-              onClick={() => void openConversation(conversation)}
-              className={`group mb-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2.5 text-left text-sm ${
+              className={`group mb-0.5 flex w-full items-center rounded-md text-sm ${
                 selectedConversation === conversation.id
                   ? 'bg-slate-200/70 text-slate-900'
                   : 'text-slate-600 hover:bg-slate-200/45'
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-              aria-current={
-                selectedConversation === conversation.id ? 'page' : undefined
-              }
+              }`}
             >
-              <MessageSquare className="size-4 shrink-0 text-slate-400" />
-              <span className="min-w-0 flex-1 truncate">
-                {conversation.title}
-              </span>
-              <MoreHorizontal className="size-4 shrink-0 text-slate-400 opacity-0 group-hover:opacity-100" />
-            </button>
+              <button
+                type="button"
+                disabled={running}
+                onClick={() => void openConversation(conversation)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
+                aria-current={
+                  selectedConversation === conversation.id ? 'page' : undefined
+                }
+              >
+                <MessageSquare className="size-4 shrink-0 text-slate-400" />
+                <span className="min-w-0 flex-1 truncate">
+                  {conversation.title}
+                </span>
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      disabled={running}
+                      aria-label={`管理对话：${conversation.title}`}
+                      className="mr-1 grid size-8 shrink-0 place-items-center rounded text-slate-400 opacity-0 hover:bg-slate-300/60 hover:text-slate-600 focus-visible:opacity-100 disabled:pointer-events-none group-hover:opacity-100 data-popup-open:opacity-100"
+                    />
+                  }
+                >
+                  <MoreHorizontal className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="right"
+                  align="start"
+                  className="w-36"
+                >
+                  <DropdownMenuItem onClick={() => beginRename(conversation)}>
+                    <Pencil />
+                    重命名
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => {
+                      setConversationActionError(null);
+                      setDeletingConversation(conversation);
+                    }}
+                  >
+                    <Trash2 />
+                    删除
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           ))}
         </nav>
 
@@ -679,7 +817,9 @@ export default function Home() {
             </div>
           ) : conversationError && selectedConversation ? (
             <div className="mx-auto flex min-h-full max-w-md flex-col items-center justify-center px-5 pb-24 text-center">
-              <p className="text-base font-medium text-slate-700">这段对话暂时打不开</p>
+              <p className="text-base font-medium text-slate-700">
+                这段对话暂时打不开
+              </p>
               <p className="mt-2 text-sm leading-6 text-slate-500">
                 {conversationError}
               </p>
@@ -688,7 +828,9 @@ export default function Home() {
                   type="button"
                   variant="outline"
                   className="mt-4"
-                  onClick={() => void openConversation(selectedConversationItem)}
+                  onClick={() =>
+                    void openConversation(selectedConversationItem)
+                  }
                 >
                   重新加载
                 </Button>
@@ -942,7 +1084,9 @@ export default function Home() {
                       className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600"
                     >
                       <FileText className="size-3.5 shrink-0" />
-                      <span className="max-w-48 truncate">{attachment.filename}</span>
+                      <span className="max-w-48 truncate">
+                        {attachment.filename}
+                      </span>
                       <button
                         type="button"
                         aria-label={`移除 ${attachment.filename}`}
@@ -991,7 +1135,11 @@ export default function Home() {
                     className="size-8 text-slate-500 hover:bg-slate-100"
                     onClick={() => fileInputRef.current?.click()}
                   >
-                    {attachmentBusy ? <Loader2 className="animate-spin" /> : <Paperclip />}
+                    {attachmentBusy ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <Paperclip />
+                    )}
                     <span className="sr-only">添加附件</span>
                   </Button>
                   <DropdownMenu
@@ -1014,7 +1162,11 @@ export default function Home() {
                       <span className="truncate">{toolSelectionLabel}</span>
                       <ChevronDown className="size-3.5 shrink-0" />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" side="top" className="w-64">
+                    <DropdownMenuContent
+                      align="start"
+                      side="top"
+                      className="w-64"
+                    >
                       <DropdownMenuRadioGroup
                         value={toolSelection}
                         onValueChange={(value) => {
@@ -1022,7 +1174,9 @@ export default function Home() {
                           setToolMenuOpen(false);
                         }}
                       >
-                        <DropdownMenuLabel>本次消息使用的工具</DropdownMenuLabel>
+                        <DropdownMenuLabel>
+                          本次消息使用的工具
+                        </DropdownMenuLabel>
                         <DropdownMenuRadioItem value="auto">
                           自动选择全部已授权工具
                         </DropdownMenuRadioItem>
@@ -1035,7 +1189,9 @@ export default function Home() {
                             key={source.id}
                             value={`server:${source.id}`}
                           >
-                            <span className="min-w-0 flex-1 truncate">{source.name}</span>
+                            <span className="min-w-0 flex-1 truncate">
+                              {source.name}
+                            </span>
                             <span className="text-xs text-slate-400">
                               {source.tool_count}
                             </span>
@@ -1057,7 +1213,9 @@ export default function Home() {
               </div>
             </div>
             {composerError ? (
-              <p className="mt-2 text-center text-xs text-red-600">{composerError}</p>
+              <p className="mt-2 text-center text-xs text-red-600">
+                {composerError}
+              </p>
             ) : null}
             <p className="mt-2 text-center text-[11px] text-slate-400">
               工具输出可能出错；受控操作需要人工审批。
@@ -1065,6 +1223,101 @@ export default function Home() {
           </form>
         </div>
       </section>
+
+      <Dialog
+        open={Boolean(editingConversation)}
+        onOpenChange={(open) => {
+          if (!open && !conversationActionBusy) {
+            setEditingConversation(null);
+            setConversationActionError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <form onSubmit={renameConversation}>
+            <DialogHeader>
+              <DialogTitle>重命名对话</DialogTitle>
+              <DialogDescription>
+                使用一个容易辨认的名称，方便之后继续处理。
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={conversationTitleDraft}
+              maxLength={200}
+              className="mt-4"
+              aria-label="对话名称"
+              onChange={(event) =>
+                setConversationTitleDraft(event.target.value)
+              }
+            />
+            {conversationActionError ? (
+              <p className="mt-2 text-sm text-red-600">
+                {conversationActionError}
+              </p>
+            ) : null}
+            <DialogFooter className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={conversationActionBusy}
+                onClick={() => setEditingConversation(null)}
+              >
+                取消
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  !conversationTitleDraft.trim() || conversationActionBusy
+                }
+              >
+                {conversationActionBusy ? (
+                  <Loader2 className="animate-spin" />
+                ) : null}
+                保存
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(deletingConversation)}
+        onOpenChange={(open) => {
+          if (!open && !conversationActionBusy) {
+            setDeletingConversation(null);
+            setConversationActionError(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除这段对话？</AlertDialogTitle>
+            <AlertDialogDescription>
+              “{deletingConversation?.title}”将从对话历史中移除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {conversationActionError ? (
+            <p className="text-sm text-red-600">{conversationActionError}</p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={conversationActionBusy}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              disabled={conversationActionBusy}
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => void removeConversation()}
+            >
+              {conversationActionBusy ? (
+                <Loader2 className="animate-spin" />
+              ) : null}
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
     </main>
   );
