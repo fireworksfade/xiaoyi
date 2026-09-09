@@ -3,6 +3,7 @@
 import { type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
+  BookCheck,
   Bot,
   Check,
   ChevronDown,
@@ -32,6 +33,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { SettingsSheet } from '@/components/settings-sheet';
 import {
   Dialog,
@@ -53,6 +61,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   ApiError,
+  addVerifiedFaultCase,
   createConversation,
   deleteConversation,
   ensureDemoSession,
@@ -129,6 +138,20 @@ export default function Home() {
     string | null
   >(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [caseDialogOpen, setCaseDialogOpen] = useState(false);
+  const [caseServerId, setCaseServerId] = useState('');
+  const [caseBusy, setCaseBusy] = useState(false);
+  const [caseError, setCaseError] = useState<string | null>(null);
+  const [caseSuccess, setCaseSuccess] = useState<string | null>(null);
+  const [caseForm, setCaseForm] = useState({
+    deviceId: 'ESP32_05',
+    faultType: '',
+    faultName: '',
+    symptoms: '',
+    logs: '',
+    cause: '',
+    solution: '',
+  });
   const [selectedConversation, setSelectedConversation] = useState<
     string | null
   >(null);
@@ -456,6 +479,7 @@ export default function Home() {
       await ensureDemoSession();
       const page = await listAgentToolSources();
       setToolSources(page.items);
+      setCaseServerId((current) => current || page.items[0]?.id || '');
     } catch (error) {
       setComposerError(
         error instanceof Error ? error.message : '无法读取工具列表',
@@ -471,6 +495,48 @@ export default function Home() {
             (source) => source.id === toolSelection.slice('server:'.length),
           )?.name ?? '指定服务')
         : '工具自动选择';
+
+  async function submitVerifiedCase(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const serviceId = caseServerId || toolSources[0]?.id;
+    if (!serviceId) {
+      setCaseError('没有可用的诊断 MCP 服务');
+      return;
+    }
+    const symptoms = caseForm.symptoms
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const logs = caseForm.logs
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!symptoms.length || !logs.length) {
+      setCaseError('现象和日志至少各填写一行');
+      return;
+    }
+    setCaseBusy(true);
+    setCaseError(null);
+    setCaseSuccess(null);
+    try {
+      await ensureDemoSession();
+      const result = await addVerifiedFaultCase(serviceId, {
+        device_id: caseForm.deviceId.trim(),
+        fault_type: caseForm.faultType.trim(),
+        fault_name: caseForm.faultName.trim(),
+        symptoms,
+        logs,
+        cause: caseForm.cause.trim(),
+        solution: caseForm.solution.trim(),
+        verified: true,
+      });
+      setCaseSuccess(`案例 ${result.fault_id} 已写入并加入检索`);
+    } catch (error) {
+      setCaseError(error instanceof Error ? error.message : '案例写入失败');
+    } finally {
+      setCaseBusy(false);
+    }
+  }
 
   function startNewChat() {
     if (running) return;
@@ -702,12 +768,18 @@ export default function Home() {
               <span className="sr-only">运行记录</span>
             </Button>
             <Button
-              variant="ghost"
-              size="icon"
-              className="text-slate-500 hover:bg-slate-100"
+              variant="outline"
+              size="sm"
+              className="border-slate-200 text-slate-600 shadow-none"
+              onClick={() => {
+                setCaseError(null);
+                setCaseSuccess(null);
+                setCaseDialogOpen(true);
+                void loadToolSources();
+              }}
             >
-              <MoreHorizontal />
-              <span className="sr-only">更多选项</span>
+              <BookCheck />
+              <span className="hidden sm:inline">验证案例</span>
             </Button>
           </div>
         </header>
@@ -1127,6 +1199,165 @@ export default function Home() {
               删除
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={caseDialogOpen}
+        onOpenChange={(open) => {
+          if (!caseBusy) setCaseDialogOpen(open);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <form onSubmit={submitVerifiedCase}>
+            <DialogHeader>
+              <DialogTitle>录入已验证故障案例</DialogTitle>
+              <DialogDescription>
+                仅录入已经人工复核的原因和解决方案，提交后会参与后续诊断检索。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label htmlFor="case-service" className="text-sm font-medium text-slate-700">
+                  诊断服务
+                </label>
+                <Select
+                  value={caseServerId || null}
+                  onValueChange={(value) => setCaseServerId(String(value ?? ''))}
+                >
+                  <SelectTrigger id="case-service" className="mt-1.5 w-full">
+                    <SelectValue placeholder="选择诊断 MCP 服务" />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {toolSources.map((source) => (
+                      <SelectItem key={source.id} value={source.id}>
+                        {source.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label htmlFor="case-device" className="text-sm font-medium text-slate-700">
+                  设备编号
+                </label>
+                <Input
+                  id="case-device"
+                  required
+                  className="mt-1.5"
+                  value={caseForm.deviceId}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, deviceId: event.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="case-type" className="text-sm font-medium text-slate-700">
+                  故障类型
+                </label>
+                <Input
+                  id="case-type"
+                  required
+                  className="mt-1.5"
+                  placeholder="例如 mqtt_timeout"
+                  value={caseForm.faultType}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, faultType: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="case-name" className="text-sm font-medium text-slate-700">
+                  案例名称
+                </label>
+                <Input
+                  id="case-name"
+                  required
+                  className="mt-1.5"
+                  value={caseForm.faultName}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, faultName: event.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="case-symptoms" className="text-sm font-medium text-slate-700">
+                  已确认现象
+                </label>
+                <Textarea
+                  id="case-symptoms"
+                  required
+                  className="mt-1.5 min-h-24"
+                  placeholder="每行一条"
+                  value={caseForm.symptoms}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, symptoms: event.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="case-logs" className="text-sm font-medium text-slate-700">
+                  关键日志
+                </label>
+                <Textarea
+                  id="case-logs"
+                  required
+                  className="mt-1.5 min-h-24"
+                  placeholder="每行一条"
+                  value={caseForm.logs}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, logs: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="case-cause" className="text-sm font-medium text-slate-700">
+                  已验证原因
+                </label>
+                <Textarea
+                  id="case-cause"
+                  required
+                  className="mt-1.5 min-h-20"
+                  value={caseForm.cause}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, cause: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="case-solution" className="text-sm font-medium text-slate-700">
+                  已验证解决方案
+                </label>
+                <Textarea
+                  id="case-solution"
+                  required
+                  className="mt-1.5 min-h-20"
+                  value={caseForm.solution}
+                  onChange={(event) =>
+                    setCaseForm((current) => ({ ...current, solution: event.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            {caseError ? <p className="mt-3 text-sm text-red-600">{caseError}</p> : null}
+            {caseSuccess ? (
+              <p className="mt-3 text-sm text-emerald-700">{caseSuccess}</p>
+            ) : null}
+            <DialogFooter className="mt-5">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={caseBusy}
+                onClick={() => setCaseDialogOpen(false)}
+              >
+                关闭
+              </Button>
+              <Button type="submit" disabled={caseBusy || !caseServerId}>
+                {caseBusy ? <Loader2 className="animate-spin" /> : <BookCheck />}
+                确认已人工验证并写入
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

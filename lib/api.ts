@@ -71,6 +71,17 @@ export type MCPTool = {
   risk_policy: 'read_only' | 'proposal_only' | 'approval_required' | 'disabled';
 };
 
+export type VerifiedFaultCaseInput = {
+  device_id: string;
+  fault_type: string;
+  fault_name: string;
+  symptoms: string[];
+  logs: string[];
+  cause: string;
+  solution: string;
+  verified: true;
+};
+
 export class ApiError extends Error {
   code: string;
   status: number;
@@ -234,6 +245,17 @@ export async function listAgentToolSources() {
       tool_count: number;
     }>;
   }>('/agent-tools');
+}
+
+export async function addVerifiedFaultCase(
+  serviceId: string,
+  payload: VerifiedFaultCaseInput,
+) {
+  return request<{ fault_id: string; verified: boolean; indexed: boolean }>(
+    `/diagnosis-services/${serviceId}/fault-cases`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    true,
+  );
 }
 
 export async function streamAgentRun(
