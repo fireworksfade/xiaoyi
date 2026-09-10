@@ -1,0 +1,38 @@
+# Separate repository
+/mcp-services/
+
+# Local configuration and secrets
+.env
+.env.local
+.env.*.local
+
+# Python environments, caches, and runtime data
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# JavaScript dependencies and build output
+node_modules/
+.next/
+.vinext/
+dist/
+out/
+.wrangler/
+coverage/
+
+# Local archives, logs, and editor metadata
+*.tar.gz
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

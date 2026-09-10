@@ -1,0 +1,10 @@
+.env
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+data
+tests
+scripts
+xiaoyi_backend.egg-info
