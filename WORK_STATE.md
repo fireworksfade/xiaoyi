@@ -13,6 +13,7 @@
 - 新规范文件保留在 `specs/iot-diagnosis-mcp-spec-v1.0.md`。
 - 已实现 MQTT `fault`、`heartbeat` 消息和设备离线检测。
 - 已实现可配置的 LLM Router / Diagnosis 调用；未配置模型密钥时使用 `heuristic_fallback`。
+- 已使用 `mimo-v2.5-pro` 完成真实 LLM Router / Diagnosis 在线验收；本地密钥仅保存在 Git 忽略的根 `.env` 中。
 - 已实现人工确认故障案例的后端接口与前端弹窗。
 - 已实现 MySQL 镜像写入和 Qdrant 向量索引：
   - 新文件：`mcp-services/iot_diagnosis/external.py`
@@ -37,6 +38,7 @@
 - MCP 测试：9 passed（包含 Qdrant 已有集合和无实时状态向量检索回归测试）。
 - 前端 lint 与 production build：通过。
 - MCP 在线冒烟：6 个工具、知识检索、诊断和人工确认门禁通过。
+- 真实 LLM 在线冒烟返回 `route.router: llm`；最近诊断记录 LLM 延迟约 12.6 秒，输入 938 Tokens、输出 232 Tokens。
 - 本地全栈冒烟：前端 200、同源代理、认证、会话 CRUD 和 SSE 通过。
 - 经后端真实写入人工确认案例 `FC19D3B41`，返回 `mysql_saved: true`、`vector_indexed: true`。
 - MySQL 已查到 `FC19D3B41`；Qdrant 集合状态为 `ok`，已查到对应向量点。
@@ -60,7 +62,8 @@
 
 ## 下一步
 
-1. 如需真实模型诊断，配置 `DIAGNOSIS_LLM_API_KEY` 和 `DIAGNOSIS_LLM_MODEL` 后补跑 LLM Router / Diagnosis 在线验收。
+1. SerpAPI 密钥已保存在本地 `.env`，但当前项目尚无 SerpAPI 检索实现；如需联网搜索，需要单独设计并接入相应工具。
+2. 为主仓库和 MCP 仓库分别配置远程地址并推送。
 
 ## 重要文件
 
