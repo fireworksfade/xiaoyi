@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import httpx
 
@@ -21,8 +22,12 @@ REPLACED_SERVER_KEYS = {"rag-local", "iot-local"}
 
 READ_ONLY_TOOLS = {
     "diagnose_fault",
+    "list_devices",
     "get_device_status",
     "get_device_logs",
+    "get_diagnosis_trace",
+    "list_diagnoses",
+    "list_knowledge_documents",
     "search_knowledge",
     "search_fault_cases",
 }
@@ -36,6 +41,7 @@ def data(response: httpx.Response) -> object:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", default="http://127.0.0.1:8000")
+    parser.add_argument("--credential", default=os.getenv("DIAGNOSIS_MCP_BEARER_TOKEN", ""))
     args = parser.parse_args()
     api = f"{args.backend.rstrip('/')}/api/v1"
 
@@ -63,6 +69,7 @@ def main() -> None:
         summary: list[dict[str, object]] = []
 
         for definition in SERVER_DEFINITIONS:
+            credential_update = {"credential": args.credential} if args.credential else {}
             current = existing.get(definition["server_key"])
             if current:
                 server = data(
@@ -74,6 +81,7 @@ def main() -> None:
                             "url": definition["url"],
                             "purpose": definition["purpose"],
                             "enabled": True,
+                            **credential_update,
                         },
                     )
                 )
@@ -82,7 +90,7 @@ def main() -> None:
                     client.post(
                         f"{api}/mcp-servers",
                         headers=headers,
-                        json=definition,
+                        json={**definition, **credential_update},
                     )
                 )
                 server = data(

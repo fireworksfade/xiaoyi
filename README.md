@@ -7,7 +7,7 @@
 - `frontend/`：小yi 对话界面
 - `backend/`：认证、对话、Agent 运行、MCP 管理和审计边界
 - `mcp-services/`：统一 IoT Diagnosis MCP、MQTT 接入与模拟器
-- `specs/`：IoT Diagnosis MCP v1.0 规格
+- `specs/`：IoT Diagnosis MCP v1.0 基线、v1.1 completion、v1.2 core-model 与 v1.3 discovery 规格
 
 ## 仓库边界
 
@@ -25,6 +25,7 @@
 - IoT Diagnosis MCP：`http://127.0.0.1:9001/mcp`
 - MySQL：`127.0.0.1:3306`
 - Qdrant：`http://127.0.0.1:6333`
+- Retrieval Models：`http://127.0.0.1:9010/health`
 
 ## 本地全套启动
 
@@ -53,11 +54,11 @@ Docker 命名卷中，普通停止不会清空对话、知识库或设备数据�
 
 开发环境没有 `OPENAI_API_KEY` 时，主 Agent 使用确定性 Mock Runtime；配置密钥并设置 `AGENT_RUNTIME=openai` 后启用 OpenAI Agents SDK。诊断 MCP 可另外通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
 
-诊断服务以 SQLite 为主存储，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部存储暂时不可用时服务会继续使用 SQLite 和本地检索，并在健康检查中标记降级状态。检索采用关键词、确定性 384 维特征向量与统一重排，诊断结果附带证据来源和观测字段。
+诊断服务以 SQLite 为本地事实源，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 并由后台任务重试；写入结果会明确返回 `complete` 或 `pending`。Compose 默认使用 GPU 上的 `Qwen3-Embedding-0.6B` 生成 1024 维语义向量，并由 `Qwen3-Reranker-0.6B` 按官方 yes/no CausalLM 方式重排；本地 hash 与加权排序保留为降级方案。Embedding 与 Qdrant 写入支持批处理，`rebuild_vector_index` 可从 SQLite 重建全部或指定来源的向量。实时状态问题由 Rule Router 直接返回 `answer` 和 `realtime_state`，不调用诊断模型；复杂问题进入多源 RAG 与诊断流程。诊断结果附带证据来源，并可使用 `get_diagnosis_trace` 查询完整结果快照、最终上下文和观测字段。`list_devices`、`list_diagnoses` 和 `list_knowledge_documents` 提供设备、诊断历史和知识目录的过滤与分页发现能力。
 
 ## 诊断存储配置
 
-Docker Compose 默认创建 `iot_diagnosis` MySQL 数据库和 `iot_diagnosis_knowledge` Qdrant 集合，数据分别保存在 `mysql-data`、`qdrant-data` 和 `diagnosis-data` 命名卷。可在启动前通过环境变量覆盖本地数据库密码：
+Docker Compose 默认创建 `iot_diagnosis` MySQL 数据库和 `iot_diagnosis_qwen3` Qdrant 集合，数据分别保存在 `mysql-data`、`qdrant-data` 和 `diagnosis-data` 命名卷。可在启动前通过环境变量覆盖本地数据库密码：
 
 ```powershell
 $env:MYSQL_PASSWORD = "change-this-password"
@@ -70,10 +71,46 @@ docker compose up -d --build
 ```text
 DIAGNOSIS_MYSQL_DSN=mysql://iot_diagnosis:password@127.0.0.1:3306/iot_diagnosis
 DIAGNOSIS_QDRANT_URL=http://127.0.0.1:6333
-DIAGNOSIS_QDRANT_COLLECTION=iot_diagnosis_knowledge
+DIAGNOSIS_QDRANT_COLLECTION=iot_diagnosis_qwen3
+DIAGNOSIS_SYNC_RETRY_SECONDS=30
+DIAGNOSIS_EMBEDDING_PROVIDER=openai_compatible
+DIAGNOSIS_EMBEDDING_BASE_URL=http://127.0.0.1:9010/v1
+DIAGNOSIS_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
+DIAGNOSIS_EMBEDDING_DIMENSIONS=1024
+DIAGNOSIS_VECTOR_BATCH_SIZE=32
+DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL=http://127.0.0.1:9010/health
+DIAGNOSIS_RERANKER_PROVIDER=qwen3
+DIAGNOSIS_RERANKER_URL=http://127.0.0.1:9010/rerank
 ```
 
-启动后访问 `http://127.0.0.1:9001/health`。正常情况下 `storage.sqlite`、`storage.mysql` 和 `storage.qdrant` 均为 `connected`；未配置的外部存储显示 `disabled`，连接失败则显示 `fallback` 并在 `errors` 中给出错误类型。
+启动后访问 `http://127.0.0.1:9001/health` 检查进程存活，访问 `http://127.0.0.1:9001/ready` 检查依赖是否就绪。正常情况下 `storage.sqlite`、`storage.mysql` 和 `storage.qdrant` 均为 `connected`，`storage.outbox.pending` 为零，且 `retrieval_models.status` 为 `ready`；已配置依赖不可用时 readiness 返回 HTTP 503。
+
+生产环境可设置 `DIAGNOSIS_MCP_BEARER_TOKEN` 保护 `/mcp`。随后用同一个值重新注册后端连接：
+
+```powershell
+cd backend
+python scripts/bootstrap_local_mcp.py --credential "replace-with-a-long-random-token"
+```
+
+## 知识摄取与评测
+
+在 `mcp-services` 目录中摄取 TXT、Markdown 或 PDF：
+
+```powershell
+..\backend\.venv\Scripts\python.exe -m scripts.ingest_documents .\docs\mqtt-guide.pdf --source mqtt_docs --document-id mqtt-guide --title "MQTT Guide"
+```
+
+相同 `document-id` 再次摄取会原子替换旧分块。运行确定性 RAG/Router 评测：
+
+```powershell
+..\backend\.venv\Scripts\python.exe -m scripts.evaluate_rag --database .\data\iot_diagnosis_eval.db
+```
+
+运行 Compose 中真实 Qwen3 Embedding/Reranker 评测：
+
+```powershell
+docker exec last-work-iot-diagnosis-mcp-1 python /app/scripts/evaluate_rag.py --profile live-retrieval --database /app/data/iot_diagnosis.db
+```
 
 ## MQTT 联调
 
@@ -90,8 +127,7 @@ python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
 ```
 
 新服务订阅 `iot/{device_id}/status`、`iot/{device_id}/telemetry`、
-`iot/{device_id}/logs`、`iot/{device_id}/fault` 和 `iot/{device_id}/heartbeat`，并根据心跳超时判定离线。v1.0 只提供诊断与人工验证后的案例入库，
-不提供设备重启、固件更新或网络配置修改等控制能力。
+`iot/{device_id}/logs`、`iot/{device_id}/fault` 和 `iot/{device_id}/heartbeat`，并根据心跳超时判定离线。诊断 MCP 不提供设备重启、固件更新或网络配置修改等控制能力。
 
 开发 Broker 仅绑定 `127.0.0.1` 且允许匿名连接，只用于本机联调；实验室或生产环境应启用用户名、TLS 和 Topic ACL。
 
@@ -99,7 +135,9 @@ python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
 
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest -q backend\tests
-backend\.venv\Scripts\python.exe -m pytest -q mcp-services\tests
+Push-Location mcp-services
+..\backend\.venv\Scripts\python.exe -m pytest -q
+Pop-Location
 cd frontend
 npm run build
 ```

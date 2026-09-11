@@ -1,14 +1,14 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-10（Asia/Shanghai）
+更新时间：2026-09-11（Asia/Shanghai）
 
 ## 当前目标
 
-在本地完成前后端与新版 `IoT Diagnosis MCP Server v1.0` 的联调，用新版统一 MCP 替换旧 MCP，并接入 MySQL 与 Qdrant 进行持久化测试。
+v1.3 discovery 功能已实现；当前完成设备、诊断历史和知识文档的自发现能力，并保持此前工具兼容。安全与并发继续按要求暂缓。
 
 ## 已完成
 
-- 新版统一 MCP 位于 `mcp-services/iot_diagnosis/`，包含 6 个诊断工具。
+- 新版统一 MCP 位于 `mcp-services/iot_diagnosis/`，包含 12 个工具（保留 6 个 v1.0 工具并新增追踪、摄取、向量重建和三个发现工具）。
 - 已移除旧 RAG / IoT MCP 相关代码、旧维修审批与执行接口及对应前端 UI。
 - 新规范文件保留在 `specs/iot-diagnosis-mcp-spec-v1.0.md`。
 - 已实现 MQTT `fault`、`heartbeat` 消息和设备离线检测。
@@ -20,7 +20,7 @@
   - MySQL 表：`device`、`device_status`、`device_log`、`knowledge_document`、`fault_case`、`diagnosis_record`
   - Qdrant 使用 384 维确定性特征向量，集合名由环境变量配置。
   - SQLite 仍为主存储；MySQL / Qdrant 当前采用双写与失败回退模式。
-- `docker-compose.yml` 已加入：
+- `compose.yaml` 已加入：
   - `mysql:8.4.11`，本机端口 `3306`
   - `qdrant/qdrant:v1.19.1`，本机端口 `6333`
   - MCP 的 MySQL / Qdrant 环境变量和健康依赖
@@ -31,39 +31,81 @@
 - Qdrant 集合初始化已改为先查询、仅在 404 时创建，容器重启不会再因集合已存在的 409 响应而降级。
 - SQLite 启动快照改为批量同步 MySQL，数千条状态与日志不再逐条创建连接阻塞服务启动。
 - README 已补充 MySQL / Qdrant 端口、持久化卷、环境变量和健康状态说明。
+- 已新增 v1.1 completion spec。
+- 外部写入失败会进入 SQLite outbox，后台自动重试；案例写入不再误报向量索引成功。
+- 启动快照的状态、日志、文档、案例与诊断回填失败也会逐项进入 outbox，避免外部存储启动较晚时漏数。
+- MySQL / Qdrant 若在 MCP 启动时完全不可连接，重试循环会主动重建客户端，再继续幂等重放。
+- 已新增 `get_diagnosis_trace`，成功和失败诊断均可按 ID 查询路由、上下文和观测数据。
+- Rule Router 的实时查询现直接返回 `answer` 与完整 `realtime_state`，不再误走故障分析或调用 LLM。
+- 诊断记录新增完整 `result_json` 快照，追踪结果可还原 severity、evidence、人工检查标记和实时回答等字段。
+- 无模型回退已细分规格中的十类实验故障，不再把认证失败、Broker 不可达和网络延迟统一误判为 Keep Alive。
+- 已新增 `ingest_knowledge_text` 及 TXT/Markdown/PDF 摄取 CLI，支持分块和同文档替换。
+- Embedding 与 Reranker 已拆为可替换接口，支持离线 hash 和 OpenAI-compatible Embedding。
+- Compose 已部署 GPU 模型服务：`Qwen3-Embedding-0.6B` 与 `Qwen3-Reranker-0.6B`，模型缓存持久化在 `retrieval-model-cache`。
+- MCP 已切换到 1024 维 `iot_diagnosis_qwen3` 集合，7 条文档/案例均已使用真实语义模型重新生成向量；旧 384 维 `iot_diagnosis_knowledge` 集合已确认弃用并删除。
+- 检索响应会报告 Embedding/Reranker provider 及 reranker fallback 状态。
+- 已新增固定 JSONL 评测集及 RAG/Router/Diagnosis 指标脚本。
+- 已新增可选 MCP Bearer Token、`/ready` 和 Compose healthcheck。
+- 已完成 v1.2 core-model spec：Embedding provider、模型端点和 Qdrant 写入支持批处理。
+- 已新增 `rebuild_vector_index`，可从 SQLite 批量重建全部或指定来源的知识分块与已确认案例。
+- MCP `/ready` 已直接探测 Retrieval Models，返回 device、两个模型名和维度；模型不可用时报告 `retrieval_models` 并返回 503。
+- 评测 CLI 已支持 `deterministic` 与 `live-retrieval` 两种 profile，并报告 provider、fallback、平均/P50/P95 延迟。
+- 已新增 `list_devices`，可按设备类型和包含心跳新鲜度的有效在线状态过滤并分页。
+- 已新增 `list_diagnoses`，可按设备、故障类型和成功/失败状态过滤诊断摘要并分页。
+- 已新增 `list_knowledge_documents`，可按逻辑文档聚合分块并返回分块数、字符数和摄取时间。
+- 主后端 bootstrap 会以只读策略自动启用三个发现工具。
+- 已整理并摄取全部 10 份建议诊断资料，覆盖 ESP-MQTT 错误、MQTT Session/QoS、Mosquitto、WiFi 断线、致命错误与重启、Watchdog、Core Dump、内存泄漏/碎片、I2C 及 ADC；当前共 14 份逻辑文档、20 个知识分块。
+- 可重复执行的 `scripts/ingest_recommended_documents.py` 已覆盖全部十份文档，原稿保存在 `mcp-services/knowledge/` 并打包进 MCP 镜像。
+- 前后端联调发现并修复 Agent 运行失败：`mcp_config.convert_schemas_to_strict` 会把 MCP 工具可选参数强制必填，第三方 Chat Completions 模型对可空字段输出字符串 `"None"` 触发入参校验失败并耗尽 max turns；已改回原始 JSON Schema（`backend/app/agent/runtime.py`）。
+- 已新增 `frontend/.env.local`（git 忽略）指向本地后端，前端 dev 服务器通过同源代理完成登录、会话 CRUD、SSE 与真实 LLM Agent 运行验证。
 
 ## 已通过的验证
 
 - 后端测试：10 passed。
-- MCP 测试：9 passed（包含 Qdrant 已有集合和无实时状态向量检索回归测试）。
+- MCP v1.3 回归：35 passed、1 skipped；Docker Streamable HTTP 在线发现及完整冒烟通过。
 - 前端 lint 与 production build：通过。
-- MCP 在线冒烟：6 个工具、知识检索、诊断和人工确认门禁通过。
+- MCP 在线冒烟：8 个工具、实时直答、知识检索、诊断、完整追踪和人工确认门禁通过。
 - 真实 LLM 在线冒烟返回 `route.router: llm`；最近诊断记录 LLM 延迟约 12.6 秒，输入 938 Tokens、输出 232 Tokens。
 - 本地全栈冒烟：前端 200、同源代理、认证、会话 CRUD 和 SSE 通过。
+- 浏览器级前后端联调：真实模型经 `list_devices`、`search_knowledge`、`search_fault_cases` 与 `diagnose_fault` 完成 ESP32_05 故障排查，诊断 `DIA_20260911_7CB937F6`（MQTT_CONNECTION，置信度 96.92%，约 12.2 秒）已入库可查；后端回归 10 passed。
 - 经后端真实写入人工确认案例 `FC19D3B41`，返回 `mysql_saved: true`、`vector_indexed: true`。
 - MySQL 已查到 `FC19D3B41`；Qdrant 集合状态为 `ok`，已查到对应向量点。
 - 前端 lint 修复已验证并提交，仓库工作树干净。
+- v1.1 本机 Bearer 验收：未授权请求返回 401，授权后发现并调用 8 个工具成功。
+- 确定性评测：15 个用例；Recall@5、Hit Rate、Router Accuracy、Source Selection Accuracy、Diagnosis Accuracy、Diagnosis Name Accuracy 均为 1.0；本轮平均检索延迟约 2.94 ms。
+- Qwen3 模型端点实测：Embedding 返回 1024 维向量，首次请求约 1.72 秒；Reranker 将 MQTT 相关文档以 0.9980 排名第一，首次请求约 1.45 秒。
+- MCP 在线日志已确认实际调用 `/v1/embeddings` 和 `/rerank`；两模型常驻显存约 2.6GB。
+- 在线 MCP 冒烟返回 `embedding_provider=openai_compatible`、`reranker.provider=qwen3_remote`、`reranker.fallback=false`。
+- v1.2 在线 MCP 冒烟已发现并调用 9 个工具；完整诊断、追踪、实时直答和人工确认门禁通过。
+- 批量 Embedding 实测一次输入两条文本，返回两组有序 1024 维向量。
+- 全量向量重建实测 attempted=7、indexed=7、pending=0，耗时约 100.71 ms。
+- 真实 Qwen3 检索评测：15 个用例，Recall@5/Hit Rate 均为 1.0，MRR 0.8013，平均 256.16 ms、P50 251.28 ms、P95 312.76 ms，reranker 未 fallback。
+- v1.3 在线 MCP 冒烟已发现并调用 12 个工具；三个发现工具、真实 LLM 路由、诊断追踪、实时直答和人工确认门禁均通过。
+- v1.3 镜像已在本地重新构建并由 Compose 启用；readiness 为 200，版本为 1.3.0，外部存储与 Qwen3 模型均 ready，outbox pending 为 0。
+- 主后端目录已刷新为 12 个工具，三个新发现工具均按只读策略启用；后端回归 10 passed。
+- 十类代表查询均将对应新文档排在第一位，Qwen3 reranker 未回退；当前 Qwen3 集合 23 个向量点，状态 green，outbox pending 为 0。
+- 已定位前端真实模型未生效原因：管理员模型配置虽保存密钥但 `enabled=false`，且 Xiaomi Mimo 被设为 `responses`；现已改为启用并使用 `chat_completions`。端到端 Agent run 返回真实模型结果，约 5.8 秒完成，事件中无 Mock 的 `demo__inspect_request`。
+- v1.1 Compose 在线冒烟：8 个工具、LLM Router、诊断追踪、实时直答和人工确认门禁均通过；实时直答约 1.8 ms，未调用 LLM。最新外部 LLM 完整诊断约 45.3 秒，功能正确但因提供方延迟未达到 8 秒目标。
+- v1.1 真实恢复演练：停止 Qdrant 后写入返回 pending/outbox=1，恢复后自动同步到 Qdrant 并清零；演练案例已从 SQLite、MySQL、Qdrant 和 outbox 清理。
+- v1.1 启动回填验收：MySQL 启动瞬时写入失败形成的 224 条 outbox 记录已由后台自动重放，最终 pending=0。
+- 已生成并启用本地重建的 `xiaoyi-mcp-services 1.1.0` 镜像，在无源码挂载容器中通过 8 工具冒烟。
 
 ## 当前本地运行状态
 
-执行 `docker compose ps` 时以下服务均为 Up：
-
-- frontend：本地开发服务，`http://localhost:3000`
-- backend：`127.0.0.1:8000`，healthy
-- mqtt：`127.0.0.1:1883`
-- mysql：`127.0.0.1:3306`，healthy
-- qdrant：`127.0.0.1:6333`，healthy
-- iot-diagnosis-mcp：`127.0.0.1:9001`，健康接口三种存储均为 connected
-- iot-simulator：running
+Docker Compose 当前服务均已启动：backend、MCP、Retrieval Models、MySQL、Qdrant 健康，MQTT 与模拟器运行中。MCP `/ready` 返回 ready，三种存储 connected，outbox pending 为 0。
 
 ## 当前待处理问题
 
-- 当前本地联调目标已完成，没有已知阻塞问题。
+- 当前 v1.3 发现能力的实现、镜像构建与在线验收已完成，没有已知阻塞问题。
+- 外部 LLM 最近一次完整诊断约 45.3 秒；按当前优先级暂不进行性能与并发优化。
+- Docker Hub 鉴权网络仍超时；已用本地基础镜像完成无缓存 v1.1 重建并切换 Compose。该问题只影响重新拉取全新的 `python:3.12-slim` 基础镜像，不影响当前产物和运行服务。
 
 ## 下一步
 
-1. SerpAPI 密钥已保存在本地 `.env`，但当前项目尚无 SerpAPI 检索实现；如需联网搜索，需要单独设计并接入相应工具。
-2. 为主仓库和 MCP 仓库分别配置远程地址并推送。
+1. 主要功能之后如需继续，可优化外部 LLM 两阶段调用的端到端耗时。
+2. Docker Hub 网络恢复后可执行 `docker compose build --no-cache iot-diagnosis-mcp`，重新拉取并验证全新基础镜像。
+3. SerpAPI/联网检索属于 v1.1 明确排除项；如需加入，应另开扩展规格。
+4. 为主仓库和 MCP 仓库分别配置远程地址并推送。
 
 ## 重要文件
 
@@ -71,10 +113,16 @@
 - `mcp-services/.env.example`
 - `mcp-services/pyproject.toml`
 - `mcp-services/iot_diagnosis/external.py`
+- `mcp-services/iot_diagnosis/embeddings.py`
+- `mcp-services/iot_diagnosis/ingestion.py`
 - `mcp-services/iot_diagnosis/repository.py`
+- `mcp-services/iot_diagnosis/reranker.py`
 - `mcp-services/iot_diagnosis/retrieval.py`
 - `mcp-services/iot_diagnosis/server.py`
 - `specs/iot-diagnosis-mcp-spec-v1.0.md`
+- `specs/iot-diagnosis-mcp-completion-spec-v1.1.md`
+- `specs/iot-diagnosis-mcp-core-model-spec-v1.2.md`
+- `specs/iot-diagnosis-mcp-discovery-spec-v1.3.md`
 
 ## Git 状态
 
@@ -83,6 +131,7 @@
 - `mcp-services/` 是唯一的独立子目录仓库，默认分支为 `main`；首个提交为 `ac596d3 Initial IoT diagnosis MCP server`。
 - MCP 仓库通过 `.gitignore` 排除了 SQLite 运行数据、本地 `.env`、Python/pytest 缓存和构建产物。
 - 主仓库通过根 `.gitignore` 排除 `mcp-services/`、运行数据、虚拟环境、依赖目录和构建产物。
+- v1.1 主仓库与 MCP 子仓库修改尚未提交。
 - 最近相关提交：
   - `d7c73a0 Fix frontend lint compatibility`
   - `ad9542a Add verified fault case workflow`

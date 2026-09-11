@@ -1,4 +1,28 @@
 services:
+  retrieval-models:
+    build:
+      context: ./mcp-services
+      dockerfile: Dockerfile.models
+    ports:
+      - "127.0.0.1:9010:9010"
+    environment:
+      EMBEDDING_MODEL: Qwen/Qwen3-Embedding-0.6B
+      RERANKER_MODEL: Qwen/Qwen3-Reranker-0.6B
+      MODEL_MAX_LENGTH: "2048"
+      EMBEDDING_BATCH_SIZE: "8"
+      RERANKER_BATCH_SIZE: "4"
+      HF_HOME: /models
+    volumes:
+      - retrieval-model-cache:/models
+    gpus: all
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=5))['status'] == 'ready'"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 10m
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -36,12 +60,29 @@ services:
       DIAGNOSIS_LLM_TIMEOUT_SECONDS: ${DIAGNOSIS_LLM_TIMEOUT_SECONDS:-20}
       DIAGNOSIS_MYSQL_DSN: mysql://iot_diagnosis:${MYSQL_PASSWORD:-local-diagnosis-password}@mysql:3306/iot_diagnosis
       DIAGNOSIS_QDRANT_URL: http://qdrant:6333
-      DIAGNOSIS_QDRANT_COLLECTION: iot_diagnosis_knowledge
+      DIAGNOSIS_QDRANT_COLLECTION: ${DIAGNOSIS_QDRANT_COLLECTION:-iot_diagnosis_qwen3}
+      DIAGNOSIS_SYNC_RETRY_SECONDS: "30"
+      DIAGNOSIS_EMBEDDING_PROVIDER: ${DIAGNOSIS_EMBEDDING_PROVIDER:-openai_compatible}
+      DIAGNOSIS_EMBEDDING_BASE_URL: ${DIAGNOSIS_EMBEDDING_BASE_URL:-http://retrieval-models:9010/v1}
+      DIAGNOSIS_EMBEDDING_MODEL: ${DIAGNOSIS_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      DIAGNOSIS_EMBEDDING_API_KEY: ${DIAGNOSIS_EMBEDDING_API_KEY:-local-model-service}
+      DIAGNOSIS_EMBEDDING_DIMENSIONS: ${DIAGNOSIS_EMBEDDING_DIMENSIONS:-1024}
+      DIAGNOSIS_VECTOR_BATCH_SIZE: ${DIAGNOSIS_VECTOR_BATCH_SIZE:-32}
+      DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION: ${DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION:-Given an IoT fault diagnosis query, retrieve relevant technical passages and verified cases}
+      DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL: ${DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL:-http://retrieval-models:9010/health}
+      DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_TIMEOUT_SECONDS: ${DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_TIMEOUT_SECONDS:-3}
+      DIAGNOSIS_RERANKER_PROVIDER: ${DIAGNOSIS_RERANKER_PROVIDER:-qwen3}
+      DIAGNOSIS_RERANKER_URL: ${DIAGNOSIS_RERANKER_URL:-http://retrieval-models:9010/rerank}
+      DIAGNOSIS_RERANKER_TIMEOUT_SECONDS: ${DIAGNOSIS_RERANKER_TIMEOUT_SECONDS:-30}
+      DIAGNOSIS_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
+      DIAGNOSIS_MCP_PUBLIC_URL: ${DIAGNOSIS_MCP_PUBLIC_URL:-http://iot-diagnosis-mcp:9001}
+      DIAGNOSIS_READY_MAX_PENDING_SYNC: ${DIAGNOSIS_READY_MAX_PENDING_SYNC:-1000}
       MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
     volumes:
       - diagnosis-data:/app/data
+      - ./mcp-services/common:/app/common:ro
       - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
     depends_on:
       mqtt:
@@ -50,6 +91,14 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      retrieval-models:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   iot-simulator:
@@ -62,8 +111,10 @@ services:
     volumes:
       - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
     depends_on:
-      - mqtt
-      - iot-diagnosis-mcp
+      mqtt:
+        condition: service_started
+      iot-diagnosis-mcp:
+        condition: service_healthy
     restart: unless-stopped
 
   mqtt:
@@ -112,3 +163,4 @@ volumes:
   diagnosis-data:
   mysql-data:
   qdrant-data:
+  retrieval-model-cache:
