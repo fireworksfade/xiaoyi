@@ -126,8 +126,11 @@ class OpenAIAgentsRuntime:
                     ),
                     model=model,
                     mcp_servers=manager.active_servers,
+                    # 第三方 Chat Completions 模型面对 strict 化后必填的可空参数会
+                    # 传出 "None" 字符串并触发 MCP 入参校验失败，因此保持原始
+                    # JSON Schema，让可选参数可以真正省略。
                     mcp_config={
-                        "convert_schemas_to_strict": True,
+                        "convert_schemas_to_strict": False,
                         "include_server_in_tool_names": True,
                     },
                 )
