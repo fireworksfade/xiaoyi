@@ -120,7 +120,8 @@ class OpenAIAgentsRuntime:
                 agent = Agent(
                     name="小yi",
                     instructions=(
-                        "你是通用智能体小yi。只使用当前运行明确提供并获准的工具；"
+                        "你是通用智能体小yi。只使用当前运行明确提供并获准的工具，"
+                        "工具名称必须与提供的名称完全一致；"
                         "物联网问题优先使用诊断、设备状态、日志、知识和故障案例工具，"
                         "保留结果中的证据来源；工具失败或依据不足时如实说明，不编造结果。"
                     ),
@@ -128,10 +129,12 @@ class OpenAIAgentsRuntime:
                     mcp_servers=manager.active_servers,
                     # 第三方 Chat Completions 模型面对 strict 化后必填的可空参数会
                     # 传出 "None" 字符串并触发 MCP 入参校验失败，因此保持原始
-                    # JSON Schema，让可选参数可以真正省略。
+                    # JSON Schema，让可选参数可以真正省略。单一诊断 MCP 服务也
+                    # 无需工具名前缀：带前缀会诱使部分模型调用裸名，触发
+                    # "Tool not found" 运行失败。
                     mcp_config={
                         "convert_schemas_to_strict": False,
-                        "include_server_in_tool_names": True,
+                        "include_server_in_tool_names": False,
                     },
                 )
                 result = Runner.run_streamed(
