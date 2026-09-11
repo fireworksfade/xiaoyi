@@ -12,8 +12,12 @@ services:
       EMBEDDING_BATCH_SIZE: "8"
       RERANKER_BATCH_SIZE: "4"
       HF_HOME: /models
+      # 模型已持久化在 retrieval-model-cache 卷中；离线模式避免启动时联网探测
+      HF_HUB_OFFLINE: "1"
     volumes:
       - retrieval-model-cache:/models
+      # 本地联调直接挂载源码，避免依赖 Docker Hub 拉取基础镜像重建
+      - ./mcp-services/model_service:/app/model_service:ro
     gpus: all
     healthcheck:
       test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:9010/health', timeout=5))['status'] == 'ready'"]
@@ -50,6 +54,7 @@ services:
     ports:
       - "127.0.0.1:9001:9001"
     environment:
+      PYTHONPATH: /app
       DIAGNOSIS_HOST: 0.0.0.0
       DIAGNOSIS_PORT: "9001"
       DIAGNOSIS_DATABASE_PATH: /app/data/iot_diagnosis.db
@@ -84,6 +89,8 @@ services:
       - diagnosis-data:/app/data
       - ./mcp-services/common:/app/common:ro
       - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
+      - ./mcp-services/scripts:/app/scripts:ro
+      - ./mcp-services/evals:/app/evals:ro
     depends_on:
       mqtt:
         condition: service_started
@@ -123,6 +130,7 @@ services:
       - "127.0.0.1:1883:1883"
     volumes:
       - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
     restart: unless-stopped
 
   mysql:
@@ -161,6 +169,7 @@ services:
 volumes:
   backend-data:
   diagnosis-data:
+  mqtt-data:
   mysql-data:
   qdrant-data:
   retrieval-model-cache:

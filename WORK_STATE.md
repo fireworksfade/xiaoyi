@@ -1,10 +1,27 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-11（Asia/Shanghai）
+更新时间：2026-09-12（Asia/Shanghai）
 
 ## 当前目标
 
-v1.3 discovery 功能已实现；当前完成设备、诊断历史和知识文档的自发现能力，并保持此前工具兼容。安全与并发继续按要求暂缓。
+v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化（语义路由、诊断延迟、知识库删除闭环、MQTT 可靠性、运行记录面板等），安全中生产环境守卫已加，其余并发/安全加固按需继续。
+
+## 2026-09-12 架构优化
+
+- Adaptive Router 新增语义路由：查询向量与各知识源原型向量按余弦相似度选择来源（约 10ms），`router=semantic`；LLM Router 降级为向量路由不可用时的兜底，省掉一次完整 LLM 往返。评测 router accuracy 1.0。
+- 检索候选超过重排服务批量上限会静默降级的问题已修复：先按初筛分截取 Top 60 再重排，模型服务 `/rerank` 文档上限放宽到 200；此前因知识库扩到 311 分块触发 422 导致 fallback。
+- 知识库删除闭环：新增 `delete_knowledge_document` MCP 工具（approval_required）+ 后端 `DELETE /knowledge-documents/{source}/{document_id}` + 前端两步确认删除；SQLite/MySQL/Qdrant 三处同步删除。
+- MQTT 可靠性：MCP 订阅改为 QoS 1 + 持久会话（clean_session=False），mosquitto 开启持久化（`mqtt-data` 卷），模拟器增加遗嘱消息（进程崩溃时 Broker 代发离线状态）。
+- outbox 多 worker 安全：`retry_external_sync` 改为单条 UPDATE 原子认领（`claimed_at` 租约 + 过期接管）。
+- model_service embeddings 端点改为 async + micro-batching（5ms 窗口合并并发请求为一次 GPU encode）。
+- 安全守卫：`APP_ENV=production` 时强制非默认 `APP_SECRET_KEY` 且 `SEED_DEMO_USERS=false`，否则启动失败。
+- 前端：`page.tsx` 拆出 `KnowledgeDialog`（含删除）、`CaseDialog`、`RunRecordsSheet`（运行记录面板，新增 `GET /agent-runs` 列表端点）；知识库响应与审计日志透传 MCP `trace_id`。
+- Compose 本地联调：MCP / retrieval-models 改为源码 bind-mount（不再依赖 Docker Hub 重建），MCP 容器加 `PYTHONPATH=/app`（修复 site-packages 旧包遮蔽挂载代码导致评测走旧行为的问题），retrieval-models 加 `HF_HUB_OFFLINE=1`（模型已本地缓存，避免启动联网探测卡 20+ 分钟）。
+- 验证：MCP 36 passed（含工具 schema 契约测试：可空参数不得进入 required）；后端 14 passed；前端 lint/build 通过；live-retrieval 评测 router 1.0 / reranker 真实生效；浏览器实测运行记录面板与删除闭环通过；真实 LLM 诊断 `router=semantic`，总耗时 13.9s 中 LLM 本体 10.8s（提供方延迟为主）。
+
+## 历史目标
+
+v1.3 discovery 功能已实现；当前完成设备、诊断历史和知识文档的自发现能力，并保持此前工具兼容。
 
 ## 已完成
 

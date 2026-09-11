@@ -114,7 +114,11 @@ def main() -> None:
             for tool in catalog["items"]:
                 if tool["original_name"] in READ_ONLY_TOOLS:
                     policy = "read_only"
-                elif tool["original_name"] == "add_verified_fault_case":
+                elif tool["original_name"] in (
+                    "add_verified_fault_case",
+                    "ingest_knowledge_text",
+                    "delete_knowledge_document",
+                ):
                     policy = "approval_required"
                 else:
                     policy = "disabled"

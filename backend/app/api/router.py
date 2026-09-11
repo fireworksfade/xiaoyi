@@ -30,12 +30,14 @@ from app.api.mcp import router as mcp_router
 from app.api.diagnosis import router as diagnosis_router
 from app.api.model_config import router as model_config_router
 from app.api.attachments import router as attachments_router
+from app.api.knowledge import router as knowledge_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(mcp_router)
 router.include_router(diagnosis_router)
 router.include_router(model_config_router)
 router.include_router(attachments_router)
+router.include_router(knowledge_router)
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
@@ -367,6 +369,39 @@ async def submit_message(
     await db.commit()
     background_tasks.add_task(process_agent_run, run.id)
     return envelope(request, {"run_id": run.id, "idempotent_replay": False})
+
+
+@router.get("/agent-runs")
+async def list_agent_runs(
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, object]:
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    total = await db.scalar(
+        select(func.count()).select_from(AgentRun).where(AgentRun.user_id == user.id)
+    )
+    runs = (
+        await db.scalars(
+            select(AgentRun)
+            .where(AgentRun.user_id == user.id)
+            .order_by(AgentRun.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return envelope(
+        request,
+        {
+            "items": [run_view(run) for run in runs],
+            "page": page,
+            "page_size": page_size,
+            "total": total or 0,
+        },
+    )
 
 
 @router.get("/agent-runs/{run_id}")
