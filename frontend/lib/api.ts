@@ -236,15 +236,54 @@ export async function uploadAttachment(file: File) {
   );
 }
 
+export type ToolSource = {
+  id: string;
+  server_key: string;
+  name: string;
+  tool_count: number;
+};
+
 export async function listAgentToolSources() {
+  return request<{ items: ToolSource[] }>('/agent-tools');
+}
+
+export type AgentRunSummary = {
+  id: string;
+  conversation_id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  final_message_id: string | null;
+  error: { code: string; message: string; retryable: boolean } | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listAgentRuns(options: { page?: number; pageSize?: number } = {}) {
+  const params = new URLSearchParams({
+    page: String(options.page ?? 1),
+    page_size: String(options.pageSize ?? 20),
+  });
   return request<{
-    items: Array<{
-      id: string;
-      server_key: string;
-      name: string;
-      tool_count: number;
-    }>;
-  }>('/agent-tools');
+    items: AgentRunSummary[];
+    page: number;
+    page_size: number;
+    total: number;
+  }>(`/agent-runs?${params.toString()}`);
+}
+
+export async function deleteKnowledgeDocument(source: string, documentId: string) {
+  return request<{
+    source: string;
+    document_id: string;
+    deleted_chunks: number;
+    mysql_saved: boolean;
+    vector_deleted: boolean;
+    sync_status: string;
+    trace_id: string | null;
+  }>(
+    `/knowledge-documents/${encodeURIComponent(source)}/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' },
+    true,
+  );
 }
 
 export async function addVerifiedFaultCase(
@@ -256,6 +295,56 @@ export async function addVerifiedFaultCase(
     { method: 'POST', body: JSON.stringify(payload) },
     true,
   );
+}
+
+export type IngestedKnowledgeDocument = {
+  source: string;
+  document_id: string;
+  chunk_count: number;
+  mysql_saved: boolean;
+  vector_indexed: boolean;
+  sync_status: string;
+};
+
+export type KnowledgeDocumentSummary = {
+  document_id: string;
+  source: string;
+  title: string;
+  device_type?: string | null;
+  chunk_count: number;
+  content_chars?: number;
+  created_at?: string;
+};
+
+export async function uploadKnowledgeDocument(
+  file: File,
+  options: {
+    source: string;
+    documentId?: string;
+    title?: string;
+    deviceType?: string;
+  },
+) {
+  const form = new FormData();
+  form.set('file', file);
+  form.set('source', options.source);
+  if (options.documentId) form.set('document_id', options.documentId);
+  if (options.title) form.set('title', options.title);
+  if (options.deviceType) form.set('device_type', options.deviceType);
+  return request<IngestedKnowledgeDocument>(
+    '/knowledge-documents',
+    { method: 'POST', body: form },
+    true,
+  );
+}
+
+export async function listKnowledgeDocuments() {
+  return request<{
+    items: KnowledgeDocumentSummary[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>('/knowledge-documents');
 }
 
 export async function streamAgentRun(
