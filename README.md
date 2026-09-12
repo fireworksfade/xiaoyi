@@ -1,13 +1,13 @@
 # 小yi 通用智能体
 
-一个 ChatGPT 风格的通用 Agent，使用 FastAPI、OpenAI Agents SDK 和动态 MCP 服务。浏览器只访问主后端；设备状态、日志、知识检索、故障案例与诊断由统一的 IoT Diagnosis MCP Server 提供。
+一个 ChatGPT 风格的通用 Agent，使用 FastAPI、OpenAI Agents SDK 和动态 MCP 服务。浏览器只访问主后端；设备状态、日志、知识检索、故障案例与诊断由统一的 IoT Diagnosis MCP Server 提供，设备修复命令的下发、审批与恢复验证由独立的 IoT Control MCP Server 提供，Agent 可自主完成"诊断 → 决策 → 执行 → 验证"的闭环运维（低风险动作直接执行，高风险动作需在界面一键批准）。
 
 ## 项目结构
 
 - `frontend/`：小yi 对话界面
 - `backend/`：认证、对话、Agent 运行、MCP 管理和审计边界
-- `mcp-services/`：统一 IoT Diagnosis MCP、MQTT 接入与模拟器
-- `specs/`：IoT Diagnosis MCP v1.0 基线、v1.1 completion、v1.2 core-model 与 v1.3 discovery 规格
+- `mcp-services/`：统一 IoT Diagnosis MCP、IoT Control MCP、MQTT 接入与模拟器
+- `specs/`：IoT Diagnosis MCP v1.0 基线、v1.1 completion、v1.2 core-model、v1.3 discovery 与 IoT Control MCP v1.0 规格
 
 ## 仓库边界
 
@@ -23,6 +23,7 @@
 - 前端：`http://localhost:3000`
 - FastAPI：`http://127.0.0.1:8000`
 - IoT Diagnosis MCP：`http://127.0.0.1:9001/mcp`
+- IoT Control MCP：`http://127.0.0.1:9002/mcp`
 - MySQL：`127.0.0.1:3306`
 - Qdrant：`http://127.0.0.1:6333`
 - Retrieval Models：`http://127.0.0.1:9010/health`
@@ -55,6 +56,10 @@ Docker 命名卷中，普通停止不会清空对话、知识库或设备数据�
 开发环境没有 `OPENAI_API_KEY` 时，主 Agent 使用确定性 Mock Runtime；配置密钥并设置 `AGENT_RUNTIME=openai` 后启用 OpenAI Agents SDK。诊断 MCP 可另外通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
 
 诊断服务以 SQLite 为本地事实源，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 并由后台任务重试；写入结果会明确返回 `complete` 或 `pending`。Compose 默认使用 GPU 上的 `Qwen3-Embedding-0.6B` 生成 1024 维语义向量，并由 `Qwen3-Reranker-0.6B` 按官方 yes/no CausalLM 方式重排；本地 hash 与加权排序保留为降级方案。Embedding 与 Qdrant 写入支持批处理，`rebuild_vector_index` 可从 SQLite 重建全部或指定来源的向量。实时状态问题由 Rule Router 直接返回 `answer` 和 `realtime_state`，不调用诊断模型；复杂问题进入多源 RAG 与诊断流程。诊断结果附带证据来源，并可使用 `get_diagnosis_trace` 查询完整结果快照、最终上下文和观测字段。`list_devices`、`list_diagnoses` 和 `list_knowledge_documents` 提供设备、诊断历史和知识目录的过滤与分页发现能力。
+
+## 自主运维闭环
+
+IoT Control MCP（端口 9002）让 Agent 从"只诊不治"升级为闭环处置：低风险动作（重连 MQTT/WiFi、传感器校准、调整上报间隔）由 Agent 直接下发并轮询验证；高风险动作（重启设备、固件升级）由 Agent 创建修复提案，在聊天界面的审批卡上一键批准后由系统执行并自动验证恢复。命令走 `iot/{device_id}/cmd` 下行主题，设备回执 `cmd_ack`，Control MCP 在验证窗口内采样状态与日志判定是否恢复。恢复成功后 Control MCP 发布修复完成事件（`iot/{device_id}/remediation`），诊断服务消费事件并自动沉淀为已验证故障案例（`verified_by=auto-remediation:{command_id}`），案例库随自主运维持续积累——两个 MCP 之间只通过 MQTT 主题契约通信。详见 `specs/iot-control-mcp-spec-v1.0.md`。
 
 ## 诊断存储配置
 

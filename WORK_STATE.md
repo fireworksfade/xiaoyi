@@ -4,7 +4,35 @@
 
 ## 当前目标
 
-v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化（语义路由、诊断延迟、知识库删除闭环、MQTT 可靠性、运行记录面板等），安全中生产环境守卫已加，其余并发/安全加固按需继续。
+v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。
+
+## 2026-09-12 案例自动沉淀（IoT Control MCP v1.1）
+
+- `execute_device_action` / `create_remediation_proposal` 新增可选 `diagnosis_id`，Agent 指令要求必传；提案批准后 diagnosis_id 传递到命令行。
+- 恢复验证成功且关联诊断的命令进入归档队列；Control MCP 后台任务经高层 `mcp.client.Client`（Transport 适配器注入 Bearer 头）调用诊断 MCP `get_diagnosis_trace` 组装案例并经 `add_verified_fault_case` 写入案例库（`verified_by=auto-remediation:{command_id}`），`case_id` 回写命令；前端审批卡显示沉淀结果。
+- 归档失败重试 5 次后放弃（case_error 记录原因）；诊断记录不存在直接跳过；device_command/remediation_proposal 表通过启动迁移补齐新列。
+- MCP 56 passed（新增 9 个归档测试）；后端 18 passed；前端 lint/build 通过。
+- 在线浏览器验收通过：Agent 运行中自动携带 diagnosis_id（CMD_20260912_5750D1A8 → 案例 F7C544AEF），审批卡显示"已自动沉淀为故障案例"；修复卡片轮询在任务完成后补拉一次以展示延迟回写的 case_id。
+- 移除前端手动"验证案例"入口（CaseDialog 组件与 addVerifiedFaultCase API 封装已删）；后端 admin REST 端点与诊断 MCP 的 add_verified_fault_case 工具保留（自动沉淀与程序化修正仍需要）。
+- 在线验证：`execute_device_action`（ESP32_05 reconnect_mqtt + diagnosis_id=DIA_20260911_D4CA41F8）→ 恢复验证 succeeded → 自动沉淀案例 `F067F37D2`（MySQL 已入库，`search_fault_cases` 语义检索命中排名第二）。注意：fork 的底层 ClientSession 不做 initialize 握手，服务间调用必须用高层 `Client`。
+
+## 2026-09-12 自主运维闭环（IoT Control MCP v1.0）
+
+- 新增独立服务 `mcp-services/iot_control/`（端口 9002），含 6 个工具：`list_device_actions`、`execute_device_action`（低风险白名单）、`create_remediation_proposal`（高风险提案）、`get_action_result`、`list_remediation_proposals`、`decide_remediation_proposal`（approval_required，仅后端 REST 直调，Agent 不可见）。
+- 命令下发走 `iot/{device_id}/cmd`（QoS1），设备回执 `iot/{device_id}/cmd_ack`；SQLite 存 `device_command` 与 `remediation_proposal`（乐观锁 + 30 分钟过期）；applied 后进入验证窗口（默认 60s），窗口内有在线状态且无新 ERROR/fault 即判定恢复成功。
+- 模拟器支持下行命令：reconnect_mqtt、reconnect_wifi、calibrate_sensor、set_reporting_interval、restart_device、update_firmware 均真实改变后续上报行为并发布恢复日志；compose 新增 ESP32_06（wifi_weak）模拟器。
+- 后端：`bootstrap_local_mcp.py` 注册 `iot-control-local` 并分级授权（read_only / proposal_only / approval_required）；新增 `app/api/remediation.py`（提案列表、详情、决策端点，admin + CSRF + 审计日志 `remediation.approved/rejected`）；`process_agent_run` 把提案写入 assistant message metadata，刷新页面后审批卡可恢复；Agent 指令升级为闭环剧本，`max_turns` 8→14。
+- 前端：新增 `components/remediation-card.tsx` 审批卡（批准/拒绝、任务状态轮询、恢复结果展示），实时流与历史消息均可渲染；`lib/api.ts` 新增提案类型与三个端点封装。
+- Compose：新增 `iot-control-mcp`（9002，healthcheck /ready，control-data 卷），backend 的 MCP_ALLOWED_HOSTS 加入 iot-control-mcp。
+- 验证：MCP 47 passed（含 11 个 control 新测试：白名单、状态机、乐观锁、过期、验证窗口、模拟器命令处理）；后端 18 passed（含 4 个决策端点测试：审批流、乐观锁/非 pending 冲突、admin+CSRF 门禁、控制服务发现）；前端 lint/build 通过。
+- 规格：`specs/iot-control-mcp-spec-v1.0.md`。
+
+## 2026-09-12 架构解耦（事件化归档 + 语义事件）
+
+- Control MCP 不再通过 MCP 调用诊断服务：恢复验证收敛后向 `iot/{device_id}/remediation` 发布完成事件（`iot_control/remediation_events.py`），诊断服务订阅并自行沉淀案例（`iot_diagnosis/remediation.py`），经 `iot/{device_id}/remediation_case` 回发确认，Control 订阅确认把 case_id 关联回命令。`case_archive.py` 与服务间 MCP 客户端已删除，Control 对 Diagnosis 零感知。
+- diagnosis_id 缺失时诊断服务按设备+时间窗兜底关联最近一次成功诊断（`latest_remediation_diagnosis`，窗口 `DIAGNOSIS_REMEDIATION_CORRELATION_MINUTES`）。
+- 后端 `process_agent_run` 把提案工具结果翻译为语义事件 `remediation.proposal_created`（后端定义的干净载荷），前端改吃语义事件，不再匹配 MCP 工具名或解析 MCP 信封。
+- MCP 61 passed（控制 17 + 诊断事件 8 + 既有回归）；后端 18 passed；前端 lint/build 通过；compose 移除 Control 的 DIAGNOSIS_MCP_URL/TOKEN 配置。
 
 ## 2026-09-12 架构优化
 
@@ -109,7 +137,7 @@ v1.3 discovery 功能已实现；当前完成设备、诊断历史和知识文�
 
 ## 当前本地运行状态
 
-Docker Compose 当前服务均已启动：backend、MCP、Retrieval Models、MySQL、Qdrant 健康，MQTT 与模拟器运行中。MCP `/ready` 返回 ready，三种存储 connected，outbox pending 为 0。
+Docker Compose 当前服务均已启动：backend、MCP、IoT Control MCP、Retrieval Models、MySQL、Qdrant 健康，MQTT 与两个模拟器（ESP32_05 mqtt_timeout / ESP32_06 wifi_weak）运行中。Docker Hub 已恢复，`iot-control-mcp` 与 `iot-simulator-wifi` 已用 `python:3.12-slim` 正式构建镜像并去掉 compose 中的镜像复用临时方案。已完成在线端到端验收：真实 LLM Agent 对 ESP32_05 自动诊断并执行 `reconnect_mqtt`（CMD_20260911_7FBBD3B2）后确认恢复；浏览器实测审批卡全流程通过（提案渲染 → 批准执行 → 执行中 → 恢复验证 succeeded，历史刷新后卡片恢复最新状态），期间修复了决策响应扁平结构解析崩溃与 `loadConversationList` 缺失提案映射两处前端缺陷。
 
 ## 当前待处理问题
 
@@ -119,16 +147,22 @@ Docker Compose 当前服务均已启动：backend、MCP、Retrieval Models、MyS
 
 ## 下一步
 
-1. 主要功能之后如需继续，可优化外部 LLM 两阶段调用的端到端耗时。
-2. Docker Hub 网络恢复后可执行 `docker compose build --no-cache iot-diagnosis-mcp`，重新拉取并验证全新基础镜像。
-3. SerpAPI/联网检索属于 v1.1 明确排除项；如需加入，应另开扩展规格。
-4. 为主仓库和 MCP 仓库分别配置远程地址并推送。
+1. 端到端联调：`docker compose up -d --build` 拉起 iot-control-mcp 后重跑 `bootstrap_local_mcp.py`，前端实测对话内闭环（ESP32_05 MQTT 超时自动修复、ESP32_06 弱信号与 restart_device 审批卡）。
+2. 如需进一步自治：新增后台故障监测，设备上报 fault 或离线时自动发起一次 Agent 运维运行（需处理 AgentRun 的 conversation FK 与系统会话）。
+3. 主要功能之后如需继续，可优化外部 LLM 两阶段调用的端到端耗时。
+4. Docker Hub 网络恢复后可执行 `docker compose build --no-cache iot-diagnosis-mcp iot-control-mcp`，重新拉取并验证全新基础镜像。
+5. SerpAPI/联网检索属于 v1.1 明确排除项；如需加入，应另开扩展规格。
+6. 为主仓库和 MCP 仓库分别配置远程地址并推送。
 
 ## 重要文件
 
 - `compose.yaml`
 - `mcp-services/.env.example`
 - `mcp-services/pyproject.toml`
+- `mcp-services/iot_control/server.py`
+- `mcp-services/iot_control/repository.py`
+- `mcp-services/iot_control/mqtt.py`
+- `mcp-services/iot_control/actions.py`
 - `mcp-services/iot_diagnosis/external.py`
 - `mcp-services/iot_diagnosis/embeddings.py`
 - `mcp-services/iot_diagnosis/ingestion.py`
@@ -136,10 +170,16 @@ Docker Compose 当前服务均已启动：backend、MCP、Retrieval Models、MyS
 - `mcp-services/iot_diagnosis/reranker.py`
 - `mcp-services/iot_diagnosis/retrieval.py`
 - `mcp-services/iot_diagnosis/server.py`
+- `mcp-services/iot_diagnosis/simulator.py`
+- `backend/app/api/remediation.py`
+- `backend/app/services/runs.py`
+- `backend/scripts/bootstrap_local_mcp.py`
+- `frontend/components/remediation-card.tsx`
 - `specs/iot-diagnosis-mcp-spec-v1.0.md`
 - `specs/iot-diagnosis-mcp-completion-spec-v1.1.md`
 - `specs/iot-diagnosis-mcp-core-model-spec-v1.2.md`
 - `specs/iot-diagnosis-mcp-discovery-spec-v1.3.md`
+- `specs/iot-control-mcp-spec-v1.0.md`
 
 ## Git 状态
 
