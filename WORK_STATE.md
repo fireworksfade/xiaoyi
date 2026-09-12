@@ -4,7 +4,19 @@
 
 ## 当前目标
 
-v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。
+v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。
+
+## 2026-09-12 ESP32 模拟机群（12 节点）
+
+- `iot_diagnosis/simulator.py` 重构为机群模拟器：新增 `--fleet <json>` 模式，单进程多线程、每台设备独立 MQTT 连接（client_id、遗嘱、命令订阅互不干扰），随机源以 device_id 派生种子保证机群行为跨重启可复现；单设备 CLI（`--device-id/--scenario/--interval`）保持向后兼容。
+- 遥测拟真：设备画像含友好名称（自动注册写入设备表 `name`）、温度基线（冷库 4 °C、配电房 41 °C 等围绕基线 ±1 °C 抖动）、RSSI 基线（±4 dBm 抖动）、固件版本（1.1.4/1.2.0/1.3.1）与上报间隔（5–15 s）；健康设备每约 5 分钟发布一条运行日志，避免日志表膨胀。
+- 新场景 `unstable`（温室 ESP32_10）：运行 120 s 保护期后每个周期以 1% 概率进入 60–120 s 离线片段（发 WARNING 日志 + offline status 后完全静默），片段结束自行恢复；`reconnect_wifi`/`restart_device` 命令可立即终结片段，闭环处置仍可用。
+- `handle_command` 顺带修复：`update_firmware` 现在也会清除 unstable 离线片段（与 restart_device 语义一致）。
+- 新增 `iot_diagnosis/fleet.json`（12 台：8 normal + mqtt_timeout/wifi_weak/sensor_error/unstable 各 1），加载校验 ID 唯一、场景合法、`temperature_base < 70`（防误报）。
+- Compose：`iot-simulator` + `iot-simulator-wifi` 两服务合并为单个 `iot-simulator-fleet`（挂载 fleet.json，随源码热更新）。
+- 优雅停机：main() 统一处理 SIGTERM/SIGINT，`docker compose stop` 时 12 台设备全部主动发布 `offline_reason=graceful_shutdown`（在线实测 12/12），强杀场景仍由遗嘱代发 `client_lost`。
+- 测试：新增 `tests/test_simulator.py` 11 个用例（fleet 解析校验、画像遥测、故障场景、周期日志节奏、unstable 离线片段状态机、命令恢复）；`test_simulator + test_iot_control` 27 passed。
+- 实机验收：compose 应用后旧模拟器容器移除，12 台设备自动注册且名称/基线/固件版本符合画像（ESP32_05 保留种子名"实验室节点 05"、ESP32_06 保留旧库默认名——`name` 仅首帧写入，需重置 diagnosis-data 卷才能刷新）。
 
 ## 2026-09-12 案例自动沉淀（IoT Control MCP v1.1）
 

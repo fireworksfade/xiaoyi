@@ -142,29 +142,14 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  iot-simulator:
+  iot-simulator-fleet:
     build:
       context: ./mcp-services
-    command: python -m iot_diagnosis.simulator --host mqtt --device-id ESP32_05 --scenario mqtt_timeout
+    command: python -m iot_diagnosis.simulator --host mqtt --fleet /app/iot_diagnosis/fleet.json
     environment:
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
-    volumes:
-      - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
-    depends_on:
-      mqtt:
-        condition: service_started
-      iot-diagnosis-mcp:
-        condition: service_healthy
-    restart: unless-stopped
-
-  iot-simulator-wifi:
-    build:
-      context: ./mcp-services
-    command: python -m iot_diagnosis.simulator --host mqtt --device-id ESP32_06 --scenario wifi_weak
-    environment:
-      MQTT_HOST: mqtt
-      MQTT_PORT: "1883"
+      PYTHONPATH: /app
     volumes:
       - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
     depends_on:

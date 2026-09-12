@@ -30,7 +30,7 @@
 
 ## 本地全套启动
 
-Docker Desktop 启动后，一次拉起主后端、IoT Diagnosis MCP、MQTT、MySQL、Qdrant 和模拟设备：
+Docker Desktop 启动后，一次拉起主后端、IoT Diagnosis MCP、MQTT、MySQL、Qdrant 和 ESP32 模拟机群（12 台设备，见下文"模拟机群"）：
 
 ```powershell
 docker compose up -d --build
@@ -133,6 +133,12 @@ python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
 
 新服务订阅 `iot/{device_id}/status`、`iot/{device_id}/telemetry`、
 `iot/{device_id}/logs`、`iot/{device_id}/fault` 和 `iot/{device_id}/heartbeat`，并根据心跳超时判定离线。诊断 MCP 不提供设备重启、固件更新或网络配置修改等控制能力。
+
+## 模拟机群
+
+Compose 默认通过单个 `iot-simulator-fleet` 服务模拟一套真实规模的 ESP32 机群（`mcp-services/iot_diagnosis/fleet.json`）：12 台设备覆盖车间、仓库、冷库、配电房、锅炉房、温室等典型部署位置，各自拥有友好名称、温度/RSSI 基线、固件版本与上报间隔（5–15 秒）。场景构成：8 台健康节点、ESP32_05 MQTT 超时、ESP32_06 WiFi 弱信号、ESP32_09 传感器卡死（78 °C），以及 ESP32_10 随机掉线 60–120 秒后自愈的"网络不稳定"节点。设备首帧上报即自动注册进设备表，无需任何手工配置。增删节点只需编辑 `fleet.json` 后 `docker compose restart iot-simulator-fleet`。
+
+注意：`fleet.json` 中的友好名称只在设备首次注册时写入。若旧数据卷中设备曾以默认名注册（如 ESP32_06），需删除 `diagnosis-data` 卷重新初始化才能更新名称。
 
 开发 Broker 仅绑定 `127.0.0.1` 且允许匿名连接，只用于本机联调；实验室或生产环境应启用用户名、TLS 和 Topic ACL。
 
