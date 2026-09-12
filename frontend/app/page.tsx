@@ -3,7 +3,6 @@
 import { type SyntheticEvent, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
-  BookCheck,
   BookOpen,
   Bot,
   Check,
@@ -35,9 +34,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsSheet } from '@/components/settings-sheet';
-import { CaseDialog } from '@/components/case-dialog';
 import { KnowledgeDialog } from '@/components/knowledge-dialog';
 import { RunRecordsSheet } from '@/components/run-records-sheet';
+import { RemediationCard } from '@/components/remediation-card';
 import {
   Dialog,
   DialogContent,
@@ -65,6 +64,8 @@ import {
   listConversationMessages,
   listConversations,
   type Conversation,
+  type ConversationMessage,
+  type RemediationProposal,
   type ToolSource,
   type UploadedAttachment,
   streamAgentRun,
@@ -80,6 +81,7 @@ type Message = {
   tools?: { name: string; result: string }[];
   citation?: string;
   attachments?: UploadedAttachment[];
+  proposals?: RemediationProposal[];
 };
 
 const suggestions = [
@@ -106,6 +108,17 @@ function replaceMessageText(text: string) {
   return (message: Message): Message => ({ ...message, text });
 }
 
+function toChatMessage(message: ConversationMessage): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.content,
+    proposals: Array.isArray(message.metadata?.remediation_proposals)
+      ? (message.metadata.remediation_proposals as RemediationProposal[])
+      : undefined,
+  };
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -128,7 +141,6 @@ export default function Home() {
     string | null
   >(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [caseDialogOpen, setCaseDialogOpen] = useState(false);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [runRecordsOpen, setRunRecordsOpen] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState<
@@ -182,13 +194,7 @@ export default function Home() {
     try {
       const page = await listConversationMessages(conversation.id);
       if (conversationLoadRef.current !== loadId) return;
-      setMessages(
-        page.items.map((message) => ({
-          id: message.id,
-          role: message.role,
-          text: message.content,
-        })),
-      );
+      setMessages(page.items.map(toChatMessage));
     } catch (error) {
       if (conversationLoadRef.current !== loadId) return;
       setMessages([]);
@@ -278,13 +284,7 @@ export default function Home() {
             firstConversation.id,
           );
           if (cancelled) return;
-          setMessages(
-            messagePage.items.map((message) => ({
-              id: message.id,
-              role: message.role,
-              text: message.content,
-            })),
-          );
+          setMessages(messagePage.items.map(toChatMessage));
           setConversationBusy(false);
         }
       } catch (error) {
@@ -413,6 +413,21 @@ export default function Home() {
               { name: toolName, result },
             ],
           }));
+        }
+        if (event.type === 'remediation.proposal_created') {
+          // 后端语义事件：载荷为后端定义的稳定结构，不再解析 MCP 信封
+          const proposal = event.data.proposal as RemediationProposal | undefined;
+          if (proposal?.proposal_id) {
+            updateAssistant((message) => ({
+              ...message,
+              proposals: [
+                ...(message.proposals ?? []).filter(
+                  (item) => item.proposal_id !== proposal.proposal_id,
+                ),
+                proposal,
+              ],
+            }));
+          }
         }
         if (event.type === 'run.failed') {
           const error = event.data.error as
@@ -709,18 +724,6 @@ export default function Home() {
               <BookOpen />
               <span className="hidden sm:inline">知识文档</span>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-slate-200 text-slate-600 shadow-none"
-              onClick={() => {
-                setCaseDialogOpen(true);
-                void loadToolSources();
-              }}
-            >
-              <BookCheck />
-              <span className="hidden sm:inline">验证案例</span>
-            </Button>
           </div>
         </header>
 
@@ -840,6 +843,16 @@ export default function Home() {
                       <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
                         {message.text}
                       </p>
+                      {message.proposals?.length ? (
+                        <div className="mt-2 space-y-2">
+                          {message.proposals.map((proposal) => (
+                            <RemediationCard
+                              key={proposal.proposal_id}
+                              proposal={proposal}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
                       {message.attachments?.length ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {message.attachments.map((attachment) => (
@@ -1141,12 +1154,6 @@ export default function Home() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <CaseDialog
-        open={caseDialogOpen}
-        onOpenChange={setCaseDialogOpen}
-        toolSources={toolSources}
-      />
 
       <KnowledgeDialog open={knowledgeOpen} onOpenChange={setKnowledgeOpen} />
 
