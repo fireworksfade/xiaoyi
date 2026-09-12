@@ -16,6 +16,12 @@ SERVER_DEFINITIONS = (
         "url": "http://iot-diagnosis-mcp:9001/mcp",
         "purpose": "iot",
     },
+    {
+        "server_key": "iot-control-local",
+        "name": "本地 IoT 设备控制",
+        "url": "http://iot-control-mcp:9002/mcp",
+        "purpose": "iot",
+    },
 )
 
 REPLACED_SERVER_KEYS = {"rag-local", "iot-local"}
@@ -30,6 +36,25 @@ READ_ONLY_TOOLS = {
     "list_knowledge_documents",
     "search_knowledge",
     "search_fault_cases",
+    # IoT Control MCP：查询类工具
+    "list_device_actions",
+    "get_action_result",
+    "list_remediation_proposals",
+}
+
+# proposal_only 与 read_only 一样会进入 Agent 工具列表，但语义上代表
+# "可由 Agent 自主执行的低风险动作 / 可由 Agent 发起的高风险提案"。
+PROPOSAL_ONLY_TOOLS = {
+    "execute_device_action",
+    "create_remediation_proposal",
+}
+
+# 仅后端审批 REST 直调（对 Agent 不可见），复用 add_verified_fault_case 模式。
+APPROVAL_REQUIRED_TOOLS = {
+    "add_verified_fault_case",
+    "ingest_knowledge_text",
+    "delete_knowledge_document",
+    "decide_remediation_proposal",
 }
 
 
@@ -114,11 +139,9 @@ def main() -> None:
             for tool in catalog["items"]:
                 if tool["original_name"] in READ_ONLY_TOOLS:
                     policy = "read_only"
-                elif tool["original_name"] in (
-                    "add_verified_fault_case",
-                    "ingest_knowledge_text",
-                    "delete_knowledge_document",
-                ):
+                elif tool["original_name"] in PROPOSAL_ONLY_TOOLS:
+                    policy = "proposal_only"
+                elif tool["original_name"] in APPROVAL_REQUIRED_TOOLS:
                     policy = "approval_required"
                 else:
                     policy = "disabled"

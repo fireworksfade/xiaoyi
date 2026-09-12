@@ -37,7 +37,7 @@ services:
       APP_SECRET_KEY: local-compose-change-me
       DATABASE_URL: sqlite+aiosqlite:///./data/xiaoyi.db
       FRONTEND_ORIGINS: http://localhost:3000
-      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,iot-diagnosis-mcp
+      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,iot-diagnosis-mcp,iot-control-mcp
       AGENT_RUNTIME: mock
       SESSION_COOKIE_SECURE: "false"
       SESSION_COOKIE_SAMESITE: lax
@@ -108,10 +108,60 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  iot-control-mcp:
+    build:
+      context: ./mcp-services
+    command: python -m iot_control.server
+    ports:
+      - "127.0.0.1:9002:9002"
+    environment:
+      PYTHONPATH: /app
+      CONTROL_HOST: 0.0.0.0
+      CONTROL_PORT: "9002"
+      CONTROL_DATABASE_PATH: /app/data/iot_control.db
+      CONTROL_COMMAND_TIMEOUT_SECONDS: "30"
+      CONTROL_VERIFY_WINDOW_SECONDS: "60"
+      CONTROL_PROPOSAL_TTL_MINUTES: "30"
+      CONTROL_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
+      CONTROL_MCP_PUBLIC_URL: ${CONTROL_MCP_PUBLIC_URL:-http://iot-control-mcp:9002}
+      MQTT_ENABLED: "true"
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+    volumes:
+      - control-data:/app/data
+      - ./mcp-services/common:/app/common:ro
+      - ./mcp-services/iot_control:/app/iot_control:ro
+    depends_on:
+      mqtt:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9002/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   iot-simulator:
     build:
       context: ./mcp-services
     command: python -m iot_diagnosis.simulator --host mqtt --device-id ESP32_05 --scenario mqtt_timeout
+    environment:
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+    volumes:
+      - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
+    depends_on:
+      mqtt:
+        condition: service_started
+      iot-diagnosis-mcp:
+        condition: service_healthy
+    restart: unless-stopped
+
+  iot-simulator-wifi:
+    build:
+      context: ./mcp-services
+    command: python -m iot_diagnosis.simulator --host mqtt --device-id ESP32_06 --scenario wifi_weak
     environment:
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
@@ -168,6 +218,7 @@ services:
 
 volumes:
   backend-data:
+  control-data:
   diagnosis-data:
   mqtt-data:
   mysql-data:

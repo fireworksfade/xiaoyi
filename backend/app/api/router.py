@@ -31,6 +31,7 @@ from app.api.diagnosis import router as diagnosis_router
 from app.api.model_config import router as model_config_router
 from app.api.attachments import router as attachments_router
 from app.api.knowledge import router as knowledge_router
+from app.api.remediation import router as remediation_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(mcp_router)
@@ -38,6 +39,7 @@ router.include_router(diagnosis_router)
 router.include_router(model_config_router)
 router.include_router(attachments_router)
 router.include_router(knowledge_router)
+router.include_router(remediation_router)
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 

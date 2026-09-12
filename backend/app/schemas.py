@@ -97,6 +97,11 @@ class VerifiedFaultCaseCreate(BaseModel):
     verified: bool
 
 
+class RemediationDecisionCreate(BaseModel):
+    decision: str = Field(pattern=r"^(approved|rejected)$")
+    expected_version: int = Field(ge=1)
+
+
 class ModelConfigurationUpdate(BaseModel):
     provider_name: str = Field(min_length=1, max_length=80)
     base_url: str = Field(min_length=1, max_length=500)

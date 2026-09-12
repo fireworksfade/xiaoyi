@@ -17,9 +17,40 @@ async def append_event(run_id: str, event: RuntimeEvent) -> RunEvent:
         return record
 
 
+def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> dict | None:
+    """从 tool.finished 事件中提取并规范化修复提案。
+
+    返回后端定义的干净载荷（不透传 MCP 信封），供语义事件与消息元数据使用。
+    """
+    output = event_data.get("output")
+    if (
+        event_data.get("tool_name") != "create_remediation_proposal"
+        or not isinstance(output, dict)
+        or output.get("ok") is not True
+    ):
+        return None
+    data = output.get("data")
+    if not isinstance(data, dict) or not data.get("proposal_id"):
+        return None
+    return {
+        "proposal_id": data["proposal_id"],
+        "device_id": data.get("device_id"),
+        "action": data.get("action"),
+        "parameters": data.get("parameters") or {},
+        "reason": data.get("reason", ""),
+        "impact": data.get("impact", ""),
+        "status": data.get("status", "pending"),
+        "version": data.get("version", 1),
+        "expires_at": data.get("expires_at"),
+        "task_status": data.get("task_status"),
+        "created_at": data.get("created_at"),
+    }
+
+
 async def process_agent_run(run_id: str) -> None:
     settings = get_settings()
     final_content = ""
+    proposals: list[dict[str, object]] = []
     try:
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
@@ -105,17 +136,29 @@ async def process_agent_run(run_id: str) -> None:
             if event.event_type == "answer.final":
                 final_content = str(event.data.get("content", ""))
                 continue
+            if event.event_type == "tool.finished":
+                proposal = _collect_proposals(event.data, proposals)
+                if proposal is not None:
+                    # 语义事件：前端只依赖这个稳定契约，不解析 MCP 信封
+                    await append_event(
+                        run_id,
+                        RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
+                    )
             await append_event(run_id, event)
 
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if not run:
                 return
+            assistant_metadata: dict[str, object] = {"run_id": run_id}
+            if proposals:
+                # 提案数据随消息持久化，前端刷新后仍能渲染审批卡
+                assistant_metadata["remediation_proposals"] = proposals
             assistant_message = Message(
                 conversation_id=run.conversation_id,
                 role="assistant",
                 content=final_content,
-                metadata_json={"run_id": run_id},
+                metadata_json=assistant_metadata,
             )
             db.add(assistant_message)
             await db.flush()
