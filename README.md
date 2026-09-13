@@ -28,6 +28,16 @@
 - Qdrant：`http://127.0.0.1:6333`
 - Retrieval Models：`http://127.0.0.1:9010/health`
 
+## 部署档位（检索模型）
+
+| 档位 | 命令 | 检索实现 | 宿主要求 |
+| --- | --- | --- | --- |
+| Portable（默认） | `docker compose up -d --build` | 本地确定性 hash embedding + weighted reranker（384 维集合） | Docker，无 GPU、无模型下载 |
+| GPU | `docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build` | Qwen3-Embedding/Reranker-0.6B（1024 维集合） | NVIDIA runtime、约 4 GiB 空闲显存、首次下载约 2.5 GiB |
+| GPU offline | GPU 命令再叠加 `-f compose.retrieval-offline.yaml` | 已缓存 Qwen3，禁止联网 | 完整模型缓存 |
+
+模型服务健康语义：`/live` 进程存活即 200；`/ready` 两个模型加载完成才 200，加载期间 503 + `status=loading`；offline 模式缓存不完整时 503 + `error_code=MODEL_CACHE_INCOMPLETE`，不联网下载、不进入无说明的重启循环。缓存可用性可提前用 `python -m scripts.check_model_cache` 校验。
+
 ## 本地全套启动
 
 Docker Desktop 启动后，一次拉起主后端、IoT Diagnosis MCP、MQTT、MySQL、Qdrant 和 ESP32 模拟机群（12 台设备，见下文"模拟机群"）：
@@ -55,7 +65,7 @@ Docker 命名卷中，普通停止不会清空对话、知识库或设备数据�
 
 开发环境没有 `OPENAI_API_KEY` 时，主 Agent 使用确定性 Mock Runtime；配置密钥并设置 `AGENT_RUNTIME=openai` 后启用 OpenAI Agents SDK。诊断 MCP 可另外通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
 
-诊断服务以 SQLite 为本地事实源，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 并由后台任务重试；写入结果会明确返回 `complete` 或 `pending`。Compose 默认使用 GPU 上的 `Qwen3-Embedding-0.6B` 生成 1024 维语义向量，并由 `Qwen3-Reranker-0.6B` 按官方 yes/no CausalLM 方式重排；本地 hash 与加权排序保留为降级方案。Embedding 与 Qdrant 写入支持批处理，`rebuild_vector_index` 可从 SQLite 重建全部或指定来源的向量。实时状态问题由 Rule Router 直接返回 `answer` 和 `realtime_state`，不调用诊断模型；复杂问题进入多源 RAG 与诊断流程。诊断结果附带证据来源，并可使用 `get_diagnosis_trace` 查询完整结果快照、最终上下文和观测字段。`list_devices`、`list_diagnoses` 和 `list_knowledge_documents` 提供设备、诊断历史和知识目录的过滤与分页发现能力。
+诊断服务以 SQLite 为本地事实源，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 并由后台任务重试；写入结果会明确返回 `complete` 或 `pending`。检索模型按上文"部署档位"选择：Portable 档位使用本地确定性检索（384 维 `iot_diagnosis_portable` 集合），GPU 档位使用 `Qwen3-Embedding-0.6B` 生成 1024 维语义向量并由 `Qwen3-Reranker-0.6B` 重排（1024 维 `iot_diagnosis_qwen3` 集合）。Embedding 与 Qdrant 写入支持批处理，`rebuild_vector_index` 可从 SQLite 重建全部或指定来源的向量。实时状态问题由 Rule Router 直接返回 `answer` 和 `realtime_state`，不调用诊断模型；复杂问题进入多源 RAG 与诊断流程。诊断结果附带证据来源，并可使用 `get_diagnosis_trace` 查询完整结果快照、最终上下文和观测字段。`list_devices`、`list_diagnoses` 和 `list_knowledge_documents` 提供设备、诊断历史和知识目录的过滤与分页发现能力。
 
 ## 自主运维闭环
 
