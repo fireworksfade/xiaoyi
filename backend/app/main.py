@@ -1,3 +1,4 @@
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
@@ -9,9 +10,12 @@ from sqlalchemy import select
 
 from app.api.router import router
 from app.config import get_settings
-from app.db import SessionFactory, create_schema
+from app.db import SessionFactory
+from app.migrations import RevisionStatus, check_revision, upgrade_to_head
 from app.models import User, UserRole
 from app.security import hash_password
+
+logger = logging.getLogger("xiaoyi.main")
 
 
 async def seed_users() -> None:
@@ -38,7 +42,27 @@ async def seed_users() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await create_schema()
+    settings = get_settings()
+    settings.ensure_local_paths()
+    if settings.db_auto_upgrade:
+        # 开发/测试：启动即升级到 head。生产部署必须先行执行
+        # `python -m app.cli deploy`，并设置 DB_AUTO_UPGRADE=false。
+        upgrade_to_head()
+    else:
+        status = check_revision()
+        if status == RevisionStatus.AHEAD:
+            raise RuntimeError(
+                "DATABASE_SCHEMA_AHEAD: 数据库版本高于当前代码支持版本，请部署匹配的应用版本"
+            )
+        if status == RevisionStatus.BEHIND:
+            raise RuntimeError(
+                "DATABASE_SCHEMA_BEHIND: 数据库版本落后，请先执行 python -m app.cli deploy"
+            )
+        if status == RevisionStatus.EMPTY:
+            raise RuntimeError(
+                "DATABASE_NOT_INITIALIZED: 空数据库，请先执行 python -m app.cli deploy"
+            )
+        logger.info("database revision check passed: %s", status.value)
     await seed_users()
     yield
 

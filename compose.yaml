@@ -17,9 +17,13 @@ services:
       AGENT_RUNTIME: mock
       SESSION_COOKIE_SECURE: "false"
       SESSION_COOKIE_SAMESITE: lax
+      # 容器 CMD 已先执行 python -m app.cli deploy；应用启动只校验版本
+      DB_AUTO_UPGRADE: "false"
     volumes:
       - backend-data:/app/data
       - ./backend/app:/app/app:ro
+      - ./backend/migrations:/app/migrations:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
       - ./backend/scripts:/app/scripts:ro
     restart: unless-stopped
 

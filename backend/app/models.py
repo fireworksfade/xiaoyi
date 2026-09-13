@@ -149,10 +149,19 @@ class AgentRun(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
     user_message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), unique=True)
     final_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"), nullable=True)
-    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.QUEUED)
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.QUEUED, index=True)
     runtime_state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 运行生命周期字段：由 RunDispatcher 与启动恢复扫描维护
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    interruption_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

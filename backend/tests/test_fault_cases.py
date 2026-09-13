@@ -4,7 +4,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.db import SessionFactory, create_schema
+from app.db import SessionFactory
 from app.main import app
 from app.models import AuditLog, MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
@@ -40,7 +40,6 @@ DELETE_RESULT = {
 
 def seed_iot_server(*, delete_tool_policy: ToolRiskPolicy) -> str:
     async def seed() -> str:
-        await create_schema()
         async with SessionFactory() as db:
             server = MCPServer(
                 server_key=f"diag-{uuid.uuid4().hex[:8]}",

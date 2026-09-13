@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     openai_api_mode: str = "responses"
     agent_runtime: str = "mock"
     seed_demo_users: bool = True
+    # 开发/测试默认在启动时执行 alembic upgrade head；生产部署应先跑
+    # `python -m app.cli deploy` 并设置 DB_AUTO_UPGRADE=false
+    db_auto_upgrade: bool = True
 
     @field_validator("frontend_origins", mode="before")
     @classmethod

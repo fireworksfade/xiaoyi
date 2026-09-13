@@ -4,8 +4,9 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.api.knowledge import MAX_KNOWLEDGE_CHARS
-from app.db import SessionFactory, create_schema
+from app.db import SessionFactory
 from app.main import app
+from app.migrations import upgrade_to_head
 from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
 
@@ -15,7 +16,7 @@ def _login(client) -> str:
 
 
 def _seed_server() -> str:
-    asyncio.run(create_schema())
+    upgrade_to_head()
 
     async def seed() -> str:
         async with SessionFactory() as db:
@@ -118,7 +119,7 @@ def test_upload_requires_ingest_tool_policy(monkeypatch) -> None:
 
     monkeypatch.setattr("app.api.knowledge.invoke_remote_tool", fake_invoke)
 
-    asyncio.run(create_schema())
+    upgrade_to_head()
 
     async def seed() -> str:
         async with SessionFactory() as db:

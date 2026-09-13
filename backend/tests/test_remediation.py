@@ -4,7 +4,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.db import SessionFactory, create_schema
+from app.db import SessionFactory
 from app.main import app
 from app.models import AuditLog, MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
@@ -29,7 +29,6 @@ PROPOSAL = {
 
 def seed_control_server() -> str:
     async def seed() -> str:
-        await create_schema()
         async with SessionFactory() as db:
             server = MCPServer(
                 server_key=f"control-{uuid.uuid4().hex[:8]}",
@@ -192,7 +191,6 @@ def test_decision_requires_admin_and_csrf(monkeypatch) -> None:
 
 def test_control_server_requires_execution_tool(monkeypatch) -> None:
     async def seed_bare_server() -> str:
-        await create_schema()
         async with SessionFactory() as db:
             server = MCPServer(
                 server_key=f"bare-{uuid.uuid4().hex[:8]}",
