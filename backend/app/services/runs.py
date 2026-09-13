@@ -1,20 +1,45 @@
-from sqlalchemy import select
+import asyncio
+
+from sqlalchemy import select, update
 
 from app.agent.runtime import RuntimeEvent, build_runtime
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import AgentRun, Attachment, Message, ModelConfiguration, RunEvent, RunStatus
+from app.models import (
+    AgentRun,
+    Attachment,
+    Message,
+    ModelConfiguration,
+    RunEvent,
+    RunStatus,
+    utc_now,
+)
 from app.security import decrypt_secret
 from app.services.mcp_catalog import load_agent_mcp_servers
+from app.services.run_state import (
+    AGENT_RUN_FAILED,
+    RUN_INTERRUPTED,
+    claim_queued_run,
+)
 
 
 async def append_event(run_id: str, event: RuntimeEvent) -> RunEvent:
+    """写事件并在同一事务内推进 last_progress_at。"""
+    now = utc_now()
     async with SessionFactory() as db:
         record = RunEvent(run_id=run_id, event_type=event.event_type, data=event.data)
         db.add(record)
+        await db.execute(update(AgentRun).where(AgentRun.id == run_id).values(last_progress_at=now))
         await db.commit()
         await db.refresh(record)
         return record
+
+
+async def process_agent_run(run_id: str) -> None:
+    """完整执行入口：认领 + 执行（供 legacy BackgroundTasks 模式使用）。"""
+    if not await claim_queued_run(run_id):
+        return
+    await execute_claimed_run(run_id)
 
 
 def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> dict | None:
@@ -49,16 +74,16 @@ def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> 
     return proposal
 
 
-async def process_agent_run(run_id: str) -> None:
+async def execute_claimed_run(run_id: str) -> None:
+    """执行已处于 RUNNING 的 run（由 Dispatcher 或 legacy 入口认领后调用）。"""
     settings = get_settings()
     final_content = ""
     proposals: list[dict[str, object]] = []
     try:
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
-            if not run or run.status != RunStatus.QUEUED:
+            if not run or run.status != RunStatus.RUNNING:
                 return
-            run.status = RunStatus.RUNNING
             model_config = await db.scalar(
                 select(ModelConfiguration).where(
                     ModelConfiguration.user_id == run.user_id,
@@ -160,6 +185,9 @@ async def process_agent_run(run_id: str) -> None:
             await db.flush()
             run.final_message_id = assistant_message.id
             run.status = RunStatus.COMPLETED
+            run.finished_at = utc_now()
+            run.error_code = None
+            run.error_message = None
             completed = RunEvent(
                 run_id=run_id,
                 event_type="run.completed",
@@ -167,20 +195,46 @@ async def process_agent_run(run_id: str) -> None:
             )
             db.add(completed)
             await db.commit()
-    except Exception as exc:
+    except asyncio.CancelledError:
+        # Dispatcher 取消/优雅关闭超时：写中断终态，供用户重试
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
-            if run:
+            if run and run.status == RunStatus.RUNNING:
                 run.status = RunStatus.FAILED
-                run.error_code = "AGENT_RUN_FAILED"
-                run.error_message = str(exc)[:1000]
+                run.finished_at = utc_now()
+                run.error_code = RUN_INTERRUPTED
+                run.error_message = "运行被取消，可重试"
+                run.interruption_reason = RUN_INTERRUPTED
                 db.add(
                     RunEvent(
                         run_id=run_id,
                         event_type="run.failed",
                         data={
                             "error": {
-                                "code": "AGENT_RUN_FAILED",
+                                "code": RUN_INTERRUPTED,
+                                "message": "运行被取消，可重试",
+                                "retryable": True,
+                            }
+                        },
+                    )
+                )
+                await db.commit()
+        raise
+    except Exception as exc:
+        async with SessionFactory() as db:
+            run = await db.get(AgentRun, run_id)
+            if run:
+                run.status = RunStatus.FAILED
+                run.finished_at = utc_now()
+                run.error_code = AGENT_RUN_FAILED
+                run.error_message = f"{type(exc).__name__}: {exc}"[:1000]
+                db.add(
+                    RunEvent(
+                        run_id=run_id,
+                        event_type="run.failed",
+                        data={
+                            "error": {
+                                "code": AGENT_RUN_FAILED,
                                 "message": "小yi 运行失败",
                                 "retryable": False,
                             }

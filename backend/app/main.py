@@ -14,6 +14,9 @@ from app.db import SessionFactory
 from app.migrations import RevisionStatus, check_revision, upgrade_to_head
 from app.models import User, UserRole
 from app.security import hash_password
+from app.services.run_dispatcher import RunDispatcher
+from app.services.run_recovery import recover_interrupted_runs
+from app.services.runs import execute_claimed_run
 
 logger = logging.getLogger("xiaoyi.main")
 
@@ -41,7 +44,7 @@ async def seed_users() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_local_paths()
     if settings.db_auto_upgrade:
@@ -63,8 +66,30 @@ async def lifespan(_: FastAPI):
                 "DATABASE_NOT_INITIALIZED: 空数据库，请先执行 python -m app.cli deploy"
             )
         logger.info("database revision check passed: %s", status.value)
+
+    # 恢复扫描：RUNNING → FAILED/RUN_INTERRUPTED；QUEUED 保留待执行
+    report = await recover_interrupted_runs()
+    logger.info(
+        "startup recovery: %s",
+        report.to_dict(),
+        extra={"event": "run_recovery_report", **report.to_dict()},
+    )
+
+    dispatcher: RunDispatcher | None = None
+    if settings.run_dispatcher_mode == "dispatcher":
+        dispatcher = RunDispatcher(
+            execute_claimed_run,
+            poll_interval_seconds=settings.run_dispatcher_poll_seconds,
+            shutdown_grace_seconds=settings.run_shutdown_grace_seconds,
+        )
+        dispatcher.start()
+        app.state.run_dispatcher = dispatcher
+        # 恢复扫描留下的 QUEUED 任务由周期扫描接管，无需额外通知
+
     await seed_users()
     yield
+    if dispatcher is not None:
+        await dispatcher.stop()
 
 
 settings = get_settings()

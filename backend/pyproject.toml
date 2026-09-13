@@ -39,3 +39,7 @@ target-version = "py312"
 select = ["E4", "E7", "E9", "F", "I", "B"]
 # B008：FastAPI 依赖注入（File()/Depends()）在参数默认值中调用是框架惯用法
 ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest 需在导入 app 模块前设置 DATABASE_URL 等环境变量
+"tests/conftest.py" = ["E402"]

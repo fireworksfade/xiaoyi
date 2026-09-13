@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.schemas import ConversationCreate, ConversationUpdate, LoginRequest, MessageCreate
 from app.security import opaque_token, token_hash, verify_password
+from app.services.run_state import is_retryable
 from app.services.runs import process_agent_run
 
 router = APIRouter(prefix="/api/v1")
@@ -75,13 +76,18 @@ def message_view(item: Message) -> dict[str, object]:
 def run_view(item: AgentRun) -> dict[str, object]:
     error = None
     if item.error_code:
-        error = {"code": item.error_code, "message": item.error_message, "retryable": False}
+        error = {
+            "code": item.error_code,
+            "message": item.error_message,
+            "retryable": is_retryable(item.error_code),
+        }
     return {
         "id": item.id,
         "conversation_id": item.conversation_id,
         "status": item.status.value,
         "final_message_id": item.final_message_id,
         "error": error,
+        "interruption_reason": item.interruption_reason,
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
     }
@@ -363,14 +369,78 @@ async def submit_message(
         conversation_id=conversation_id,
         user_message_id=message.id,
         status=RunStatus.QUEUED,
+        queued_at=datetime.now(timezone.utc),
     )
     db.add(run)
     if conversation.title == "新对话":
         conversation.title = payload.content.strip().replace("\n", " ")[:40]
     conversation.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    background_tasks.add_task(process_agent_run, run.id)
+
+    # 202 只表示任务已持久化；notify 是降低延迟的快速通道，周期扫描兜底
+    dispatcher = getattr(request.app.state, "run_dispatcher", None)
+    if dispatcher is not None:
+        dispatcher.notify(run.id)
+    else:
+        background_tasks.add_task(process_agent_run, run.id)
     return envelope(request, {"run_id": run.id, "idempotent_replay": False})
+
+
+@router.post("/agent-runs/{run_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_run(
+    run_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Db,
+    user: CurrentUser,
+    _: CsrfProtected,
+) -> dict[str, object]:
+    """重试可中断的失败任务：创建新 user message + 新 run；旧 run 保持不可变。"""
+    original = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id)
+    )
+    if not original:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
+    if original.status != RunStatus.FAILED:
+        raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
+    if not is_retryable(original.error_code):
+        raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
+    source_message = await db.get(Message, original.user_message_id)
+    if not source_message:
+        raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
+
+    now = datetime.now(timezone.utc)
+    message = Message(
+        conversation_id=original.conversation_id,
+        role="user",
+        content=source_message.content,
+        client_message_id=None,
+        metadata_json={
+            **source_message.metadata_json,
+            "retried_run_id": original.id,
+        },
+    )
+    db.add(message)
+    await db.flush()
+    retried = AgentRun(
+        user_id=user.id,
+        conversation_id=original.conversation_id,
+        user_message_id=message.id,
+        status=RunStatus.QUEUED,
+        queued_at=now,
+    )
+    db.add(retried)
+    conversation = await db.get(Conversation, original.conversation_id)
+    if conversation:
+        conversation.updated_at = now
+    await db.commit()
+
+    dispatcher = getattr(request.app.state, "run_dispatcher", None)
+    if dispatcher is not None:
+        dispatcher.notify(retried.id)
+    else:
+        background_tasks.add_task(process_agent_run, retried.id)
+    return envelope(request, {"run_id": retried.id, "message_id": message.id})
 
 
 @router.get("/agent-runs")

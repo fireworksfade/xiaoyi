@@ -104,6 +104,14 @@ def test_attachment_and_tool_selection_reach_agent_runtime(monkeypatch) -> None:
             headers=headers,
         )
         assert submitted.status_code == 202
+        run_id = submitted.json()["data"]["run_id"]
+        # Dispatcher 异步执行：等待终态后再断言捕获内容
+        for _ in range(100):
+            detail = client.get(f"/api/v1/agent-runs/{run_id}").json()["data"]
+            if detail["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.1)
+        assert detail["status"] == "completed"
 
     runtime_messages = captured["messages"]
     assert isinstance(runtime_messages, list)

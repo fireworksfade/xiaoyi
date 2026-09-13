@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # 开发/测试默认在启动时执行 alembic upgrade head；生产部署应先跑
     # `python -m app.cli deploy` 并设置 DB_AUTO_UPGRADE=false
     db_auto_upgrade: bool = True
+    # Agent 执行：dispatcher（默认）使用进程内调度器 + 周期扫描；
+    # legacy 在一个发布周期内回退 BackgroundTasks（启动恢复扫描仍执行）
+    run_dispatcher_mode: str = "dispatcher"
+    run_dispatcher_poll_seconds: float = 1.0
+    run_shutdown_grace_seconds: float = 30.0
 
     @field_validator("frontend_origins", mode="before")
     @classmethod
