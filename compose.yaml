@@ -30,7 +30,7 @@ services:
   iot-diagnosis-mcp:
     build:
       context: ./mcp-services
-    command: python -m iot_diagnosis.server
+    command: sh -c "python -m scripts.migrate upgrade --service diagnosis && python -m iot_diagnosis.server"
     ports:
       - "127.0.0.1:9001:9001"
     environment:
@@ -83,7 +83,7 @@ services:
   iot-control-mcp:
     build:
       context: ./mcp-services
-    command: python -m iot_control.server
+    command: sh -c "python -m scripts.migrate upgrade --service control && python -m iot_control.server"
     ports:
       - "127.0.0.1:9002:9002"
     environment:
