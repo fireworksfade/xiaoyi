@@ -6,6 +6,14 @@
 
 v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。2026-09-13 知识库扩至 36 篇官方文档，案例库清空后由模拟集群批量重建 25 条自动沉淀案例。
 
+## 2026-09-13 案例库去重与多样化（新增 memory_leak / watchdog_reset 场景）
+
+- 案例去重：新增 `scripts/dedup_fault_cases.py`（按故障名称分组、每组保留沉淀时间最新一条，逐条删除同步清理 MySQL/Qdrant），首轮 25→6 条；差异化生成后终轮 24→14 条，outbox 归零。
+- 模拟器新增 `memory_leak`（heap 空闲量 WARNING + 35% 概率 OOM 错误）与 `watchdog_reset`（Task watchdog ERROR + panic CRITICAL 日志、uptime 停在低位不累积）两个故障场景，`restart_device`/`update_firmware` 可清除；`inject_fault` 支持 7 种场景。新增 2 个模拟器用例（共 78 passed）。
+- `generate_fault_cases.py` 新增 `--mode variety`（同场景配不同现场症状叙述，驱动 LLM 产出不同故障定名/根因）与 `--start`（分批执行）；差异化症状 + 新故障签名合计生成 18 条案例，全部经真实闭环（含 11 条提案审批路径）归档。
+- 最终案例库 14 条、故障名称零重复：Task Watchdog 复位、固件内存泄漏、DHCP 续租失败、传感器老化漂移、MQTT 认证失败、金属机柜屏蔽、信道干扰等；浏览器实测「真实案例库」标签页展示「共 14 条已验证案例」，自动沉淀徽标与展开详情正常。
+- 经验：诊断 LLM 的命名会被检索命中的既有案例锚定——仅改查询措辞无法稳定产生不同案例名，新增故障签名（不同日志/遥测特征）才是多样化的可靠途径。
+
 ## 2026-09-13 官方文档扩充 + 案例库清空重建（模拟集群批量生成）
 
 - 官方技术文档 16 篇扩至 32 篇（库内含 4 篇种子共 36 篇逻辑文档、664 分块）：新增 14 份抓取的官方资料（ESP-IDF 中文版 ESP-NETIF/LwIP/ESP Event/I2C/ADC 校准/GPIO/电源管理/睡眠模式/HTTPS OTA/堆内存/日志库/NVS + Mosquitto TLS/passwd 手册，`Source:` 首行格式与既有抓取文档一致）与 2 篇自撰中文诊断手册（设备间歇离线、OTA 升级失败）；`ingest_recommended_documents.py` 扩展映射后容器内全量重放，MySQL 与 Qdrant 全部 complete、outbox 归零。
