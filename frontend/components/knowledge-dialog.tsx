@@ -70,9 +70,14 @@ function formatTime(value: string | undefined) {
   return value ? value.slice(0, 19).replace('T', ' ') : '—';
 }
 
-function caseOrigin(item: FaultCaseSummary): { label: string; variant: 'default' | 'secondary' | 'outline' } {
-  if (item.source === 'built_in') return { label: '内置案例', variant: 'outline' };
-  if (item.verified_by.startsWith('auto-remediation:')) return { label: '自动沉淀', variant: 'secondary' };
+function caseOrigin(item: FaultCaseSummary): {
+  label: string;
+  variant: 'default' | 'secondary' | 'outline';
+} {
+  if (item.source === 'built_in')
+    return { label: '内置案例', variant: 'outline' };
+  if (item.verified_by.startsWith('auto-remediation:'))
+    return { label: '自动沉淀', variant: 'secondary' };
   return { label: '人工确认', variant: 'default' };
 }
 
@@ -85,7 +90,9 @@ export function KnowledgeDialog(props: {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -113,12 +120,15 @@ export function KnowledgeDialog(props: {
     })).filter((group) => group.items.length > 0);
     const extras = docs
       .filter((doc) => !SOURCE_ORDER.includes(doc.source))
-      .reduce<Array<{ source: string; items: KnowledgeDocumentSummary[] }>>((acc, doc) => {
-        const existing = acc.find((group) => group.source === doc.source);
-        if (existing) existing.items.push(doc);
-        else acc.push({ source: doc.source, items: [doc] });
-        return acc;
-      }, []);
+      .reduce<Array<{ source: string; items: KnowledgeDocumentSummary[] }>>(
+        (acc, doc) => {
+          const existing = acc.find((group) => group.source === doc.source);
+          if (existing) existing.items.push(doc);
+          else acc.push({ source: doc.source, items: [doc] });
+          return acc;
+        },
+        [],
+      );
     return [...known, ...extras];
   }, [docs]);
 
@@ -285,8 +295,15 @@ export function KnowledgeDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={tab} onValueChange={(value) => setTab(String(value ?? 'docs'))} className="mt-2">
-          <TabsList variant="line" className="justify-start border-b border-slate-200">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(String(value ?? 'docs'))}
+          className="mt-2"
+        >
+          <TabsList
+            variant="line"
+            className="justify-start border-b border-slate-200"
+          >
             <TabsTrigger value="docs">官方技术文档</TabsTrigger>
             <TabsTrigger value="cases">真实案例库</TabsTrigger>
           </TabsList>
@@ -299,11 +316,16 @@ export function KnowledgeDialog(props: {
                   正在读取文档列表…
                 </p>
               ) : docs.length === 0 ? (
-                <p className="px-3 py-4 text-sm text-slate-500">还没有已摄取的知识文档。</p>
+                <p className="px-3 py-4 text-sm text-slate-500">
+                  还没有已摄取的知识文档。
+                </p>
               ) : (
                 groups.map((group) => {
                   const collapsed = collapsedGroups.has(group.source);
-                  const chunkTotal = group.items.reduce((sum, item) => sum + item.chunk_count, 0);
+                  const chunkTotal = group.items.reduce(
+                    (sum, item) => sum + item.chunk_count,
+                    0,
+                  );
                   return (
                     <section key={group.source}>
                       <button
@@ -331,7 +353,9 @@ export function KnowledgeDialog(props: {
                                 className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
                               >
                                 <div className="min-w-0">
-                                  <p className="truncate font-medium text-slate-700">{doc.title}</p>
+                                  <p className="truncate font-medium text-slate-700">
+                                    {doc.title}
+                                  </p>
                                   <p className="text-xs text-slate-400">
                                     {doc.document_id} · {doc.chunk_count} 分块
                                     {typeof doc.content_chars === 'number'
@@ -347,7 +371,9 @@ export function KnowledgeDialog(props: {
                                       variant="destructive"
                                       className="h-7 px-2 text-xs"
                                       disabled={busy}
-                                      onClick={() => void remove(doc.source, doc.document_id)}
+                                      onClick={() =>
+                                        void remove(doc.source, doc.document_id)
+                                      }
                                     >
                                       确认删除
                                     </Button>
@@ -390,7 +416,10 @@ export function KnowledgeDialog(props: {
             <form onSubmit={submit} className="mt-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label htmlFor="knowledge-file" className="text-sm font-medium text-slate-700">
+                  <label
+                    htmlFor="knowledge-file"
+                    className="text-sm font-medium text-slate-700"
+                  >
                     文档文件
                   </label>
                   <Input
@@ -399,21 +428,32 @@ export function KnowledgeDialog(props: {
                     required
                     accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
                     className="mt-1.5"
-                    onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                    onChange={(event) =>
+                      setFile(event.target.files?.[0] ?? null)
+                    }
                     key={file ? file.name : 'empty'}
                   />
                 </div>
                 <div>
-                  <label htmlFor="knowledge-source" className="text-sm font-medium text-slate-700">
+                  <label
+                    htmlFor="knowledge-source"
+                    className="text-sm font-medium text-slate-700"
+                  >
                     资料来源
                   </label>
                   <Select
                     value={form.source}
                     onValueChange={(value) =>
-                      setForm((current) => ({ ...current, source: String(value ?? 'mqtt_docs') }))
+                      setForm((current) => ({
+                        ...current,
+                        source: String(value ?? 'mqtt_docs'),
+                      }))
                     }
                   >
-                    <SelectTrigger id="knowledge-source" className="mt-1.5 w-full">
+                    <SelectTrigger
+                      id="knowledge-source"
+                      className="mt-1.5 w-full"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent align="start">
@@ -425,7 +465,10 @@ export function KnowledgeDialog(props: {
                   </Select>
                 </div>
                 <div>
-                  <label htmlFor="knowledge-device-type" className="text-sm font-medium text-slate-700">
+                  <label
+                    htmlFor="knowledge-device-type"
+                    className="text-sm font-medium text-slate-700"
+                  >
                     设备类型
                   </label>
                   <Input
@@ -433,12 +476,18 @@ export function KnowledgeDialog(props: {
                     className="mt-1.5"
                     value={form.deviceType}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, deviceType: event.target.value }))
+                      setForm((current) => ({
+                        ...current,
+                        deviceType: event.target.value,
+                      }))
                     }
                   />
                 </div>
                 <div>
-                  <label htmlFor="knowledge-document-id" className="text-sm font-medium text-slate-700">
+                  <label
+                    htmlFor="knowledge-document-id"
+                    className="text-sm font-medium text-slate-700"
+                  >
                     文档 ID（可选）
                   </label>
                   <Input
@@ -447,12 +496,18 @@ export function KnowledgeDialog(props: {
                     placeholder="默认由文件名生成"
                     value={form.documentId}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, documentId: event.target.value }))
+                      setForm((current) => ({
+                        ...current,
+                        documentId: event.target.value,
+                      }))
                     }
                   />
                 </div>
                 <div>
-                  <label htmlFor="knowledge-title" className="text-sm font-medium text-slate-700">
+                  <label
+                    htmlFor="knowledge-title"
+                    className="text-sm font-medium text-slate-700"
+                  >
                     标题（可选）
                   </label>
                   <Input
@@ -461,13 +516,20 @@ export function KnowledgeDialog(props: {
                     placeholder="默认使用文件名"
                     value={form.title}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, title: event.target.value }))
+                      setForm((current) => ({
+                        ...current,
+                        title: event.target.value,
+                      }))
                     }
                   />
                 </div>
               </div>
-              {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
-              {success ? <p className="mt-3 text-sm text-emerald-700">{success}</p> : null}
+              {error ? (
+                <p className="mt-3 text-sm text-red-600">{error}</p>
+              ) : null}
+              {success ? (
+                <p className="mt-3 text-sm text-emerald-700">{success}</p>
+              ) : null}
               <DialogFooter className="mt-5">
                 <Button
                   type="button"
@@ -511,19 +573,29 @@ export function KnowledgeDialog(props: {
                             <button
                               type="button"
                               className="min-w-0 flex-1 text-left"
-                              onClick={() => setExpandedCaseId(expanded ? null : item.fault_id)}
+                              onClick={() =>
+                                setExpandedCaseId(
+                                  expanded ? null : item.fault_id,
+                                )
+                              }
                             >
                               <p className="flex items-center gap-2 font-medium text-slate-700">
                                 <ChevronRight
                                   className={`size-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
                                 />
-                                <span className="truncate">{item.fault_name}</span>
-                                <Badge variant={origin.variant} className="shrink-0 text-[10px]">
+                                <span className="truncate">
+                                  {item.fault_name}
+                                </span>
+                                <Badge
+                                  variant={origin.variant}
+                                  className="shrink-0 text-[10px]"
+                                >
                                   {origin.label}
                                 </Badge>
                               </p>
                               <p className="mt-0.5 pl-6 text-xs text-slate-400">
-                                {item.fault_id} · {item.device_id} · {item.fault_type} ·{' '}
+                                {item.fault_id} · {item.device_id} ·{' '}
+                                {item.fault_type} ·{' '}
                                 {formatTime(item.created_at)}
                               </p>
                             </button>
@@ -566,20 +638,34 @@ export function KnowledgeDialog(props: {
                           {expanded ? (
                             <dl className="mt-1 space-y-1 border-t border-slate-100 pt-2 pl-6 text-xs text-slate-600">
                               <div>
-                                <dt className="inline text-slate-400">症状：</dt>
-                                <dd className="inline">{item.symptoms.join('；') || '—'}</dd>
+                                <dt className="inline text-slate-400">
+                                  症状：
+                                </dt>
+                                <dd className="inline">
+                                  {item.symptoms.join('；') || '—'}
+                                </dd>
                               </div>
                               <div>
-                                <dt className="inline text-slate-400">根因：</dt>
+                                <dt className="inline text-slate-400">
+                                  根因：
+                                </dt>
                                 <dd className="inline">{item.cause || '—'}</dd>
                               </div>
                               <div>
-                                <dt className="inline text-slate-400">处置：</dt>
-                                <dd className="inline">{item.solution || '—'}</dd>
+                                <dt className="inline text-slate-400">
+                                  处置：
+                                </dt>
+                                <dd className="inline">
+                                  {item.solution || '—'}
+                                </dd>
                               </div>
                               <div>
-                                <dt className="inline text-slate-400">验证人：</dt>
-                                <dd className="inline font-mono">{item.verified_by || '—'}</dd>
+                                <dt className="inline text-slate-400">
+                                  验证人：
+                                </dt>
+                                <dd className="inline font-mono">
+                                  {item.verified_by || '—'}
+                                </dd>
                               </div>
                             </dl>
                           ) : null}
@@ -590,8 +676,12 @@ export function KnowledgeDialog(props: {
                 </>
               )}
             </div>
-            {caseError ? <p className="mt-3 text-sm text-red-600">{caseError}</p> : null}
-            {caseSuccess ? <p className="mt-3 text-sm text-emerald-700">{caseSuccess}</p> : null}
+            {caseError ? (
+              <p className="mt-3 text-sm text-red-600">{caseError}</p>
+            ) : null}
+            {caseSuccess ? (
+              <p className="mt-3 text-sm text-emerald-700">{caseSuccess}</p>
+            ) : null}
             <DialogFooter className="mt-5">
               <Button
                 type="button"

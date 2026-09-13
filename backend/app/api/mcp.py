@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import AdminUser, CsrfProtected, Db
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.models import MCPServer, MCPTool, ToolRiskPolicy, utc_now
 from app.schemas import MCPServerCreate, MCPServerUpdate, MCPToolUpdate
 from app.security import encrypt_secret
@@ -82,7 +82,12 @@ async def list_servers(
     )
     return envelope(
         request,
-        {"items": [server_view(item) for item in servers], "page": page, "page_size": page_size, "total": total or 0},
+        {
+            "items": [server_view(item) for item in servers],
+            "page": page,
+            "page_size": page_size,
+            "total": total or 0,
+        },
     )
 
 
@@ -105,7 +110,9 @@ async def create_server(
         url=url,
         purpose=payload.purpose,
         credential_ciphertext=(
-            encrypt_secret(payload.credential, settings.app_secret_key) if payload.credential else None
+            encrypt_secret(payload.credential, settings.app_secret_key)
+            if payload.credential
+            else None
         ),
     )
     db.add(server)
@@ -135,7 +142,9 @@ async def create_server(
 @router.get("/{server_id}")
 async def get_server(server_id: str, request: Request, db: Db, _: AdminUser) -> dict[str, object]:
     server = await active_server(db, server_id)
-    count = await db.scalar(select(func.count()).select_from(MCPTool).where(MCPTool.server_id == server.id))
+    count = await db.scalar(
+        select(func.count()).select_from(MCPTool).where(MCPTool.server_id == server.id)
+    )
     return envelope(request, server_view(server, count or 0))
 
 
@@ -296,7 +305,10 @@ async def refresh_tools(
         details={"tool_count": len(tools), "tools_version": server.tools_version},
     )
     await db.commit()
-    return envelope(request, {"items": [tool_view(item) for item in tools], "tools_version": server.tools_version})
+    return envelope(
+        request,
+        {"items": [tool_view(item) for item in tools], "tools_version": server.tools_version},
+    )
 
 
 @router.get("/{server_id}/tools")
@@ -305,7 +317,9 @@ async def list_tools(server_id: str, request: Request, db: Db, _: AdminUser) -> 
     tools = list(
         (
             await db.scalars(
-                select(MCPTool).where(MCPTool.server_id == server.id).order_by(MCPTool.original_name)
+                select(MCPTool)
+                .where(MCPTool.server_id == server.id)
+                .order_by(MCPTool.original_name)
             )
         ).all()
     )

@@ -7,8 +7,8 @@ from agents.mcp import MCPServerStreamableHttp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings
 from app.agent.runtime import RuntimeMCPServer
+from app.config import Settings
 from app.mcp_http import mcp_httpx_client_factory
 from app.models import MCPServer, MCPTool, ToolRiskPolicy, utc_now
 from app.security import decrypt_secret
@@ -97,9 +97,7 @@ async def refresh_tool_catalog(
     remote_tools = await fetch_remote_tools(server, settings)
     existing = {
         item.original_name: item
-        for item in (
-            await db.scalars(select(MCPTool).where(MCPTool.server_id == server.id))
-        ).all()
+        for item in (await db.scalars(select(MCPTool).where(MCPTool.server_id == server.id))).all()
     }
     seen: set[str] = set()
     for remote in remote_tools:

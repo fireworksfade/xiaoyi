@@ -1,12 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  CheckCircle2,
-  Loader2,
-  ShieldAlert,
-  XCircle,
-} from 'lucide-react';
+import { CheckCircle2, Loader2, ShieldAlert, XCircle } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -75,7 +70,8 @@ export function RemediationCard({
   useEffect(() => {
     const active =
       proposal.status === 'approved' &&
-      (proposal.task_status === 'running' || proposal.task_status === 'verifying');
+      (proposal.task_status === 'running' ||
+        proposal.task_status === 'verifying');
     if (!active) return;
     let cancelled = false;
     const tick = async () => {
@@ -204,7 +200,8 @@ export function RemediationCard({
       ) : null}
       {succeeded && caseId ? (
         <p className="mt-1 text-xs text-slate-500">
-          本次修复已自动沉淀为故障案例 <span className="font-mono">{caseId}</span>
+          本次修复已自动沉淀为故障案例{' '}
+          <span className="font-mono">{caseId}</span>
         </p>
       ) : null}
       {failed ? (
@@ -213,7 +210,9 @@ export function RemediationCard({
         </p>
       ) : null}
       {proposal.status === 'rejected' ? (
-        <p className="mt-2 text-xs text-slate-500">提案已拒绝，未执行任何操作</p>
+        <p className="mt-2 text-xs text-slate-500">
+          提案已拒绝，未执行任何操作
+        </p>
       ) : null}
       {proposal.status === 'expired' ? (
         <p className="mt-2 text-xs text-slate-500">提案已过期，请重新发起</p>

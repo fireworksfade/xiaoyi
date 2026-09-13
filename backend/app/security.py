@@ -25,7 +25,9 @@ def verify_password(password: str, encoded: str) -> bool:
         algorithm, salt_text, digest_text = encoded.split("$", 2)
         if algorithm != "scrypt":
             return False
-        actual = hashlib.scrypt(password.encode("utf-8"), salt=_decode(salt_text), n=2**14, r=8, p=1)
+        actual = hashlib.scrypt(
+            password.encode("utf-8"), salt=_decode(salt_text), n=2**14, r=8, p=1
+        )
         return hmac.compare_digest(actual, _decode(digest_text))
     except (ValueError, TypeError):
         return False

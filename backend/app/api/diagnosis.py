@@ -3,11 +3,10 @@ from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, Db
 from app.config import get_settings
-from app.models import MCPServer, MCPTool, MCPPurpose, ToolRiskPolicy
+from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 from app.schemas import VerifiedFaultCaseCreate
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
-
 
 router = APIRouter(prefix="/diagnosis-services", tags=["IoT diagnosis"])
 

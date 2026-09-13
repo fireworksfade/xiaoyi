@@ -3,7 +3,7 @@ from sqlalchemy import select
 from app.agent.runtime import RuntimeEvent, build_runtime
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import Attachment, AgentRun, Message, ModelConfiguration, RunEvent, RunStatus
+from app.models import AgentRun, Attachment, Message, ModelConfiguration, RunEvent, RunStatus
 from app.security import decrypt_secret
 from app.services.mcp_catalog import load_agent_mcp_servers
 
@@ -93,17 +93,13 @@ async def process_agent_run(run_id: str) -> None:
                 None,
             )
             tool_mode = (
-                str(user_message.metadata_json.get("tool_mode", "auto"))
-                if user_message
-                else "auto"
+                str(user_message.metadata_json.get("tool_mode", "auto")) if user_message else "auto"
             )
             if tool_mode == "none":
                 mcp_servers = []
             elif tool_mode == "selected" and user_message:
                 selected_ids = set(user_message.metadata_json.get("mcp_server_ids", []))
-                mcp_servers = [
-                    server for server in mcp_servers if server.server_id in selected_ids
-                ]
+                mcp_servers = [server for server in mcp_servers if server.server_id in selected_ids]
             attachments = list(
                 (
                     await db.scalars(
@@ -116,9 +112,7 @@ async def process_agent_run(run_id: str) -> None:
             attachments_by_message: dict[str, list[Attachment]] = {}
             for attachment in attachments:
                 if attachment.message_id:
-                    attachments_by_message.setdefault(attachment.message_id, []).append(
-                        attachment
-                    )
+                    attachments_by_message.setdefault(attachment.message_id, []).append(attachment)
             await db.commit()
 
         runtime = build_runtime(settings)

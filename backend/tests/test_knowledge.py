@@ -1,19 +1,16 @@
 import asyncio
-import io
 import uuid
 
 from fastapi.testclient import TestClient
 
 from app.api.knowledge import MAX_KNOWLEDGE_CHARS
-from app.main import app
-from app.models import MCPServer, MCPTool, MCPPurpose, ToolRiskPolicy
 from app.db import SessionFactory, create_schema
+from app.main import app
+from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
 
 def _login(client) -> str:
-    login = client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
-    )
+    login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     return login.json()["data"]["csrf_token"]
 
 
@@ -99,7 +96,9 @@ def test_upload_knowledge_document_ingests_via_mcp(monkeypatch) -> None:
 
         response = client.post(
             "/api/v1/knowledge-documents",
-            files={"file": ("mqtt guide.md", "# MQTT 指南\n\n保持心跳。".encode(), "text/markdown")},
+            files={
+                "file": ("mqtt guide.md", "# MQTT 指南\n\n保持心跳。".encode(), "text/markdown")
+            },
             data={"source": "mqtt_docs", "service_id": server_id},
             headers={"X-CSRF-Token": csrf},
         )
@@ -164,9 +163,7 @@ def test_list_knowledge_documents_calls_read_only_tool(monkeypatch) -> None:
 
     with TestClient(app) as client:
         _login(client)
-        response = client.get(
-            "/api/v1/knowledge-documents", params={"service_id": server_id}
-        )
+        response = client.get("/api/v1/knowledge-documents", params={"service_id": server_id})
         assert response.status_code == 200
         assert response.json()["data"]["total"] == 0
 
@@ -197,7 +194,7 @@ def test_delete_knowledge_document_calls_delete_tool(monkeypatch) -> None:
     with TestClient(app) as client:
         csrf = _login(client)
         response = client.delete(
-            f"/api/v1/knowledge-documents/mqtt_docs/modbus-sensor-diagnosis",
+            "/api/v1/knowledge-documents/mqtt_docs/modbus-sensor-diagnosis",
             headers={"X-CSRF-Token": csrf},
             params={"service_id": server_id},
         )

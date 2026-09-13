@@ -19,6 +19,7 @@ dev = [
   "httpx==0.28.1",
   "pytest==9.0.2",
   "pytest-asyncio==1.3.0",
+  "ruff==0.14.5",
 ]
 
 [tool.pytest.ini_options]
@@ -32,3 +33,8 @@ exclude = ["data*", "scripts*", "tests*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+# B008：FastAPI 依赖注入（File()/Depends()）在参数默认值中调用是框架惯用法
+ignore = ["B008"]

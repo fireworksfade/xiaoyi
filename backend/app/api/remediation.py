@@ -1,13 +1,12 @@
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
 from app.config import get_settings
-from app.models import MCPServer, MCPPurpose, MCPTool, ToolRiskPolicy
+from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 from app.schemas import RemediationDecisionCreate
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
-
 
 router = APIRouter(prefix="/remediation-proposals", tags=["IoT remediation"])
 
@@ -40,9 +39,7 @@ async def active_control_server(db: Db) -> MCPServer:
     raise HTTPException(status_code=503, detail="CONTROL_MCP_UNAVAILABLE")
 
 
-async def call_control_tool(
-    db: Db, tool_name: str, arguments: dict[str, object]
-) -> object:
+async def call_control_tool(db: Db, tool_name: str, arguments: dict[str, object]) -> object:
     server = await active_control_server(db)
     try:
         result = await invoke_remote_tool(
@@ -90,9 +87,7 @@ async def list_proposals(
 async def get_proposal(
     proposal_id: str, request: Request, db: Db, _: CurrentUser
 ) -> dict[str, object]:
-    data = await call_control_tool(
-        db, "get_action_result", {"proposal_id": proposal_id}
-    )
+    data = await call_control_tool(db, "get_action_result", {"proposal_id": proposal_id})
     if not isinstance(data, dict) or "proposal" not in data:
         raise HTTPException(status_code=404, detail="PROPOSAL_NOT_FOUND")
     return envelope(request, data)
@@ -107,9 +102,7 @@ async def decide_proposal(
     admin: AdminUser,
     _: CsrfProtected,
 ) -> dict[str, object]:
-    current = await call_control_tool(
-        db, "get_action_result", {"proposal_id": proposal_id}
-    )
+    current = await call_control_tool(db, "get_action_result", {"proposal_id": proposal_id})
     proposal = current.get("proposal") if isinstance(current, dict) else None
     if not isinstance(proposal, dict):
         raise HTTPException(status_code=404, detail="PROPOSAL_NOT_FOUND")

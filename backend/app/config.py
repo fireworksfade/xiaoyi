@@ -45,9 +45,7 @@ class Settings(BaseSettings):
         if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SAMESITE=none requires SESSION_COOKIE_SECURE=true")
         if self.is_production and self.app_secret_key in ("", "development-only-change-me"):
-            raise ValueError(
-                "APP_SECRET_KEY must be set to a strong random value in production"
-            )
+            raise ValueError("APP_SECRET_KEY must be set to a strong random value in production")
         if self.is_production and self.seed_demo_users:
             raise ValueError("SEED_DEMO_USERS must be false in production")
         return self

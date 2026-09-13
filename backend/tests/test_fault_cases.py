@@ -4,10 +4,9 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.main import app
 from app.db import SessionFactory, create_schema
-from app.models import AuditLog, MCPServer, MCPTool, MCPPurpose, ToolRiskPolicy
-
+from app.main import app
+from app.models import AuditLog, MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
 CASES_PAGE = {
     "items": [
@@ -78,9 +77,7 @@ def seed_iot_server(*, delete_tool_policy: ToolRiskPolicy) -> str:
 
 
 def login(client: TestClient) -> str:
-    response = client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
-    )
+    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     return response.json()["data"]["csrf_token"]
 
 
@@ -150,9 +147,7 @@ def test_delete_fault_case_requires_csrf(monkeypatch) -> None:
 
     with TestClient(app) as client:
         login(client)
-        response = client.delete(
-            "/api/v1/fault-cases/FD663EB01", params={"service_id": server_id}
-        )
+        response = client.delete("/api/v1/fault-cases/FD663EB01", params={"service_id": server_id})
         assert response.status_code == 403
 
 
@@ -184,9 +179,7 @@ def test_delete_fault_case_audits_and_forwards(monkeypatch) -> None:
     async def check_audit() -> None:
         async with SessionFactory() as db:
             logs = (
-                await db.scalars(
-                    select(AuditLog).where(AuditLog.action == "fault_case.deleted")
-                )
+                await db.scalars(select(AuditLog).where(AuditLog.action == "fault_case.deleted"))
             ).all()
             assert logs, "应写入 fault_case.deleted 审计日志"
 

@@ -8,7 +8,6 @@ import os
 
 import httpx
 
-
 SERVER_DEFINITIONS = (
     {
         "server_key": "iot-diagnosis-local",

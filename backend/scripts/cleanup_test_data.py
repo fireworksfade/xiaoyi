@@ -28,23 +28,21 @@ async def main(apply: bool) -> None:
             ).all()
         )
         test_conversations = list(
-            (
-                await db.scalars(
-                    select(Conversation).where(
-                        Conversation.title == "测试对话"
-                    )
-                )
-            ).all()
+            (await db.scalars(select(Conversation).where(Conversation.title == "测试对话"))).all()
         )
         server_ids = [item.id for item in test_servers]
         conversation_ids = [item.id for item in test_conversations]
-        run_ids = list(
-            (
-                await db.scalars(
-                    select(AgentRun.id).where(AgentRun.conversation_id.in_(conversation_ids))
-                )
-            ).all()
-        ) if conversation_ids else []
+        run_ids = (
+            list(
+                (
+                    await db.scalars(
+                        select(AgentRun.id).where(AgentRun.conversation_id.in_(conversation_ids))
+                    )
+                ).all()
+            )
+            if conversation_ids
+            else []
+        )
         print(
             {
                 "servers": len(server_ids),

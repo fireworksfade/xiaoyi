@@ -8,7 +8,6 @@ from app.models import MCPTool, ToolRiskPolicy
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
-
 router = APIRouter(prefix="/fault-cases", tags=["Fault cases"])
 
 LIST_TOOL_NAME = "list_fault_cases"

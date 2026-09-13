@@ -1,33 +1,24 @@
+import asyncio
 import time
 import uuid
-import asyncio
-from datetime import datetime, timedelta, timezone
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.main import app
+from app.agent.runtime import RuntimeEvent
 from app.config import Settings, get_settings
 from app.db import SessionFactory
-from app.agent.runtime import RuntimeEvent
+from app.main import app
 from app.models import (
-    AgentRun,
     Attachment,
-    AuditLog,
-    Conversation,
+    MCPPurpose,
     MCPServer,
     MCPTool,
-    Message,
-    MCPPurpose,
     ModelConfiguration,
-    RunEvent,
-    RunStatus,
     ToolRiskPolicy,
-    User,
 )
 from app.security import decrypt_secret
-from app.services.runs import process_agent_run
-from sqlalchemy import select
 
 
 def test_session_cookie_policy_is_configurable_and_safe() -> None:
@@ -131,7 +122,9 @@ def test_attachment_and_tool_selection_reach_agent_runtime(monkeypatch) -> None:
 
 def test_conversation_run_flow() -> None:
     with TestClient(app) as client:
-        login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
         assert login.status_code == 200
         csrf = login.json()["data"]["csrf_token"]
         headers = {"X-CSRF-Token": csrf}
@@ -169,7 +162,9 @@ def test_conversation_run_flow() -> None:
 
 def test_conversation_can_be_renamed_and_removed_from_history() -> None:
     with TestClient(app) as client:
-        login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
         csrf = login.json()["data"]["csrf_token"]
         headers = {"X-CSRF-Token": csrf}
 
@@ -202,7 +197,9 @@ def test_conversation_can_be_renamed_and_removed_from_history() -> None:
 
 def test_admin_can_manage_mcp_configuration_without_exposing_credentials() -> None:
     with TestClient(app) as client:
-        login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
         csrf = login.json()["data"]["csrf_token"]
         key = f"test-{uuid.uuid4().hex[:8]}"
         created = client.post(

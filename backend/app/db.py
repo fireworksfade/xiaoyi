@@ -26,7 +26,9 @@ async def create_schema() -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
         if settings.database_url.startswith("sqlite"):
-            conversation_columns = await connection.execute(text("PRAGMA table_info(conversations)"))
+            conversation_columns = await connection.execute(
+                text("PRAGMA table_info(conversations)")
+            )
             if "deleted_at" not in {row[1] for row in conversation_columns}:
                 await connection.execute(
                     text("ALTER TABLE conversations ADD COLUMN deleted_at DATETIME")

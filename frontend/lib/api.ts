@@ -1,5 +1,4 @@
-const API_ROOT =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api/backend/api/v1';
+const API_ROOT = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api/backend/api/v1';
 
 const CSRF_STORAGE_KEY = 'xiaoyi.csrf-token';
 
@@ -277,7 +276,9 @@ export type AgentRunSummary = {
   updated_at: string;
 };
 
-export async function listAgentRuns(options: { page?: number; pageSize?: number } = {}) {
+export async function listAgentRuns(
+  options: { page?: number; pageSize?: number } = {},
+) {
   const params = new URLSearchParams({
     page: String(options.page ?? 1),
     page_size: String(options.pageSize ?? 20),
@@ -290,7 +291,10 @@ export async function listAgentRuns(options: { page?: number; pageSize?: number 
   }>(`/agent-runs?${params.toString()}`);
 }
 
-export async function deleteKnowledgeDocument(source: string, documentId: string) {
+export async function deleteKnowledgeDocument(
+  source: string,
+  documentId: string,
+) {
   return request<{
     source: string;
     document_id: string;
@@ -434,10 +438,16 @@ export async function streamAgentRun(
         if (line.startsWith('data:')) rawData += line.slice(5).trim();
       }
       if (!rawData) continue;
-      const payload = JSON.parse(rawData) as {
-        id: number;
-        data: Record<string, unknown>;
-      };
+      let payload: { id: number; data: Record<string, unknown> };
+      try {
+        payload = JSON.parse(rawData) as {
+          id: number;
+          data: Record<string, unknown>;
+        };
+      } catch {
+        // 无效事件跳过，不中断整条事件流；运行状态由轮询兜底恢复。
+        continue;
+      }
       onEvent({ id: payload.id, type, data: payload.data });
     }
 
@@ -558,7 +568,9 @@ export async function decideRemediationProposal(
   proposalId: string,
   payload: { decision: 'approved' | 'rejected'; expected_version: number },
 ) {
-  return request<RemediationProposal & { command?: unknown; delivered?: boolean }>(
+  return request<
+    RemediationProposal & { command?: unknown; delivered?: boolean }
+  >(
     `/remediation-proposals/${encodeURIComponent(proposalId)}/decision`,
     { method: 'POST', body: JSON.stringify(payload) },
     true,

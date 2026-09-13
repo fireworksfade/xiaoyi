@@ -21,9 +21,7 @@ async def current_session(
 ) -> Session:
     if not session_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="NOT_AUTHENTICATED")
-    record = await db.scalar(
-        select(Session).where(Session.token_hash == token_hash(session_token))
-    )
+    record = await db.scalar(select(Session).where(Session.token_hash == token_hash(session_token)))
     if not record or record.expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="SESSION_EXPIRED")
     return record

@@ -178,7 +178,9 @@ class OpenAIAgentsRuntime:
                         call_id = event.item.call_id or ""
                         tool_name = event.item.tool_name or "unknown_tool"
                         server_name = (
-                            event.item.tool_origin.mcp_server_name if event.item.tool_origin else None
+                            event.item.tool_origin.mcp_server_name
+                            if event.item.tool_origin
+                            else None
                         )
                         tool_calls[call_id] = (tool_name, server_name)
                         yield RuntimeEvent(
@@ -191,9 +193,7 @@ class OpenAIAgentsRuntime:
                         )
                     if event.name == "tool_output" and isinstance(event.item, ToolCallOutputItem):
                         call_id = event.item.call_id or ""
-                        tool_name, server_name = tool_calls.get(
-                            call_id, ("unknown_tool", None)
-                        )
+                        tool_name, server_name = tool_calls.get(call_id, ("unknown_tool", None))
                         output = event.item.output
                         if isinstance(output, str):
                             try:

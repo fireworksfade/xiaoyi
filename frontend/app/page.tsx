@@ -416,7 +416,9 @@ export default function Home() {
         }
         if (event.type === 'remediation.proposal_created') {
           // 后端语义事件：载荷为后端定义的稳定结构，不再解析 MCP 信封
-          const proposal = event.data.proposal as RemediationProposal | undefined;
+          const proposal = event.data.proposal as
+            | RemediationProposal
+            | undefined;
           if (proposal?.proposal_id) {
             updateAssistant((message) => ({
               ...message,

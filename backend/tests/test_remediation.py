@@ -4,10 +4,9 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.main import app
 from app.db import SessionFactory, create_schema
-from app.models import AuditLog, MCPServer, MCPTool, MCPPurpose, ToolRiskPolicy
-
+from app.main import app
+from app.models import AuditLog, MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
 
 PROPOSAL = {
     "proposal_id": "RPR_20260912_TEST0001",
@@ -58,14 +57,12 @@ def seed_control_server() -> str:
 
 
 def login(client: TestClient) -> str:
-    response = client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
-    )
+    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     return response.json()["data"]["csrf_token"]
 
 
 def test_decision_endpoint_approval_flow(monkeypatch) -> None:
-    server_id = seed_control_server()
+    seed_control_server()
     captured: dict[str, object] = {}
 
     async def fake_invoke(_server, _settings, tool_name, arguments, **_kwargs):
@@ -215,9 +212,7 @@ def test_control_server_requires_execution_tool(monkeypatch) -> None:
     async def disable_existing_tools() -> None:
         async with SessionFactory() as db:
             tools = await db.scalars(
-                select(MCPTool).where(
-                    MCPTool.original_name == "decide_remediation_proposal"
-                )
+                select(MCPTool).where(MCPTool.original_name == "decide_remediation_proposal")
             )
             for tool in tools:
                 tool.enabled = False

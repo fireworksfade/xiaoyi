@@ -23,8 +23,14 @@ async def seed_users() -> None:
             return
         db.add_all(
             [
-                User(username="admin", password_hash=hash_password("admin123"), role=UserRole.ADMIN),
-                User(username="operator", password_hash=hash_password("operator123"), role=UserRole.OPERATOR),
+                User(
+                    username="admin", password_hash=hash_password("admin123"), role=UserRole.ADMIN
+                ),
+                User(
+                    username="operator",
+                    password_hash=hash_password("operator123"),
+                    role=UserRole.OPERATOR,
+                ),
             ]
         )
         await db.commit()
@@ -74,7 +80,12 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
     return JSONResponse(
         status_code=422,
         content={
-            "error": {"code": "VALIDATION_ERROR", "message": "请求参数无效", "retryable": False, "details": exc.errors()},
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "请求参数无效",
+                "retryable": False,
+                "details": exc.errors(),
+            },
             "request_id": getattr(request.state, "request_id", None),
         },
     )
@@ -82,7 +93,10 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
 
 @app.get("/health")
 async def health(request: Request) -> dict[str, object]:
-    return {"data": {"status": "ok", "service": "xiaoyi-backend"}, "request_id": request.state.request_id}
+    return {
+        "data": {"status": "ok", "service": "xiaoyi-backend"},
+        "request_id": request.state.request_id,
+    }
 
 
 app.include_router(router)

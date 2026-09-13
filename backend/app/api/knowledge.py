@@ -14,7 +14,6 @@ from app.models import MCPTool, ToolRiskPolicy
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
-
 router = APIRouter(prefix="/knowledge-documents", tags=["Knowledge documents"])
 
 MAX_KNOWLEDGE_BYTES = 20 * 1024 * 1024
@@ -78,7 +77,7 @@ async def active_iot_server(db: Db, service_id: str | None):
 
     if service_id:
         return await active_diagnosis_server(db, service_id)
-    from app.models import MCPServer, MCPPurpose
+    from app.models import MCPPurpose, MCPServer
 
     server = await db.scalar(
         select(MCPServer)

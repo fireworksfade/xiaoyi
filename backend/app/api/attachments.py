@@ -7,7 +7,6 @@ from pypdf import PdfReader
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.models import Attachment
 
-
 router = APIRouter(prefix="/attachments", tags=["Attachments"])
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 ALLOWED_SUFFIXES = {".txt", ".md", ".markdown", ".pdf"}

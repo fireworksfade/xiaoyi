@@ -7,7 +7,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
+from app.api.attachments import router as attachments_router
 from app.api.deps import CsrfProtected, CurrentUser, Db, current_session
+from app.api.diagnosis import router as diagnosis_router
+from app.api.fault_cases import router as fault_cases_router
+from app.api.knowledge import router as knowledge_router
+from app.api.mcp import router as mcp_router
+from app.api.model_config import router as model_config_router
+from app.api.remediation import router as remediation_router
 from app.config import Settings, get_settings
 from app.db import SessionFactory
 from app.models import (
@@ -26,13 +33,6 @@ from app.models import (
 from app.schemas import ConversationCreate, ConversationUpdate, LoginRequest, MessageCreate
 from app.security import opaque_token, token_hash, verify_password
 from app.services.runs import process_agent_run
-from app.api.mcp import router as mcp_router
-from app.api.diagnosis import router as diagnosis_router
-from app.api.model_config import router as model_config_router
-from app.api.attachments import router as attachments_router
-from app.api.knowledge import router as knowledge_router
-from app.api.fault_cases import router as fault_cases_router
-from app.api.remediation import router as remediation_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(mcp_router)
@@ -219,9 +219,7 @@ async def list_agent_tools(
             .where(
                 MCPTool.server_id == server.id,
                 MCPTool.enabled.is_(True),
-                MCPTool.risk_policy.in_(
-                    [ToolRiskPolicy.READ_ONLY, ToolRiskPolicy.PROPOSAL_ONLY]
-                ),
+                MCPTool.risk_policy.in_([ToolRiskPolicy.READ_ONLY, ToolRiskPolicy.PROPOSAL_ONLY]),
             )
         )
         if count:
@@ -410,7 +408,9 @@ async def list_agent_runs(
 
 @router.get("/agent-runs/{run_id}")
 async def get_run(run_id: str, request: Request, db: Db, user: CurrentUser) -> dict[str, object]:
-    run = await db.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id))
+    run = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id)
+    )
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     return envelope(request, run_view(run))
@@ -423,7 +423,9 @@ async def stream_run_events(
     db: Db,
     user: CurrentUser,
 ) -> StreamingResponse:
-    run = await db.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id))
+    run = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id)
+    )
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     header_value = request.headers.get("Last-Event-ID", "0")
@@ -465,8 +467,7 @@ async def stream_run_events(
                     yield ": keep-alive\n\n"
             if (
                 current_run
-                and current_run.status
-                in {RunStatus.COMPLETED, RunStatus.FAILED}
+                and current_run.status in {RunStatus.COMPLETED, RunStatus.FAILED}
                 and not events
             ):
                 break

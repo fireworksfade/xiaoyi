@@ -12,7 +12,6 @@ from app.schemas import ModelConfigurationUpdate
 from app.security import decrypt_secret, encrypt_secret
 from app.services.operations import add_audit_log
 
-
 router = APIRouter(prefix="/model-config", tags=["Model configuration"])
 
 
@@ -67,9 +66,7 @@ def config_view(item: ModelConfiguration | None) -> dict[str, object]:
 
 
 async def user_config(db: Db, user_id: str) -> ModelConfiguration | None:
-    return await db.scalar(
-        select(ModelConfiguration).where(ModelConfiguration.user_id == user_id)
-    )
+    return await db.scalar(select(ModelConfiguration).where(ModelConfiguration.user_id == user_id))
 
 
 @router.get("")
@@ -104,9 +101,7 @@ async def update_model_config(
     if payload.clear_api_key:
         item.api_key_ciphertext = None
     elif payload.api_key:
-        item.api_key_ciphertext = encrypt_secret(
-            payload.api_key, get_settings().app_secret_key
-        )
+        item.api_key_ciphertext = encrypt_secret(payload.api_key, get_settings().app_secret_key)
     if payload.enabled and not item.api_key_ciphertext:
         raise HTTPException(status_code=422, detail="MODEL_API_KEY_REQUIRED")
     item.enabled = payload.enabled
