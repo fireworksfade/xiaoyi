@@ -34,6 +34,7 @@ READ_ONLY_TOOLS = {
     "get_diagnosis_trace",
     "list_diagnoses",
     "list_knowledge_documents",
+    "list_fault_cases",
     "search_knowledge",
     "search_fault_cases",
     # IoT Control MCP：查询类工具
@@ -54,6 +55,7 @@ APPROVAL_REQUIRED_TOOLS = {
     "add_verified_fault_case",
     "ingest_knowledge_text",
     "delete_knowledge_document",
+    "delete_fault_case",
     "decide_remediation_proposal",
 }
 

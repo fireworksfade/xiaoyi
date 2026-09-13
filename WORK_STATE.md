@@ -6,6 +6,15 @@
 
 v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。
 
+## 2026-09-13 知识库拆分（官方技术文档 + 真实案例库，案例可删除）
+
+- 知识文档库对话框拆为两个标签页：「官方技术文档」（原按 source 分组的列表 + 上传/删除，原样迁入）与「真实案例库」（懒加载分页列表，含来源徽标：自动沉淀 / 人工确认 / 内置；可展开查看症状、根因、处置与验证人；支持内联确认删除，删除后同步清理 MySQL 镜像与 Qdrant 向量并展示 sync_status）。
+- 官方技术文档真正入库：`ingest_recommended_documents.py` 新增 6 份映射（ESP-MQTT 官方指南、Mosquitto.conf 手册、WiFi 驱动指南、致命错误/复位原因/Watchdog 指南），容器内执行后知识库由 10 篇扩至 16 篇（新增 290 分块，MySQL 与 Qdrant 全部同步）；compose 为诊断服务补充 `knowledge` 只读挂载，使脚本可随源码重放。
+- MCP 新增 `list_fault_cases`（read_only，分页）与 `delete_fault_case`（destructive），共 14 个工具；`_case_document` 向量 payload 补 `document_id` 字段（Qdrant 删除按其过滤），存量案例经 `rebuild_vector_index(["fault_cases"])` 一次性补齐；`external.py` 新增 MySQL `delete_fault_case` 镜像方法。
+- 后端新增 `GET/DELETE /api/v1/fault-cases`（列表 CurrentUser；删除 Admin + CSRF + 审计 `fault_case.deleted`，要求删除工具为 approval_required），复用 knowledge.py 的 MCP 调用链；bootstrap 分级加入两个新工具。
+- 前端 `lib/api.ts` 新增 `FaultCaseSummary`/`listFaultCases`/`deleteFaultCase`；React Compiler lint 收敛后 0 warning 0 error。
+- 验证：MCP 73 passed（新增案例列表/删除与 payload 回归）；后端 24 passed（新增 5 个 /fault-cases 端点测试）；浏览器实测双标签呈现、案例删除全链路（11→10 条，sync_status=complete，语义检索不再命中已删案例，outbox 归零）。
+
 ## 2026-09-12 ESP32 模拟机群（12 节点）
 
 - `iot_diagnosis/simulator.py` 重构为机群模拟器：新增 `--fleet <json>` 模式，单进程多线程、每台设备独立 MQTT 连接（client_id、遗嘱、命令订阅互不干扰），随机源以 device_id 派生种子保证机群行为跨重启可复现；单设备 CLI（`--device-id/--scenario/--interval`）保持向后兼容。

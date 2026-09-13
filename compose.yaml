@@ -91,6 +91,7 @@ services:
       - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
       - ./mcp-services/scripts:/app/scripts:ro
       - ./mcp-services/evals:/app/evals:ro
+      - ./mcp-services/knowledge:/app/knowledge:ro
     depends_on:
       mqtt:
         condition: service_started
