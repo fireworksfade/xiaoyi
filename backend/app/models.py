@@ -186,6 +186,9 @@ class MCPServer(Base):
     name: Mapped[str] = mapped_column(String(120))
     url: Mapped[str] = mapped_column(String(500))
     purpose: Mapped[MCPPurpose] = mapped_column(Enum(MCPPurpose), default=MCPPurpose.GENERIC)
+    # 能力路由辅助字段（可从稳定 server key 和工具能力推导；运行时仍验证工具存在）
+    service_kind: Mapped[str] = mapped_column(String(20), default="generic")
+    is_default_for_kind: Mapped[bool] = mapped_column(Boolean, default=False)
     credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     connection_status: Mapped[str] = mapped_column(String(40), default="unchecked")

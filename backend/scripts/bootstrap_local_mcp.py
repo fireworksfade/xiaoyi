@@ -14,12 +14,14 @@ SERVER_DEFINITIONS = (
         "name": "本地 IoT 智能诊断",
         "url": "http://iot-diagnosis-mcp:9001/mcp",
         "purpose": "iot",
+        "service_kind": "diagnosis",
     },
     {
         "server_key": "iot-control-local",
         "name": "本地 IoT 设备控制",
         "url": "http://iot-control-mcp:9002/mcp",
         "purpose": "iot",
+        "service_kind": "control",
     },
 )
 

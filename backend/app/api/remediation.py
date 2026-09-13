@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
 from app.config import get_settings
-from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
+from app.models import MCPServer, ToolRiskPolicy
 from app.schemas import RemediationDecisionCreate
+from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
@@ -16,27 +16,13 @@ def envelope(request: Request, data: object) -> dict[str, object]:
 
 
 async def active_control_server(db: Db) -> MCPServer:
-    """定位 IoT Control MCP：purpose 为 iot 且目录中带审批执行工具的服务。"""
-    servers = await db.scalars(
-        select(MCPServer).where(
-            MCPServer.purpose == MCPPurpose.IOT,
-            MCPServer.enabled.is_(True),
-            MCPServer.connection_status == "connected",
-            MCPServer.deleted_at.is_(None),
-        )
+    """按能力路由选择 IoT Control MCP（WP-09）：必须具备审批决策工具。"""
+    return await resolve_mcp_server(
+        db,
+        required_tools={"decide_remediation_proposal"},
+        default_kind="control",
+        require_policy={"decide_remediation_proposal": ToolRiskPolicy.APPROVAL_REQUIRED},
     )
-    for server in servers:
-        tool = await db.scalar(
-            select(MCPTool).where(
-                MCPTool.server_id == server.id,
-                MCPTool.original_name == "decide_remediation_proposal",
-                MCPTool.enabled.is_(True),
-                MCPTool.risk_policy == ToolRiskPolicy.APPROVAL_REQUIRED,
-            )
-        )
-        if tool:
-            return server
-    raise HTTPException(status_code=503, detail="CONTROL_MCP_UNAVAILABLE")
 
 
 async def call_control_tool(db: Db, tool_name: str, arguments: dict[str, object]) -> object:

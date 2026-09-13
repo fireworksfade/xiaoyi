@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
-from app.api.knowledge import active_iot_server, call_tool, envelope
+from app.api.knowledge import call_tool, envelope
 from app.config import get_settings
 from app.models import MCPTool, ToolRiskPolicy
+from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
@@ -61,8 +62,12 @@ async def remove_fault_case(
     _: CsrfProtected,
     service_id: str = "",
 ) -> dict[str, object]:
-    server = await active_iot_server(db, service_id or None)
-    await require_delete_tool(db, server.id)
+    server = await resolve_mcp_server(
+        db,
+        required_tools={DELETE_TOOL_NAME},
+        explicit_server_id=service_id or None,
+        require_policy={DELETE_TOOL_NAME: ToolRiskPolicy.APPROVAL_REQUIRED},
+    )
     try:
         result = await invoke_remote_tool(
             server,

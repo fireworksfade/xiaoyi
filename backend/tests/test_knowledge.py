@@ -48,6 +48,15 @@ def _seed_server() -> str:
                     risk_policy=ToolRiskPolicy.READ_ONLY,
                 )
             )
+            db.add(
+                MCPTool(
+                    server_id=server.id,
+                    original_name="delete_knowledge_document",
+                    model_alias=f"{server.server_key}__delete_knowledge_document",
+                    enabled=True,
+                    risk_policy=ToolRiskPolicy.APPROVAL_REQUIRED,
+                )
+            )
             await db.commit()
             return server.id
 
@@ -145,8 +154,9 @@ def test_upload_requires_ingest_tool_policy(monkeypatch) -> None:
             data={"source": "mqtt_docs", "service_id": server_id},
             headers={"X-CSRF-Token": csrf},
         )
-        assert response.status_code == 409
-        assert response.json()["error"]["code"] == "KNOWLEDGE_INGEST_TOOL_NOT_APPROVED"
+        # WP-09：策略不符在能力路由阶段即拒绝（MISMATCH），不向远端发起调用
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "MCP_CAPABILITY_MISMATCH"
 
 
 def test_list_knowledge_documents_calls_read_only_tool(monkeypatch) -> None:

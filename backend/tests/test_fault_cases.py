@@ -132,8 +132,9 @@ def test_delete_fault_case_requires_approval_tool(monkeypatch) -> None:
             params={"service_id": server_id},
             headers={"X-CSRF-Token": csrf},
         )
-        assert response.status_code == 409
-        assert response.json()["error"]["code"] == "FAULT_CASE_DELETE_TOOL_NOT_APPROVED"
+        # WP-09：策略不符在能力路由阶段即拒绝（MISMATCH），不向远端发起调用
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "MCP_CAPABILITY_MISMATCH"
 
 
 def test_delete_fault_case_requires_csrf(monkeypatch) -> None:

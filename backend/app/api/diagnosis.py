@@ -3,8 +3,9 @@ from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, Db
 from app.config import get_settings
-from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
+from app.models import MCPServer, MCPTool, ToolRiskPolicy
 from app.schemas import VerifiedFaultCaseCreate
+from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
@@ -16,18 +17,13 @@ def envelope(request: Request, data: object) -> dict[str, object]:
 
 
 async def active_diagnosis_server(db: Db, service_id: str) -> MCPServer:
-    server = await db.scalar(
-        select(MCPServer).where(
-            MCPServer.id == service_id,
-            MCPServer.purpose == MCPPurpose.IOT,
-            MCPServer.enabled.is_(True),
-            MCPServer.connection_status == "connected",
-            MCPServer.deleted_at.is_(None),
-        )
+    """按能力路由选择具备 add_verified_fault_case 工具的服务（WP-09）。"""
+    return await resolve_mcp_server(
+        db,
+        required_tools={"add_verified_fault_case"},
+        explicit_server_id=service_id,
+        require_policy={"add_verified_fault_case": ToolRiskPolicy.APPROVAL_REQUIRED},
     )
-    if not server:
-        raise HTTPException(status_code=503, detail="MCP_UNAVAILABLE")
-    return server
 
 
 async def require_verified_case_tool(db: Db, server_id: str) -> None:

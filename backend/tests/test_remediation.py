@@ -230,7 +230,7 @@ def test_control_server_requires_execution_tool(monkeypatch) -> None:
             headers={"X-CSRF-Token": csrf},
         )
         assert response.status_code == 503
-        assert response.json()["error"]["code"] == "CONTROL_MCP_UNAVAILABLE"
+        assert response.json()["error"]["code"] == "MCP_CAPABILITY_UNAVAILABLE"
 
 
 def test_collect_proposals_appends_for_message_metadata() -> None:

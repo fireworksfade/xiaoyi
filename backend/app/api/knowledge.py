@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
 from app.config import get_settings
-from app.models import MCPTool, ToolRiskPolicy
+from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
+from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
 
@@ -72,26 +73,52 @@ async def require_ingest_tool(db: Db, server_id: str) -> None:
         raise HTTPException(status_code=409, detail="KNOWLEDGE_INGEST_TOOL_NOT_APPROVED")
 
 
-async def active_iot_server(db: Db, service_id: str | None):
-    from app.api.diagnosis import active_diagnosis_server
+async def active_iot_server(
+    db: Db,
+    service_id: str | None,
+    *,
+    required_tools: set[str] | None = None,
+    require_policy: dict[str, ToolRiskPolicy] | None = None,
+) -> MCPServer:
+    """按能力路由选择 IoT MCP（WP-09）；不再依赖服务创建顺序。
 
-    if service_id:
-        return await active_diagnosis_server(db, service_id)
-    from app.models import MCPPurpose, MCPServer
-
-    server = await db.scalar(
-        select(MCPServer)
-        .where(
-            MCPServer.purpose == MCPPurpose.IOT,
-            MCPServer.enabled.is_(True),
-            MCPServer.connection_status == "connected",
-            MCPServer.deleted_at.is_(None),
+    未传 required_tools 的旧调用退化为：purpose=iot 且至少有一个已启用工具的
+    最老服务（保持既有行为），后续调用点应迁移到显式能力集合。
+    """
+    if required_tools is None:
+        servers = list(
+            (
+                await db.scalars(
+                    select(MCPServer).where(
+                        MCPServer.purpose == MCPPurpose.IOT,
+                        MCPServer.enabled.is_(True),
+                        MCPServer.connection_status == "connected",
+                        MCPServer.deleted_at.is_(None),
+                    )
+                )
+            ).all()
         )
-        .order_by(MCPServer.created_at)
+        for candidate in servers:
+            tool_names = list(
+                (
+                    await db.scalars(
+                        select(MCPTool.original_name).where(
+                            MCPTool.server_id == candidate.id,
+                            MCPTool.enabled.is_(True),
+                            MCPTool.risk_policy != ToolRiskPolicy.DISABLED,
+                        )
+                    )
+                ).all()
+            )
+            if tool_names:
+                return candidate
+        raise HTTPException(status_code=503, detail="MCP_CAPABILITY_UNAVAILABLE")
+    return await resolve_mcp_server(
+        db,
+        required_tools=required_tools,
+        explicit_server_id=service_id,
+        require_policy=require_policy,
     )
-    if not server:
-        raise HTTPException(status_code=503, detail="MCP_UNAVAILABLE")
-    return server
 
 
 async def call_tool(
@@ -103,19 +130,13 @@ async def call_tool(
     require_approval: bool = False,
     request_id: str | None = None,
 ) -> tuple[object, object, str | None]:
-    server = await active_iot_server(db, service_id)
-    if require_approval:
-        await require_ingest_tool(db, server.id)
-    elif read_only:
-        tool = await db.scalar(
-            select(MCPTool).where(
-                MCPTool.server_id == server.id,
-                MCPTool.original_name == tool_name,
-                MCPTool.enabled.is_(True),
-            )
-        )
-        if not tool:
-            raise HTTPException(status_code=409, detail="KNOWLEDGE_TOOL_NOT_ENABLED")
+    require_policy = {tool_name: ToolRiskPolicy.APPROVAL_REQUIRED} if require_approval else None
+    server = await resolve_mcp_server(
+        db,
+        required_tools={tool_name},
+        explicit_server_id=service_id,
+        require_policy=require_policy,
+    )
     extra_headers = {"X-Request-Id": request_id} if request_id else None
     try:
         result = await invoke_remote_tool(
