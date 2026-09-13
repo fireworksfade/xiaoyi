@@ -238,3 +238,36 @@ def test_control_server_requires_execution_tool(monkeypatch) -> None:
         )
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "CONTROL_MCP_UNAVAILABLE"
+
+
+def test_collect_proposals_appends_for_message_metadata() -> None:
+    """提案必须写入 proposals 列表，否则刷新后审批卡无法从消息元数据恢复。"""
+    from app.services.runs import _collect_proposals
+
+    proposals: list[dict[str, object]] = []
+    event = {
+        "tool_name": "create_remediation_proposal",
+        "output": {
+            "ok": True,
+            "data": {
+                "proposal_id": "RPR_20260913_TEST0001",
+                "device_id": "ESP32_05",
+                "action": "restart_device",
+                "status": "pending",
+                "version": 1,
+            },
+        },
+    }
+
+    collected = _collect_proposals(event, proposals)
+
+    assert collected is not None
+    assert collected["proposal_id"] == "RPR_20260913_TEST0001"
+    assert proposals == [collected]
+    # 非提案工具不收集
+    other = _collect_proposals(
+        {"tool_name": "list_devices", "output": {"ok": True, "data": {"items": []}}},
+        proposals,
+    )
+    assert other is None
+    assert len(proposals) == 1

@@ -18,9 +18,9 @@ async def append_event(run_id: str, event: RuntimeEvent) -> RunEvent:
 
 
 def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> dict | None:
-    """从 tool.finished 事件中提取并规范化修复提案。
+    """从 tool.finished 事件中提取、规范化并收集修复提案。
 
-    返回后端定义的干净载荷（不透传 MCP 信封），供语义事件与消息元数据使用。
+    返回后端定义的干净载荷（不透传 MCP 信封），并写入 proposals 供消息元数据持久化。
     """
     output = event_data.get("output")
     if (
@@ -32,7 +32,7 @@ def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> 
     data = output.get("data")
     if not isinstance(data, dict) or not data.get("proposal_id"):
         return None
-    return {
+    proposal = {
         "proposal_id": data["proposal_id"],
         "device_id": data.get("device_id"),
         "action": data.get("action"),
@@ -45,6 +45,8 @@ def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> 
         "task_status": data.get("task_status"),
         "created_at": data.get("created_at"),
     }
+    proposals.append(proposal)
+    return proposal
 
 
 async def process_agent_run(run_id: str) -> None:
