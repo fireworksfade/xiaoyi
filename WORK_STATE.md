@@ -1,10 +1,19 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-12（Asia/Shanghai）
+更新时间：2026-09-13（Asia/Shanghai）
 
 ## 当前目标
 
-v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。
+v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。2026-09-13 知识库扩至 36 篇官方文档，案例库清空后由模拟集群批量重建 25 条自动沉淀案例。
+
+## 2026-09-13 官方文档扩充 + 案例库清空重建（模拟集群批量生成）
+
+- 官方技术文档 16 篇扩至 32 篇（库内含 4 篇种子共 36 篇逻辑文档、664 分块）：新增 14 份抓取的官方资料（ESP-IDF 中文版 ESP-NETIF/LwIP/ESP Event/I2C/ADC 校准/GPIO/电源管理/睡眠模式/HTTPS OTA/堆内存/日志库/NVS + Mosquitto TLS/passwd 手册，`Source:` 首行格式与既有抓取文档一致）与 2 篇自撰中文诊断手册（设备间歇离线、OTA 升级失败）；`ingest_recommended_documents.py` 扩展映射后容器内全量重放，MySQL 与 Qdrant 全部 complete、outbox 归零。
+- 案例库清空重建：新增 `scripts/purge_fault_cases.py`（分页遍历逐条 `delete_fault_case`，同步清理 MySQL 镜像与 Qdrant 向量）清掉 10 条旧案例；`repository._seed()` 移除内置 F105 案例种子（原 `INSERT OR IGNORE` 会在重启后复活），4 篇种子知识文档保留。
+- 模拟器新增 `inject_fault` 下行动作（`scenario` 取 SCENARIOS 之一，`normal` 清除全部故障标志），配合新增 `scripts/generate_fault_cases.py` 批量闭环脚本：MQTT 注入故障 → 等待遥测落库 → MCP `diagnose_fault` → 低风险 `execute_device_action` 直发 / 高风险 `create_remediation_proposal` + `decide_remediation_proposal` 自动批准（均携带 diagnosis_id）→ 轮询 `get_action_result` 至恢复验证收敛（失败自动重试一次）→ 确认案例计数递增；结束对全机群注入 normal 恢复健康。实跑 2 轮 × 12 节点 = 24 条全部归档（加上冒烟共 25 条，`verified_by=auto-remediation:*`），动作覆盖 reconnect_wifi×11、reconnect_mqtt×6、calibrate_sensor×5、restart_device×2、update_firmware×1（后三类为提案路径），结束后 12/12 节点在线。
+- 顺带修复自适应路由缺陷：语义源选择在 fault_cases 原型得分最高时会产出重复的 `["fault_cases", "fault_cases"]` 导致主题文档源全部丢失（NVS/OTA 类查询只命中案例）；现改为主题源恒从非案例来源中选取，并扩充 device_docs 原型（OTA/固件升级/NVS/电源/睡眠/事件/日志/GPIO）。live 评测 router accuracy 1.0、source_selection_accuracy 1.0，OTA/NVS/电源管理查询实测命中新文档。
+- `evals/rag_router.jsonl` 的 relevant_ids 由种子小文档/F105 更新为现役文档分块：知识库扩至 664 分块且案例库沉淀 25 条后，旧相关性期望自然失效（旧种子单句文档与评测查询几乎同义的案例会稳定排在前面，属预期行为）；确定性评测 router accuracy 1.0、诊断准确率 1.0。
+- 验证：MCP 76 passed（含 inject_fault 3 个新用例与 F105 种子移除断言更新）；`test_router_retrieval_diagnosis_and_traceability` 改为自种案例以验证 fault_cases 多源检索；README 补充 inject_fault 与批量案例脚本说明。
 
 ## 2026-09-13 知识库拆分（官方技术文档 + 真实案例库，案例可删除）
 
