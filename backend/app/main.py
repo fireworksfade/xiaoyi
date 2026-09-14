@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from app.db import SessionFactory
 from app.migrations import RevisionStatus, check_revision, upgrade_to_head
 from app.models import User, UserRole
 from app.security import hash_password
+from app.services.retention import retention_loop
 from app.services.run_dispatcher import RunDispatcher
 from app.services.run_recovery import recover_interrupted_runs
 from app.services.runs import execute_claimed_run
@@ -86,8 +88,22 @@ async def lifespan(app: FastAPI):
         app.state.run_dispatcher = dispatcher
         # 恢复扫描留下的 QUEUED 任务由周期扫描接管，无需额外通知
 
+    # 数据保留：删除开关关闭时持续输出 dry-run 统计（WP-11）
+    retention_task = asyncio.create_task(
+        retention_loop(
+            delete_enabled=settings.retention_delete_enabled,
+            interval_hours=settings.retention_interval_hours,
+        ),
+        name="retention-loop",
+    )
+
     await seed_users()
     yield
+    retention_task.cancel()
+    try:
+        await retention_task
+    except asyncio.CancelledError:
+        pass
     if dispatcher is not None:
         await dispatcher.stop()
 

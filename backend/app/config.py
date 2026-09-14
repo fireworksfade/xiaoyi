@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     message_pagination_default_limit: int = 50
     message_pagination_max_limit: int = 200
     message_pagination_legacy_default: bool = False
+    # 运行事件缓冲（WP-11）：delta 合并阈值、时间窗与工具输出持久化上限
+    run_delta_merge_chars: int = 256
+    run_delta_merge_ms: int = 200
+    run_tool_output_max_bytes: int = 65_536
+    # 保留策略（WP-11）：删除开关默认关闭（dry-run）；后台周期任务按 interval 执行
+    retention_delete_enabled: bool = False
+    retention_interval_hours: int = 6
+    retention_batch_size: int = 1000
+    unbound_attachment_retention_hours: int = 24
+    expired_session_grace_days: int = 7
+    # 运行事件压缩：完成后 24h 删除可重建 delta；失败/未完成保留诊断期默认 7 天
+    run_events_compact_after_hours: int = 24
+    run_events_failed_retention_hours: int = 168
 
     @field_validator("frontend_origins", mode="before")
     @classmethod

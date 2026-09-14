@@ -269,6 +269,15 @@ export async function uploadAttachment(file: File) {
   );
 }
 
+/** 删除未绑定到消息的附件（发送失败后的显式清理；WP-11 §9.3） */
+export async function deleteAttachment(attachmentId: string) {
+  return request<{ id: string; deleted: boolean }>(
+    `/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: 'DELETE' },
+    true,
+  );
+}
+
 export type ToolSource = {
   id: string;
   server_key: string;

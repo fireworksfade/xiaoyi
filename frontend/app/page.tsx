@@ -60,6 +60,7 @@ import {
 import {
   ApiError,
   createConversation,
+  deleteAttachment,
   deleteConversation,
   ensureDemoSession,
   listAgentToolSources,
@@ -828,11 +829,13 @@ export default function Home() {
                         type="button"
                         aria-label={`移除 ${attachment.filename}`}
                         className="rounded p-0.5 hover:bg-slate-200"
-                        onClick={() =>
+                        onClick={() => {
                           setAttachments((current) =>
                             current.filter((item) => item.id !== attachment.id),
-                          )
-                        }
+                          );
+                          // 删除失败不阻塞 UI；未绑定附件由后台保留策略兜底回收
+                          void deleteAttachment(attachment.id).catch(() => {});
+                        }}
                       >
                         <X className="size-3" />
                       </button>

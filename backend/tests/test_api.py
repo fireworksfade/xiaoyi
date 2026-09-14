@@ -12,9 +12,11 @@ from app.db import SessionFactory
 from app.main import app
 from app.models import (
     Attachment,
+    Conversation,
     MCPPurpose,
     MCPServer,
     MCPTool,
+    Message,
     ModelConfiguration,
     ToolRiskPolicy,
 )
@@ -357,3 +359,67 @@ def test_admin_can_add_only_verified_fault_case(monkeypatch) -> None:
         assert response.json()["data"]["fault_id"] == "FTEST001"
         assert captured["verified"] is True
         assert captured["verified_by"] == "admin"
+
+
+def test_unbound_attachment_can_be_deleted_then_is_gone() -> None:
+    """WP-11 §9.3：上传成功但发送失败时，前端可显式删除未绑定附件。"""
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
+        csrf = login.json()["data"]["csrf_token"]
+        uploaded = client.post(
+            "/api/v1/attachments",
+            files={"file": ("to-delete.txt", b"hello", "text/plain")},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert uploaded.status_code == 201
+        attachment_id = uploaded.json()["data"]["id"]
+
+        deleted = client.delete(
+            f"/api/v1/attachments/{attachment_id}", headers={"X-CSRF-Token": csrf}
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["data"]["deleted"] is True
+
+        # 已删除后再删 → 404
+        again = client.delete(
+            f"/api/v1/attachments/{attachment_id}", headers={"X-CSRF-Token": csrf}
+        )
+        assert again.status_code == 404
+
+
+def test_bound_attachment_cannot_be_deleted_via_endpoint() -> None:
+    """已绑定消息的附件属于对话历史，端点不回收。"""
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
+        csrf = login.json()["data"]["csrf_token"]
+        uploaded = client.post(
+            "/api/v1/attachments",
+            files={"file": ("bound.txt", b"keep", "text/plain")},
+            headers={"X-CSRF-Token": csrf},
+        )
+        attachment_id = uploaded.json()["data"]["id"]
+
+        async def bind():
+            async with SessionFactory() as db:
+                item = await db.get(Attachment, attachment_id)
+                message = await db.scalar(select(Message).limit(1))
+                if message is None:
+                    conversation = Conversation(user_id=item.user_id, title="绑定删除测试")
+                    db.add(conversation)
+                    await db.flush()
+                    message = Message(conversation_id=conversation.id, role="user", content="m")
+                    db.add(message)
+                    await db.flush()
+                item.message_id = message.id
+                await db.commit()
+
+        asyncio.run(bind())
+
+        deleted = client.delete(
+            f"/api/v1/attachments/{attachment_id}", headers={"X-CSRF-Token": csrf}
+        )
+        assert deleted.status_code == 404

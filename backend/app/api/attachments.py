@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from pypdf import PdfReader
+from sqlalchemy import select
 
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.models import Attachment
@@ -74,3 +75,29 @@ async def upload_attachment(
             "size_bytes": item.size_bytes,
         },
     )
+
+
+@router.delete("/{attachment_id}", status_code=status.HTTP_200_OK)
+async def delete_unbound_attachment(
+    attachment_id: str,
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+    _: CsrfProtected,
+) -> dict[str, object]:
+    """删除未绑定到消息的附件（发送失败后的显式清理；WP-11 §9.3）。
+
+    已绑定附件属于对话历史，不在此删除；后台保留策略同样只回收未绑定附件。
+    """
+    item = await db.scalar(
+        select(Attachment).where(
+            Attachment.id == attachment_id,
+            Attachment.user_id == user.id,
+            Attachment.message_id.is_(None),
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ATTACHMENT_NOT_FOUND")
+    await db.delete(item)
+    await db.commit()
+    return envelope(request, {"id": attachment_id, "deleted": True})

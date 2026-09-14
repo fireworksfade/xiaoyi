@@ -23,6 +23,7 @@ from app.services.context_builder import (
     build_context,
 )
 from app.services.mcp_catalog import load_agent_mcp_servers
+from app.services.run_event_buffer import RunEventBuffer
 from app.services.run_state import (
     AGENT_RUN_FAILED,
     RUN_INTERRUPTED,
@@ -88,6 +89,8 @@ async def execute_claimed_run(run_id: str) -> None:
     settings = get_settings()
     final_content = ""
     proposals: list[dict[str, object]] = []
+    # 事件缓冲：delta 合并 + 批量事务提交；异常路径也要 flush 已缓冲事件
+    buffer: RunEventBuffer | None = None
     try:
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
@@ -203,6 +206,12 @@ async def execute_claimed_run(run_id: str) -> None:
             if run:
                 run.runtime_state = {**(run.runtime_state or {}), "context": context.metadata}
                 await db.commit()
+        buffer = RunEventBuffer(
+            run_id,
+            max_delta_chars=settings.run_delta_merge_chars,
+            flush_after_seconds=settings.run_delta_merge_ms / 1000,
+            tool_output_max_bytes=settings.run_tool_output_max_bytes,
+        )
         async for event in runtime.stream(runtime_messages, mcp_servers):
             if event.event_type == "answer.final":
                 final_content = str(event.data.get("content", ""))
@@ -211,11 +220,13 @@ async def execute_claimed_run(run_id: str) -> None:
                 proposal = _collect_proposals(event.data, proposals)
                 if proposal is not None:
                     # 语义事件：前端只依赖这个稳定契约，不解析 MCP 信封
-                    await append_event(
-                        run_id,
+                    buffer.append(
                         RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
                     )
-            await append_event(run_id, event)
+            buffer.append(event)
+            await buffer.flush_due()
+        # 终态前强制 flush；assistant 消息与 run.completed 随后写入
+        await buffer.flush()
 
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
@@ -246,7 +257,12 @@ async def execute_claimed_run(run_id: str) -> None:
             db.add(completed)
             await db.commit()
     except asyncio.CancelledError:
-        # Dispatcher 取消/优雅关闭超时：写中断终态，供用户重试
+        # Dispatcher 取消/优雅关闭超时：先落盘已缓冲事件，再写中断终态，供用户重试
+        if buffer is not None:
+            try:
+                await buffer.flush()
+            except Exception:
+                pass
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run and run.status == RunStatus.RUNNING:
@@ -271,6 +287,12 @@ async def execute_claimed_run(run_id: str) -> None:
                 await db.commit()
         raise
     except Exception as exc:
+        # 失败路径也强制 flush 已有事件，再写 run.failed，保证运行记录可解释
+        if buffer is not None:
+            try:
+                await buffer.flush()
+            except Exception:
+                pass
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run:

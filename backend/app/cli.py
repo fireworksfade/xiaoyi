@@ -6,14 +6,18 @@
     python -m app.cli deploy       # 部署迁移：空库升级 / 旧库 stamp 后升级
     python -m app.cli current      # 显示当前数据库版本
     python -m app.cli status       # 比较数据库版本与代码 head
+    python -m app.cli retention    # 数据保留统计（默认 dry-run）
+    python -m app.cli retention --execute   # 实际执行清理（需 RETENTION_DELETE_ENABLED）
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 
+from app.config import get_settings
 from app.migrations import (
     RevisionStatus,
     check_revision,
@@ -35,6 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("deploy", help="部署迁移（空库升级，旧库先 stamp 基线）")
     subparsers.add_parser("current", help="显示当前数据库迁移版本")
     subparsers.add_parser("status", help="比较数据库版本与代码 head")
+    retention_parser = subparsers.add_parser(
+        "retention", help="数据保留：附件/Session/事件压缩统计或清理"
+    )
+    retention_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="实际删除（默认 dry-run；仍需 RETENTION_DELETE_ENABLED=true）",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "upgrade":
@@ -58,6 +70,21 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return 0 if status in (RevisionStatus.OK, RevisionStatus.EMPTY) else 1
+    if args.command == "retention":
+        from app.services.retention import run_retention
+
+        settings = get_settings()
+        delete_enabled = args.execute and settings.retention_delete_enabled
+        report = asyncio.run(run_retention(delete_enabled=delete_enabled, settings=settings))
+        _print({"action": "retention", "executed": delete_enabled, "report": report})
+        if args.execute and not settings.retention_delete_enabled:
+            _print(
+                {
+                    "warning": "RETENTION_DELETE_ENABLED=false，本次仍为 dry-run；"
+                    "开启后再次执行才会删除"
+                }
+            )
+        return 0
     parser.error(f"unknown command {args.command}")
     return 2
 

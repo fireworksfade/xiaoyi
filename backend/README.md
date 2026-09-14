@@ -37,3 +37,15 @@ python -m venv .venv
 - `GET /conversations/{id}/messages` 支持游标分页：`limit` 默认 50、最大 200，
   `before` 读取更早消息，响应含 `items`、`next_cursor`、`has_more`；不传参数时返回最近一页。
   旧客户端可临时设置 `MESSAGE_PAGINATION_LEGACY_DEFAULT=true` 恢复全量返回一个版本。
+
+## 数据保留与运行事件治理
+
+- 运行事件经 `RunEventBuffer` 合并 `answer.delta`（默认 256 字符或 200ms）后批量提交，
+  工具输出超过 64 KiB 时持久化摘要、原始字节数与 SHA-256。
+- 保留策略覆盖未绑定附件（24h）、过期 Session（过期后 7 天宽限）与可重建的
+  `answer.delta`（完成后 24h 压缩；失败 run 保留 7 天诊断期）。已绑定附件、对话、
+  消息与审计记录不受影响。
+- 默认 dry-run：`python -m app.cli retention` 输出各类候选统计；确认后设置
+  `RETENTION_DELETE_ENABLED=true` 并执行 `python -m app.cli retention --execute`
+  （或由后台周期任务按 `RETENTION_INTERVAL_HOURS` 自动清理）。
+- 前端移除草稿附件时调用 `DELETE /attachments/{id}`；仅未绑定附件可删。
