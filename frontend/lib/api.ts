@@ -188,9 +188,23 @@ export async function listConversations() {
   }>('/conversations?page=1&page_size=100');
 }
 
-export async function listConversationMessages(conversationId: string) {
-  return request<{ items: ConversationMessage[] }>(
-    `/conversations/${conversationId}/messages`,
+export type MessagePage = {
+  items: ConversationMessage[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+export async function listConversationMessages(
+  conversationId: string,
+  options: { limit?: number; before?: string } = {},
+) {
+  // 游标分页：默认返回最近一页；before 读取更早消息（WP-10 §9.2）
+  const params = new URLSearchParams();
+  if (options.limit != null) params.set('limit', String(options.limit));
+  if (options.before) params.set('before', options.before);
+  const query = params.toString();
+  return request<MessagePage>(
+    `/conversations/${conversationId}/messages${query ? `?${query}` : ''}`,
   );
 }
 

@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 
 from app.api.attachments import router as attachments_router
 from app.api.deps import CsrfProtected, CurrentUser, Db, current_session
@@ -30,6 +30,7 @@ from app.models import (
     ToolRiskPolicy,
     User,
 )
+from app.pagination import decode_cursor, encode_cursor
 from app.schemas import ConversationCreate, ConversationUpdate, LoginRequest, MessageCreate
 from app.security import opaque_token, token_hash, verify_password
 from app.services.run_state import is_retryable
@@ -296,18 +297,80 @@ async def list_messages(
     request: Request,
     db: Db,
     user: CurrentUser,
+    settings: SettingsDep,
+    limit: int | None = None,
+    before: str = "",
 ) -> dict[str, object]:
+    """游标分页：默认返回最近一页（升序）；before 读取更早消息。"""
     await owned_conversation(db, conversation_id, user)
-    items = list(
+    if settings.message_pagination_legacy_default and limit is None and not before:
+        items = list(
+            (
+                await db.scalars(
+                    select(Message)
+                    .where(Message.conversation_id == conversation_id)
+                    .order_by(Message.created_at, Message.id)
+                )
+            ).all()
+        )
+        return envelope(
+            request,
+            {"items": [message_view(item) for item in items], "next_cursor": None, "has_more": False},
+        )
+
+    page_size = min(
+        max(limit if limit is not None else settings.message_pagination_default_limit, 1),
+        settings.message_pagination_max_limit,
+    )
+    conditions = [Message.conversation_id == conversation_id]
+    cursor = decode_cursor(before or None)
+    if cursor:
+        cursor_time, cursor_id = cursor
+        # SQLite DateTime 存储为 naive 字符串；比较前去掉 tzinfo 保证一致
+        conditions.append(
+            tuple_(Message.created_at, Message.id)
+            < tuple_(cursor_time.replace(tzinfo=None), cursor_id)
+        )
+    rows = list(
         (
             await db.scalars(
                 select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at, Message.id)
+                .where(*conditions)
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(page_size)
             )
         ).all()
     )
-    return envelope(request, {"items": [message_view(item) for item in items]})
+    rows.reverse()  # 页内升序
+    has_more = False
+    next_cursor = None
+    if rows:
+        has_more = (
+            await db.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    tuple_(Message.created_at, Message.id)
+                    < tuple_(
+                        rows[0].created_at.replace(tzinfo=None)
+                        if rows[0].created_at.tzinfo
+                        else rows[0].created_at,
+                        rows[0].id,
+                    ),
+                )
+            )
+            or 0
+        ) > 0
+        next_cursor = encode_cursor(rows[0].created_at, rows[0].id)
+    return envelope(
+        request,
+        {
+            "items": [message_view(item) for item in rows],
+            "next_cursor": next_cursor if has_more else None,
+            "has_more": has_more,
+        },
+    )
 
 
 @router.post("/conversations/{conversation_id}/messages", status_code=status.HTTP_202_ACCEPTED)

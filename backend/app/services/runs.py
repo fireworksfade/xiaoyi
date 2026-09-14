@@ -15,11 +15,20 @@ from app.models import (
     utc_now,
 )
 from app.security import decrypt_secret
+from app.services.context_builder import (
+    CONTEXT_INPUT_TOO_LARGE,
+    AttachmentDraft,
+    ContextBudgetExceeded,
+    ContextLimits,
+    build_context,
+)
 from app.services.mcp_catalog import load_agent_mcp_servers
 from app.services.run_state import (
     AGENT_RUN_FAILED,
     RUN_INTERRUPTED,
+    append_failure_event,
     claim_queued_run,
+    mark_finished,
 )
 
 
@@ -103,14 +112,19 @@ async def execute_claimed_run(run_id: str) -> None:
                         "openai_api_mode": model_config.api_mode,
                     }
                 )
+            # 只加载当前消息及向前最多 N 条候选历史，不先加载整段对话
+            candidate_limit = settings.agent_context_max_history_messages + 1
             messages = list(
-                (
-                    await db.scalars(
-                        select(Message)
-                        .where(Message.conversation_id == run.conversation_id)
-                        .order_by(Message.created_at, Message.id)
-                    )
-                ).all()
+                reversed(
+                    (
+                        await db.scalars(
+                            select(Message)
+                            .where(Message.conversation_id == run.conversation_id)
+                            .order_by(Message.created_at.desc(), Message.id.desc())
+                            .limit(candidate_limit)
+                        )
+                    ).all()
+                )
             )
             mcp_servers = await load_agent_mcp_servers(db, settings)
             user_message = next(
@@ -142,17 +156,53 @@ async def execute_claimed_run(run_id: str) -> None:
 
         runtime = build_runtime(settings)
         await append_event(run_id, RuntimeEvent("run.started", {}))
-        runtime_messages = []
-        for item in messages:
-            content = item.content
-            message_attachments = attachments_by_message.get(item.id, [])
-            if message_attachments:
-                appendix = "\n\n".join(
-                    f"[附件：{attachment.filename}]\n{attachment.extracted_text}"
-                    for attachment in message_attachments
-                )
-                content = f"{content}\n\n{appendix}"
-            runtime_messages.append({"role": item.role, "content": content})
+        limits = ContextLimits.from_settings(settings)
+        current_message = next(
+            (item for item in messages if item.id == run.user_message_id), messages[-1]
+        )
+        history = [item for item in messages if item.id != current_message.id]
+        try:
+            context = build_context(
+                current_message={
+                    "id": current_message.id,
+                    "role": current_message.role,
+                    "content": current_message.content,
+                },
+                current_attachments=[
+                    AttachmentDraft(filename=a.filename, text=a.extracted_text)
+                    for a in attachments_by_message.get(current_message.id, [])
+                ],
+                history=[
+                    {"id": item.id, "role": item.role, "content": item.content}
+                    for item in history
+                ],
+                history_attachments={
+                    message_id: [
+                        AttachmentDraft(filename=a.filename, text=a.extracted_text)
+                        for a in items
+                    ]
+                    for message_id, items in attachments_by_message.items()
+                },
+                limits=limits,
+            )
+        except ContextBudgetExceeded as exc:
+            await append_failure_event(
+                run_id, CONTEXT_INPUT_TOO_LARGE, str(exc), retryable=False
+            )
+            await mark_finished(
+                run_id,
+                status=RunStatus.FAILED,
+                error_code=CONTEXT_INPUT_TOO_LARGE,
+                error_message=str(exc),
+            )
+            return
+        runtime_messages = context.messages
+        # 预算元数据写入 run.runtime_state（不污染用户消息）
+        async with SessionFactory() as db:
+            run = await db.get(AgentRun, run_id)
+            if run:
+                run.runtime_state = {**(run.runtime_state or {}), "context": context.metadata}
+                await db.commit()
         async for event in runtime.stream(runtime_messages, mcp_servers):
             if event.event_type == "answer.final":
                 final_content = str(event.data.get("content", ""))

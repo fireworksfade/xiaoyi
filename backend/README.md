@@ -23,3 +23,17 @@ python -m venv .venv
 前端默认通过同源代理访问后端，因此推荐保持 `SESSION_COOKIE_SAMESITE=lax` 和
 `SESSION_COOKIE_SECURE=true`。如果浏览器必须跨站直连后端，则改为
 `SESSION_COOKIE_SAMESITE=none`；服务会拒绝不安全的 `none + secure=false` 组合。
+
+## 对话上下文预算与消息分页
+
+长对话不再整体进入模型输入或一次性下发前端：
+
+- Agent 运行按预算从新到旧选择完整 user/assistant 轮次，先省略旧附件正文再省略最旧轮次；
+  当前消息始终保留，自身超预算时运行以 `CONTEXT_INPUT_TOO_LARGE` 失败。
+  预算元数据（纳入/省略消息数、附件字符、估算 token）记录在 run 的 `runtime_state.context`。
+- 配置：`AGENT_CONTEXT_MAX_INPUT_TOKENS`（默认 60000）、
+  `AGENT_CONTEXT_MAX_HISTORY_MESSAGES`（100）、`AGENT_ATTACHMENT_MAX_CHARS`（50000）、
+  `AGENT_ATTACHMENTS_TOTAL_MAX_CHARS`（100000）。
+- `GET /conversations/{id}/messages` 支持游标分页：`limit` 默认 50、最大 200，
+  `before` 读取更早消息，响应含 `items`、`next_cursor`、`has_more`；不传参数时返回最近一页。
+  旧客户端可临时设置 `MESSAGE_PAGINATION_LEGACY_DEFAULT=true` 恢复全量返回一个版本。

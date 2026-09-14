@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     run_dispatcher_mode: str = "dispatcher"
     run_dispatcher_poll_seconds: float = 1.0
     run_shutdown_grace_seconds: float = 30.0
+    # 上下文预算（WP-10）：估算 token、历史消息数与附件字符硬上限
+    agent_context_max_input_tokens: int = 60_000
+    agent_context_max_history_messages: int = 100
+    agent_attachment_max_chars: int = 50_000
+    agent_attachments_total_max_chars: int = 100_000
+    # 消息分页：不传参数时默认返回最近一页；legacy=true 暂时恢复全量一个版本
+    message_pagination_default_limit: int = 50
+    message_pagination_max_limit: int = 200
+    message_pagination_legacy_default: bool = False
 
     @field_validator("frontend_origins", mode="before")
     @classmethod

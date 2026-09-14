@@ -5,9 +5,7 @@ import {
   ArrowUp,
   BookOpen,
   Bot,
-  Check,
   ChevronDown,
-  CircleUserRound,
   FileSearch,
   FileText,
   Gauge,
@@ -36,7 +34,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { SettingsSheet } from '@/components/settings-sheet';
 import { KnowledgeDialog } from '@/components/knowledge-dialog';
 import { RunRecordsSheet } from '@/components/run-records-sheet';
-import { RemediationCard } from '@/components/remediation-card';
+import { MessageList } from '@/components/message-list';
+import {
+  useConversationMessages,
+  type ChatMessage,
+} from '@/hooks/use-conversation-messages';
 import {
   Dialog,
   DialogContent,
@@ -61,10 +63,8 @@ import {
   deleteConversation,
   ensureDemoSession,
   listAgentToolSources,
-  listConversationMessages,
   listConversations,
   type Conversation,
-  type ConversationMessage,
   type RemediationProposal,
   type ToolSource,
   type UploadedAttachment,
@@ -73,16 +73,6 @@ import {
   updateConversation,
   uploadAttachment,
 } from '@/lib/api';
-
-type Message = {
-  id: number | string;
-  role: 'user' | 'assistant';
-  text: string;
-  tools?: { name: string; result: string }[];
-  citation?: string;
-  attachments?: UploadedAttachment[];
-  proposals?: RemediationProposal[];
-};
 
 const suggestions = [
   {
@@ -105,22 +95,10 @@ function displayValue(value: unknown, fallback = '') {
 }
 
 function replaceMessageText(text: string) {
-  return (message: Message): Message => ({ ...message, text });
-}
-
-function toChatMessage(message: ConversationMessage): Message {
-  return {
-    id: message.id,
-    role: message.role,
-    text: message.content,
-    proposals: Array.isArray(message.metadata?.remediation_proposals)
-      ? (message.metadata.remediation_proposals as RemediationProposal[])
-      : undefined,
-  };
+  return (message: ChatMessage): ChatMessage => ({ ...message, text });
 }
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [input, setInput] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -160,6 +138,17 @@ export default function Home() {
   const messageSeedRef = useRef(0);
   const conversationLoadRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const {
+    messages,
+    setMessages,
+    hasMore,
+    loadingEarlier,
+    earlierError,
+    loadLatest,
+    loadEarlier,
+    reset: resetMessages,
+    skipAutoScrollRef,
+  } = useConversationMessages({ scrollRef });
 
   const selectedConversationItem = conversations.find(
     (conversation) => conversation.id === selectedConversation,
@@ -191,13 +180,12 @@ export default function Home() {
     setAttachments([]);
     setComposerError(null);
     setSidebarOpen(false);
+    resetMessages();
     try {
-      const page = await listConversationMessages(conversation.id);
+      await loadLatest(conversation.id);
       if (conversationLoadRef.current !== loadId) return;
-      setMessages(page.items.map(toChatMessage));
     } catch (error) {
       if (conversationLoadRef.current !== loadId) return;
-      setMessages([]);
       setConversationError(
         error instanceof Error ? error.message : '无法读取这段对话',
       );
@@ -280,11 +268,9 @@ export default function Home() {
           setSelectedConversation(firstConversation.id);
           setBackendConversationId(firstConversation.id);
           setConversationBusy(true);
-          const messagePage = await listConversationMessages(
-            firstConversation.id,
-          );
+          resetMessages();
+          await loadLatest(firstConversation.id);
           if (cancelled) return;
-          setMessages(messagePage.items.map(toChatMessage));
           setConversationBusy(false);
         }
       } catch (error) {
@@ -305,14 +291,18 @@ export default function Home() {
       cancelled = true;
       conversationLoadRef.current += 1;
     };
-  }, []);
+  }, [loadLatest, resetMessages]);
 
   useEffect(() => {
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: 'smooth',
     });
-  }, [messages, running]);
+  }, [messages, running, skipAutoScrollRef]);
 
   async function submitMessage(value = input) {
     const content = value.trim();
@@ -339,7 +329,7 @@ export default function Home() {
     setRunning(true);
     let activeConversationId = backendConversationId;
 
-    const updateAssistant = (update: (message: Message) => Message) => {
+    const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
       setMessages((current) => {
         const index = current.findIndex(
           (message) => message.id === assistantId,
@@ -494,7 +484,7 @@ export default function Home() {
   function startNewChat() {
     if (running) return;
     conversationLoadRef.current += 1;
-    setMessages([]);
+    resetMessages();
     setBackendConversationId(null);
     setSelectedConversation(null);
     setConversationBusy(false);
@@ -786,118 +776,31 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto w-full max-w-3xl px-5 pb-40 pt-8 sm:px-8">
-              <div className="mb-8 flex items-center gap-3 border-b border-slate-100 pb-5">
-                <span className="grid size-9 place-items-center rounded-lg bg-slate-900 text-white">
-                  <Bot className="size-[18px]" />
-                </span>
-                <div>
-                  <h1 className="text-base font-semibold text-slate-900">
-                    {selectedConversationItem?.title ?? '新对话'}
-                  </h1>
-                  <p className="text-xs text-slate-400">
-                    小yi · {messages.length} 条消息
-                  </p>
+            <>
+              <div className="mx-auto w-full max-w-3xl px-5 pt-8 sm:px-8">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-5">
+                  <span className="grid size-9 place-items-center rounded-lg bg-slate-900 text-white">
+                    <Bot className="size-[18px]" />
+                  </span>
+                  <div>
+                    <h1 className="text-base font-semibold text-slate-900">
+                      {selectedConversationItem?.title ?? '新对话'}
+                    </h1>
+                    <p className="text-xs text-slate-400">
+                      小yi · {messages.length} 条消息
+                    </p>
+                  </div>
                 </div>
               </div>
-
-              <div className="space-y-8">
-                {messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 sm:gap-4"
-                  >
-                    <span
-                      className={`grid size-8 place-items-center rounded-md ${message.role === 'assistant' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}
-                    >
-                      {message.role === 'assistant' ? (
-                        <Sparkles className="size-4" />
-                      ) : (
-                        <CircleUserRound className="size-4" />
-                      )}
-                    </span>
-                    <div className="min-w-0 pt-1">
-                      <p className="mb-2 text-sm font-medium text-slate-900">
-                        {message.role === 'assistant' ? '小yi' : '你'}
-                      </p>
-                      {message.tools ? (
-                        <div className="mb-4 space-y-1.5">
-                          {message.tools.map((tool) => (
-                            <button
-                              key={tool.name}
-                              type="button"
-                              className="flex w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs"
-                            >
-                              <span className="grid size-5 place-items-center rounded bg-emerald-100 text-emerald-700">
-                                <Check className="size-3" />
-                              </span>
-                              <span className="font-medium text-slate-700">
-                                {tool.name}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate text-slate-400">
-                                {tool.result}
-                              </span>
-                              <ChevronDown className="size-3.5 text-slate-400" />
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                      <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
-                        {message.text}
-                      </p>
-                      {message.proposals?.length ? (
-                        <div className="mt-2 space-y-2">
-                          {message.proposals.map((proposal) => (
-                            <RemediationCard
-                              key={proposal.proposal_id}
-                              proposal={proposal}
-                            />
-                          ))}
-                        </div>
-                      ) : null}
-                      {message.attachments?.length ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {message.attachments.map((attachment) => (
-                            <span
-                              key={attachment.id}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600"
-                            >
-                              <FileText className="size-3.5" />
-                              {attachment.filename}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {message.citation ? (
-                        <button
-                          type="button"
-                          className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 hover:bg-slate-50"
-                        >
-                          <FileSearch className="mr-1.5 inline size-3.5" />
-                          {message.citation}
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
-                ))}
-                {running &&
-                (messages.at(-1)?.role !== 'assistant' ||
-                  !messages.at(-1)?.text) ? (
-                  <article className="grid grid-cols-[32px_minmax(0,1fr)] gap-4">
-                    <span className="grid size-8 place-items-center rounded-md bg-slate-900 text-white">
-                      <Sparkles className="size-4" />
-                    </span>
-                    <div className="pt-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="size-1.5 animate-pulse rounded-full bg-slate-400" />
-                        <span className="size-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
-                        <span className="size-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
-                      </div>
-                    </div>
-                  </article>
-                ) : null}
-              </div>
-            </div>
+              <MessageList
+                messages={messages}
+                running={running}
+                hasMore={hasMore}
+                loadingEarlier={loadingEarlier}
+                earlierError={earlierError}
+                onLoadEarlier={() => void loadEarlier()}
+              />
+            </>
           )}
         </div>
 
