@@ -49,3 +49,19 @@ python -m venv .venv
   `RETENTION_DELETE_ENABLED=true` 并执行 `python -m app.cli retention --execute`
   （或由后台周期任务按 `RETENTION_INTERVAL_HOURS` 自动清理）。
 - 前端移除草稿附件时调用 `DELETE /attachments/{id}`；仅未绑定附件可删。
+
+## 健康检查、日志与指标
+
+- `GET /live`：进程存活探针，恒 200；`GET /health` 保持兼容（等价 /live）。
+- `GET /ready`：业务就绪探针，检查数据库 `SELECT 1`、schema 迁移版本与 Dispatcher 状态，
+  返回 `ready|degraded|not_ready` 与逐组件 `checks`；必需组件失败返回 503。
+  容器 HEALTHCHECK 已切换到 `/ready`。
+- 必需 MCP 依赖通过 `MCP_REQUIRED_SERVER_KEYS` 声明（如 `iot-diagnosis-local`）；
+  必需 MCP 离线 → 503，未声明的 MCP 不参与就绪判定。
+- `GET /metrics`：Prometheus 指标（HTTP 请求量/延迟、Agent run 状态与耗时、SSE 连接数、
+  MCP 调用结果与延迟、上下文预算省略量、保留策略清理量）。
+- 日志为 JSON 结构化输出，公共字段含 `timestamp/level/service/event`，以及存在时的
+  `request_id/run_id/trace_id/device_id/duration_ms/error_code`；Agent 失败保留内部堆栈于日志，
+  对客户端只返回稳定公共错误结构。
+- 错误分类：`CONFIGURATION_ERROR`、`VALIDATION_ERROR`、`DEPENDENCY_UNAVAILABLE`（可重试）、
+  `RUN_INTERRUPTED`（可由用户重试）、`DATABASE_SCHEMA_BEHIND/AHEAD`、`MODEL_CACHE_INCOMPLETE`。

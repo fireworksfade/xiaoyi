@@ -1,5 +1,6 @@
 import hashlib
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -11,6 +12,7 @@ from app.agent.runtime import RuntimeMCPServer
 from app.config import Settings
 from app.mcp_http import mcp_httpx_client_factory
 from app.models import MCPServer, MCPTool, ToolRiskPolicy, utc_now
+from app.observability.metrics import MCP_CALLS, MCP_LATENCY
 from app.security import decrypt_secret
 
 
@@ -82,7 +84,15 @@ async def invoke_remote_tool(
         max_retry_attempts=1 if read_only else 0,
     )
     async with client:
-        result = await client.call_tool(tool_name, arguments)
+        started = time.perf_counter()
+        try:
+            result = await client.call_tool(tool_name, arguments)
+        except Exception:
+            MCP_CALLS.labels(server=server.server_key, result="error").inc()
+            MCP_LATENCY.labels(server=server.server_key).observe(time.perf_counter() - started)
+            raise
+        MCP_CALLS.labels(server=server.server_key, result="ok").inc()
+        MCP_LATENCY.labels(server=server.server_key).observe(time.perf_counter() - started)
     structured = getattr(result, "structured_content", None)
     if not isinstance(structured, dict):
         raise RuntimeError("MCP_RESULT_INVALID")

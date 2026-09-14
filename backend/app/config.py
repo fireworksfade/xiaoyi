@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # 运行事件压缩：完成后 24h 删除可重建 delta；失败/未完成保留诊断期默认 7 天
     run_events_compact_after_hours: int = 24
     run_events_failed_retention_hours: int = 168
+    # 就绪探针：声明为必需依赖的 MCP server key；故障时 /ready 返回 503。
+    # 未声明的 MCP 属可选依赖，故障表现为 degraded，不阻止对话历史服务。
+    mcp_required_server_keys: Annotated[list[str], NoDecode] = []
 
     @field_validator("frontend_origins", mode="before")
     @classmethod
@@ -68,6 +71,13 @@ class Settings(BaseSettings):
     def split_hosts(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("mcp_required_server_keys", mode="before")
+    @classmethod
+    def split_required_keys(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
     @model_validator(mode="after")

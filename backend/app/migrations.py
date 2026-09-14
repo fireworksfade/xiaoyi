@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import enum
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect, text
+from sqlalchemy import create_engine, inspect, text
 
 from app.config import get_settings
 from app.db import engine
@@ -20,6 +21,26 @@ from app.db import engine
 logger = logging.getLogger("xiaoyi.migrations")
 
 BASELINE_REVISION = "0001_current_schema"
+
+
+@lru_cache
+def _sync_engine_for_url(url_string: str):
+    return create_engine(url_string)
+
+
+def _sync_engine():
+    """迁移/版本检查用的同步 engine。
+
+    应用 engine 是 AsyncEngine（aiosqlite），而 alembic 与版本检查是同步代码；
+    直接 `with engine.connect()` 会拿到 AsyncConnection 并崩溃。
+    每次按当前 engine.url 现取（测试会替换 engine），缓存仅按 URL 复用。
+    """
+    url = engine.url
+    if url.drivername.endswith("+aiosqlite"):
+        url = url.set(drivername="sqlite")
+    else:
+        url = url.set(drivername=url.drivername.split("+")[0])
+    return _sync_engine_for_url(str(url))
 
 # 已有库 stamp 0001 前必须验证的关键表（旧 create_schema 时代的库）
 _BASELINE_KEY_TABLES = {
@@ -68,7 +89,7 @@ def _revision_table_exists(connection) -> bool:  # noqa: ANN001
 
 
 def current_revision() -> str | None:
-    with engine.connect() as connection:
+    with _sync_engine().connect() as connection:
         if not _revision_table_exists(connection):
             return None
         return connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
@@ -109,7 +130,7 @@ def _is_ahead(current: str, head: str) -> bool:
 def verify_baseline_schema() -> list[str]:
     """已有库 stamp 0001 前的关键表/列检查，返回缺失项。"""
     missing: list[str] = []
-    with engine.connect() as connection:
+    with _sync_engine().connect() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
         for table in _BASELINE_KEY_TABLES:
@@ -128,7 +149,7 @@ def deploy() -> str:
     get_settings().ensure_local_paths()
     status = check_revision()
     if status == RevisionStatus.EMPTY:
-        with engine.connect() as connection:
+        with _sync_engine().connect() as connection:
             has_tables = bool(inspect(connection).get_table_names())
         if has_tables:
             missing = verify_baseline_schema()

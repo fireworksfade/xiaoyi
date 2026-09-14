@@ -23,6 +23,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from app.config import get_settings
 from app.db import SessionFactory
 from app.models import AgentRun, Attachment, RunEvent, RunStatus, Session, utc_now
+from app.observability.metrics import RETENTION_DELETED
 
 logger = logging.getLogger("xiaoyi.retention")
 
@@ -198,6 +199,13 @@ async def run_retention(*, delete_enabled: bool = False, settings=None) -> dict[
             batch_size=batch_size,
             delete_enabled=delete_enabled,
         )
+    if delete_enabled:
+        if attachments["deleted"]:
+            RETENTION_DELETED.labels(kind="attachments").inc(attachments["deleted"])
+        if sessions["deleted"]:
+            RETENTION_DELETED.labels(kind="sessions").inc(sessions["deleted"])
+        if events["deleted"]:
+            RETENTION_DELETED.labels(kind="run_events").inc(events["deleted"])
     return {"attachments": attachments, "sessions": sessions, "run_events": events}
 
 

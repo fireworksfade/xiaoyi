@@ -30,6 +30,7 @@ from app.models import (
     ToolRiskPolicy,
     User,
 )
+from app.observability.metrics import SSE_CONNECTIONS
 from app.pagination import decode_cursor, encode_cursor
 from app.schemas import ConversationCreate, ConversationUpdate, LoginRequest, MessageCreate
 from app.security import opaque_token, token_hash, verify_password
@@ -568,7 +569,14 @@ async def stream_run_events(
         cursor = 0
 
     async def event_source():
-        nonlocal cursor
+        SSE_CONNECTIONS.inc()
+        try:
+            async for chunk in _stream_events(run_id, cursor):
+                yield chunk
+        finally:
+            SSE_CONNECTIONS.dec()
+
+    async def _stream_events(run_id: str, cursor: int):
         idle_ticks = 0
         while True:
             async with SessionFactory() as event_db:

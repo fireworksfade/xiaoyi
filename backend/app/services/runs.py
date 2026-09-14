@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from datetime import timezone
 
 from sqlalchemy import select, update
 
@@ -13,6 +15,12 @@ from app.models import (
     RunEvent,
     RunStatus,
     utc_now,
+)
+from app.observability.metrics import (
+    AGENT_RUN_DURATION,
+    AGENT_RUNS,
+    CONTEXT_ESTIMATED_TOKENS,
+    CONTEXT_OMITTED_MESSAGES,
 )
 from app.security import decrypt_secret
 from app.services.context_builder import (
@@ -31,6 +39,8 @@ from app.services.run_state import (
     claim_queued_run,
     mark_finished,
 )
+
+logger = logging.getLogger("xiaoyi.runs")
 
 
 async def append_event(run_id: str, event: RuntimeEvent) -> RunEvent:
@@ -198,9 +208,13 @@ async def execute_claimed_run(run_id: str) -> None:
                 error_code=CONTEXT_INPUT_TOO_LARGE,
                 error_message=str(exc),
             )
+            AGENT_RUNS.labels(status="failed").inc()
             return
         runtime_messages = context.messages
-        # 预算元数据写入 run.runtime_state（不污染用户消息）
+        # 预算指标与元数据（写入 run.runtime_state，不污染用户消息）
+        CONTEXT_ESTIMATED_TOKENS.observe(context.metadata["estimated_input_tokens"])
+        if context.metadata["omitted_message_count"]:
+            CONTEXT_OMITTED_MESSAGES.inc(context.metadata["omitted_message_count"])
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run:
@@ -256,6 +270,13 @@ async def execute_claimed_run(run_id: str) -> None:
             )
             db.add(completed)
             await db.commit()
+            AGENT_RUNS.labels(status="completed").inc()
+            if run.started_at is not None:
+                # SQLite 不保存时区：取回的 started_at 是 naive（按 UTC 存储）
+                started_at = run.started_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                AGENT_RUN_DURATION.observe((utc_now() - started_at).total_seconds())
     except asyncio.CancelledError:
         # Dispatcher 取消/优雅关闭超时：先落盘已缓冲事件，再写中断终态，供用户重试
         if buffer is not None:
@@ -263,6 +284,7 @@ async def execute_claimed_run(run_id: str) -> None:
                 await buffer.flush()
             except Exception:
                 pass
+        AGENT_RUNS.labels(status="interrupted").inc()
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run and run.status == RunStatus.RUNNING:
@@ -293,6 +315,16 @@ async def execute_claimed_run(run_id: str) -> None:
                 await buffer.flush()
             except Exception:
                 pass
+        # 内部堆栈只进结构化日志；对客户端保持稳定的公共错误结构
+        logger.exception(
+            "agent run failed",
+            extra={
+                "event": "agent_run_failed",
+                "run_id": run_id,
+                "error_code": AGENT_RUN_FAILED,
+            },
+        )
+        AGENT_RUNS.labels(status="failed").inc()
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run:

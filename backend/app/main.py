@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -7,19 +8,27 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import make_asgi_app
 from sqlalchemy import select
 
 from app.api.router import router
 from app.config import get_settings
 from app.db import SessionFactory
+from app.errors import AppError
 from app.migrations import RevisionStatus, check_revision, upgrade_to_head
 from app.models import User, UserRole
+from app.observability.logging import configure_logging
+from app.observability.metrics import (
+    HTTP_LATENCY,
+    HTTP_REQUESTS,
+)
 from app.security import hash_password
 from app.services.retention import retention_loop
 from app.services.run_dispatcher import RunDispatcher
 from app.services.run_recovery import recover_interrupted_runs
 from app.services.runs import execute_claimed_run
 
+configure_logging("xiaoyi-backend")
 logger = logging.getLogger("xiaoyi.main")
 
 
@@ -122,9 +131,26 @@ app.add_middleware(
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    response = await call_next(request)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _record_http_metrics(request, 500, time.perf_counter() - started)
+        raise
+    _record_http_metrics(request, response.status_code, time.perf_counter() - started)
     response.headers["X-Request-ID"] = request.state.request_id
     return response
+
+
+def _record_http_metrics(request: Request, status_code: int, duration: float) -> None:
+    if request.url.path.startswith(("/metrics", "/live", "/ready", "/health")):
+        return
+    # 用路由模板做标签，避免高基数；静态路径退回实际 path
+    route = request.scope.get("route")
+    path = getattr(route, "path", request.url.path)
+    method = request.method
+    HTTP_REQUESTS.labels(method=method, path=path, status=str(status_code)).inc()
+    HTTP_LATENCY.labels(method=method, path=path).observe(duration)
 
 
 @app.exception_handler(HTTPException)
@@ -137,6 +163,22 @@ async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
             "request_id": getattr(request.state, "request_id", None),
         },
         headers=exc.headers,
+    )
+
+
+@app.exception_handler(AppError)
+async def app_error(request: Request, exc: AppError) -> JSONResponse:
+    error_class = exc.error_class
+    return JSONResponse(
+        status_code=error_class.http_status,
+        content={
+            "error": {
+                "code": error_class.code,
+                "message": error_class.public_message,
+                "retryable": error_class.retryable,
+            },
+            "request_id": getattr(request.state, "request_id", None),
+        },
     )
 
 
@@ -156,12 +198,45 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
     )
 
 
+@app.get("/live")
+async def live(request: Request) -> dict[str, object]:
+    """进程存活探针：事件循环可响应即 200，不检查任何依赖。"""
+    return {
+        "data": {"status": "alive", "service": "xiaoyi-backend"},
+        "request_id": request.state.request_id,
+    }
+
+
+@app.get("/ready")
+async def ready(request: Request) -> JSONResponse:
+    """业务就绪探针：数据库、schema 版本、Dispatcher；必需 MCP 故障时 503。"""
+    from app.services.readiness import probe_readiness
+
+    report = await probe_readiness(
+        dispatcher=getattr(app.state, "run_dispatcher", None),
+    )
+    return JSONResponse(
+        status_code=report.http_status(),
+        content={
+            "data": {
+                "status": report.status,
+                "service": "xiaoyi-backend",
+                "checks": report.checks,
+            },
+            "request_id": request.state.request_id,
+        },
+    )
+
+
 @app.get("/health")
 async def health(request: Request) -> dict[str, object]:
+    """兼容旧探针：进程存活语义（等价 /live）。容器健康检查应使用 /ready。"""
     return {
         "data": {"status": "ok", "service": "xiaoyi-backend"},
         "request_id": request.state.request_id,
     }
 
+
+app.mount("/metrics", make_asgi_app())
 
 app.include_router(router)
