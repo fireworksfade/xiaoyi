@@ -48,7 +48,7 @@ async def fetch_remote_tools(server: MCPServer, settings: Settings):
         name=server.server_key,
         params={
             "url": server.url,
-            "headers": headers,
+            "headers": headers or {},
             "timeout": 10,
             "httpx_client_factory": mcp_httpx_client_factory,
         },
@@ -75,7 +75,7 @@ async def invoke_remote_tool(
         name=server.server_key,
         params={
             "url": server.url,
-            "headers": headers or None,
+            "headers": headers,
             "timeout": 15,
             "httpx_client_factory": mcp_httpx_client_factory,
         },

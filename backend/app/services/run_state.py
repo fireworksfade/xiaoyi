@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import update
+from sqlalchemy.engine import CursorResult
 
 from app.db import SessionFactory
 from app.models import AgentRun, RunEvent, RunStatus, utc_now
@@ -32,15 +33,18 @@ async def claim_queued_run(run_id: str) -> bool:
     """
     now = utc_now()
     async with SessionFactory() as db:
-        result = await db.execute(
-            update(AgentRun)
-            .where(AgentRun.id == run_id, AgentRun.status == RunStatus.QUEUED)
-            .values(
-                status=RunStatus.RUNNING,
-                started_at=now,
-                last_progress_at=now,
-                attempt_count=AgentRun.attempt_count + 1,
-            )
+        result = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(AgentRun)
+                .where(AgentRun.id == run_id, AgentRun.status == RunStatus.QUEUED)
+                .values(
+                    status=RunStatus.RUNNING,
+                    started_at=now,
+                    last_progress_at=now,
+                    attempt_count=AgentRun.attempt_count + 1,
+                )
+            ),
         )
         await db.commit()
         return result.rowcount > 0

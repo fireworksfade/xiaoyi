@@ -186,22 +186,18 @@ async def execute_claimed_run(run_id: str) -> None:
                     for a in attachments_by_message.get(current_message.id, [])
                 ],
                 history=[
-                    {"id": item.id, "role": item.role, "content": item.content}
-                    for item in history
+                    {"id": item.id, "role": item.role, "content": item.content} for item in history
                 ],
                 history_attachments={
                     message_id: [
-                        AttachmentDraft(filename=a.filename, text=a.extracted_text)
-                        for a in items
+                        AttachmentDraft(filename=a.filename, text=a.extracted_text) for a in items
                     ]
                     for message_id, items in attachments_by_message.items()
                 },
                 limits=limits,
             )
         except ContextBudgetExceeded as exc:
-            await append_failure_event(
-                run_id, CONTEXT_INPUT_TOO_LARGE, str(exc), retryable=False
-            )
+            await append_failure_event(run_id, CONTEXT_INPUT_TOO_LARGE, str(exc), retryable=False)
             await mark_finished(
                 run_id,
                 status=RunStatus.FAILED,

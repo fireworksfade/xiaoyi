@@ -6,5 +6,4 @@ __pycache__
 *.py[cod]
 data
 tests
-scripts
 xiaoyi_backend.egg-info

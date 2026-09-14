@@ -42,6 +42,7 @@ def _sync_engine():
         url = url.set(drivername=url.drivername.split("+")[0])
     return _sync_engine_for_url(str(url))
 
+
 # 已有库 stamp 0001 前必须验证的关键表（旧 create_schema 时代的库）
 _BASELINE_KEY_TABLES = {
     "users",

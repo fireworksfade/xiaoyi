@@ -2,6 +2,10 @@
 
 FastAPI 主服务，负责用户会话、对话、Agent 运行、SSE 事件、MCP 接入策略和审计。设备与知识业务由统一 IoT Diagnosis MCP 提供。
 
+API 入口只负责组合路由；认证、对话、消息提交/分页、运行查询/重试/SSE 分别位于
+`app/api/auth.py`、`conversations.py`、`messages.py` 和 `runs.py`。运行恢复、上下文预算与
+事件批量持久化位于独立 service，API handler 不承担后台执行状态机。
+
 ## 本地运行
 
 ```powershell

@@ -41,9 +41,7 @@ async def cleanup_unbound_attachments(
 ) -> dict[str, Any]:
     cutoff = utc_now() - timedelta(hours=older_than_hours)
     conditions = (Attachment.message_id.is_(None), Attachment.created_at < cutoff)
-    scanned = (
-        await db.scalar(select(func.count()).select_from(Attachment).where(*conditions)) or 0
-    )
+    scanned = await db.scalar(select(func.count()).select_from(Attachment).where(*conditions)) or 0
     extracted_chars = (
         await db.scalar(
             select(func.coalesce(func.sum(func.length(Attachment.extracted_text)), 0)).where(
@@ -133,7 +131,7 @@ async def compact_run_events(
     run_ids = list(
         (await db.scalars(select(AgentRun.id).where(run_conditions).limit(batch_size))).all()
     )
-    delta_conditions = (RunEvent.event_type == "answer.delta",)
+    delta_conditions: tuple[Any, ...] = (RunEvent.event_type == "answer.delta",)
     if run_ids:
         delta_conditions = (
             RunEvent.event_type == "answer.delta",

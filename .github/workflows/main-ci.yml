@@ -23,6 +23,8 @@ jobs:
         run: ruff check app tests scripts
       - name: Ruff format check
         run: ruff format --check app tests scripts
+      - name: Type check
+        run: mypy app
       - name: Tests
         run: pytest tests -q
 
@@ -48,5 +50,9 @@ jobs:
         run: npm run typecheck
       - name: Component tests
         run: npm test
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Mock-runtime E2E
+        run: npm run test:e2e
       - name: Production build
         run: npm run build

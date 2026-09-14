@@ -55,7 +55,9 @@ class ContextResult:
     metadata: dict[str, Any]
 
 
-def _render_user_message(content: str, attachments: list[AttachmentDraft], *, omit_bodies: bool) -> str:
+def _render_user_message(
+    content: str, attachments: list[AttachmentDraft], *, omit_bodies: bool
+) -> str:
     if not attachments:
         return content
     parts = []
@@ -76,7 +78,9 @@ class ContextTurn:
         rendered: list[dict[str, str]] = []
         for message in self.messages:
             if message["role"] == "user":
-                text = _render_user_message(message["content"], self.attachments, omit_bodies=omit_bodies)
+                text = _render_user_message(
+                    message["content"], self.attachments, omit_bodies=omit_bodies
+                )
             else:
                 text = message["content"]
             rendered.append({"role": message["role"], "content": text})
@@ -193,9 +197,7 @@ def build_context(
         final.extend(turn.render(omit_bodies=omit_bodies))
     final.append({"role": "user", "content": current_rendered})
 
-    included_ids = {
-        message.get("id") for turn, _omit in decisions for message in turn.messages
-    }
+    included_ids = {message.get("id") for turn, _omit in decisions for message in turn.messages}
     metadata = {
         "included_message_count": len(included_ids) + 1,
         "omitted_message_count": omitted_messages,

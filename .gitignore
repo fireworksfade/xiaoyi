@@ -29,6 +29,8 @@ dist/
 out/
 .wrangler/
 coverage/
+playwright-report/
+test-results/
 
 # Local archives, logs, and editor metadata
 *.tar.gz

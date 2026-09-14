@@ -48,7 +48,9 @@ def test_pagination_stable_with_duplicate_timestamps() -> None:
     import asyncio
 
     async def run(client):
-        login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
         csrf = login.json()["data"]["csrf_token"]
         conversation = client.post(
             "/api/v1/conversations", json={"title": "分页测试"}, headers={"X-CSRF-Token": csrf}
@@ -93,7 +95,9 @@ def test_pagination_500_messages_first_page_only() -> None:
     import time
 
     async def run(client):
-        login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+        login = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        )
         csrf = login.json()["data"]["csrf_token"]
         conversation = client.post(
             "/api/v1/conversations", json={"title": "长对话"}, headers={"X-CSRF-Token": csrf}

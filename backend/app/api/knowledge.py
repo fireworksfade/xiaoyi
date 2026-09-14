@@ -129,7 +129,7 @@ async def call_tool(
     read_only: bool,
     require_approval: bool = False,
     request_id: str | None = None,
-) -> tuple[object, object, str | None]:
+) -> tuple[MCPServer, object, str | None]:
     require_policy = {tool_name: ToolRiskPolicy.APPROVAL_REQUIRED} if require_approval else None
     server = await resolve_mcp_server(
         db,

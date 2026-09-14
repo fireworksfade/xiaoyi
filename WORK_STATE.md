@@ -1,10 +1,35 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-13（Asia/Shanghai）
+更新时间：2026-09-15（Asia/Shanghai）
 
 ## 当前目标
 
-v1.3 discovery 已实现并保持兼容；2026-09-12 完成一轮架构优化，同日新增 IoT Control MCP（v1.0 闭环运维 + v1.1 案例自动沉淀）：Agent 具备"诊断 → 决策 → 执行 → 验证 → 沉淀"的自主闭环能力（低风险直接执行、高风险提案审批），对话内闭环已落地并完成浏览器实测。同日将模拟节点从 2 台硬编码扩为 12 台机群（fleet.json 配置驱动）。2026-09-13 知识库扩至 36 篇官方文档，案例库清空后由模拟集群批量重建 25 条自动沉淀案例。
+系统可靠性与可维护性规格 v1.0 已完成代码实现与自动化门槛收敛。P0/P1 的冷启动档位、RunDispatcher/恢复、IoT 生命周期、能力路由、上下文预算、事件治理、版本化迁移与可观测性均已落地；本轮补齐前端 E2E、Python 类型检查和三处大文件边界拆分。发布前仍需按规格持续执行 7 天 12 节点耐久运行，该时间型验收不阻塞代码完成状态。
+
+## 2026-09-15 最终独立 CI 复验
+
+- 修正独立 MCP 仓库 CI 的工作目录：GitHub Actions checkout 后直接在仓库根目录安装和执行，不再错误进入不存在的 `mcp-services/` 子目录。
+- 修正后端能力路由测试对另一个测试模块的跨文件导入，保证 `pytest tests -q` 在干净环境可独立收集。
+- 使用全新 Python 虚拟环境分别安装 `backend[dev]`、`mcp-services[dev]`，并从 `package-lock.json` 在独立前端副本执行 `npm ci`。
+- 最终门槛：后端 ruff/format/mypy 通过，89 passed、1 skipped；MCP ruff/format/mypy 通过，116 passed；前端 lint/format/typecheck 通过，组件测试 22 passed、Playwright E2E 1 passed、production build 通过。
+
+## 2026-09-15 重启演练与耐久监测
+
+- 修复后的 Compose 已连续运行约 5 小时，backend、Diagnosis、Control、MySQL、Qdrant 与 Retrieval Models 健康，outbox 持续为 0；12 台设备已注册并持续产生 telemetry。
+- 完成 RUNNING 强制中断演练：任务在容器强停前确认为 `running`，重启扫描记录 `interrupted=1`，任务收敛为 `failed / RUN_INTERRUPTED / retryable=true`，无非终态任务残留。
+- 完成 RUNNING + QUEUED 并存演练：运行中任务按上述规则中断，排队任务在重启后自动重新调度并 `completed`，最终 `queued/running=0`。
+- 已启用每 6 小时一次的“7天耐久验收”线程监测，基线时间为 2026-09-14 20:29（Asia/Shanghai）；健康且未到期时保持安静，异常时提醒，2026-09-21 20:29 后汇总健康、数据增长、outbox 与保留策略结果。
+
+## 2026-09-14 可靠性规格收尾
+
+- 后端 `api/router.py` 从 623 行缩为聚合入口；认证、对话、消息和 Agent run/SSE 已拆为独立 router，共享序列化与所有权检查移入 `api/common.py`。
+- 前端 `app/page.tsx` 从 1073 行缩至组合与顶层状态；新增 `ConversationSidebar`、`ConversationView`、`MessageComposer`，以及 `useConversationList`、`useConversationRun`、`useAttachmentDraft`。
+- 前端测试扩展到 API/SSE、消息分页、附件草稿、运行失败与能力路由错误、页面加载/空态、提案刷新恢复；新增 Playwright mock-runtime E2E，覆盖登录、创建、发送、SSE、重命名、刷新恢复和删除，并接入主 CI。
+- Diagnosis Repository 保持公开类兼容，内部拆为 device state、logs、knowledge/cases、diagnosis records、external sync 五个 mixin 模块；主入口由 1293 行缩至 135 行。
+- 主仓库与 MCP CI 均增加 mypy；修正 AgentRuntime async iterator 协议、游标比较类型、MCP SDK 参数注解、迁移模块类型和诊断结果类型。
+- Docker Compose 在线验收补出并修复三处仅在镜像/真实 MySQL 下暴露的问题：后端构建上下文误排除 `scripts`、MCP 迁移 CLI 参数顺序与 Compose 不兼容、PyMySQL `cursor.execute()` 返回行数却被当作结果集读取。两种迁移命令顺序均有回归保护，MySQL 迁移读取增加驱动行为测试。
+- 已有数据卷的在线全栈通过 liveness/readiness 与前后端冒烟：登录、CORS、对话创建/重命名、消息提交、SSE 完成事件、消息读取和删除均成功，后端实际发现并连接 Diagnosis/Control MCP；12 台模拟设备已注册，故障窗口产生的 691 条 MySQL outbox 已自动重放至 0。
+- 使用独立 Compose 项目和全新命名卷完成空环境 smoke：backend、Diagnosis、Control、MySQL、Qdrant、MQTT 与 12 节点机群全部启动，后端 schema 就绪，Diagnosis 迁移版本为 1/2/3、外部存储 connected、outbox=0，并自动注册 12 台设备；验收后仅清理该临时项目，原运行环境未受影响。
 
 ## 2026-09-13 案例库去重与多样化（新增 memory_leak / watchdog_reset 场景）
 
@@ -175,20 +200,20 @@ v1.3 discovery 功能已实现；当前完成设备、诊断历史和知识文�
 
 ## 当前本地运行状态
 
-Docker Compose 当前服务均已启动：backend、MCP、IoT Control MCP、Retrieval Models、MySQL、Qdrant 健康，MQTT 与两个模拟器（ESP32_05 mqtt_timeout / ESP32_06 wifi_weak）运行中。Docker Hub 已恢复，`iot-control-mcp` 与 `iot-simulator-wifi` 已用 `python:3.12-slim` 正式构建镜像并去掉 compose 中的镜像复用临时方案。已完成在线端到端验收：真实 LLM Agent 对 ESP32_05 自动诊断并执行 `reconnect_mqtt`（CMD_20260911_7FBBD3B2）后确认恢复；浏览器实测审批卡全流程通过（提案渲染 → 批准执行 → 执行中 → 恢复验证 succeeded，历史刷新后卡片恢复最新状态），期间修复了决策响应扁平结构解析崩溃与 `loadConversationList` 缺失提案映射两处前端缺陷。
+Docker Compose 当前服务均已启动：backend、Diagnosis MCP、Control MCP、MySQL、Qdrant 与 Retrieval Models 探针健康，MQTT 和 12 节点 `iot-simulator-fleet` 正常运行。2026-09-14 已用当前源码重建镜像并完成真实接口验收；Diagnosis 的 SQLite/MySQL/Qdrant 均 connected，outbox pending=0，Portable 档位使用确定性 hash 检索，既有 GPU 模型服务同时保持 ready。
 
 ## 当前待处理问题
 
-- 当前 v1.3 发现能力的实现、镜像构建与在线验收已完成，没有已知阻塞问题。
+- 系统可靠性与可维护性规格的代码、自动化门槛、镜像构建和在线 Compose smoke 已完成，没有已知阻塞问题。
+- 规格要求的“12 台模拟设备连续运行 7 天”仍属于发布前时间型验收；当前已开始具备运行条件，但不能在单次开发会话内宣称完成 7 天观察。
 - 外部 LLM 最近一次完整诊断约 45.3 秒；按当前优先级暂不进行性能与并发优化。
-- Docker Hub 鉴权网络仍超时；已用本地基础镜像完成无缓存 v1.1 重建并切换 Compose。该问题只影响重新拉取全新的 `python:3.12-slim` 基础镜像，不影响当前产物和运行服务。
 
 ## 下一步
 
-1. 端到端联调：`docker compose up -d --build` 拉起 iot-control-mcp 后重跑 `bootstrap_local_mcp.py`，前端实测对话内闭环（ESP32_05 MQTT 超时自动修复、ESP32_06 弱信号与 restart_device 审批卡）。
-2. 如需进一步自治：新增后台故障监测，设备上报 fault 或离线时自动发起一次 Agent 运维运行（需处理 AgentRun 的 conversation FK 与系统会话）。
-3. 主要功能之后如需继续，可优化外部 LLM 两阶段调用的端到端耗时。
-4. Docker Hub 网络恢复后可执行 `docker compose build --no-cache iot-diagnosis-mcp iot-control-mcp`，重新拉取并验证全新基础镜像。
+1. 保持 12 节点 Compose 运行并完成 7 天耐久记录，关注数据库增长、采样预算、outbox、进程重启与在线率。
+2. 发布前再执行一次带既有数据卷的重启恢复演练，并固定主仓库与 MCP 仓库 commit。
+3. 如需进一步自治：新增后台故障监测，设备上报 fault 或离线时自动发起一次 Agent 运维运行（需处理 AgentRun 的 conversation FK 与系统会话）。
+4. 主要功能之后如需继续，可优化外部 LLM 两阶段调用的端到端耗时。
 5. SerpAPI/联网检索属于 v1.1 明确排除项；如需加入，应另开扩展规格。
 6. 为主仓库和 MCP 仓库分别配置远程地址并推送。
 
@@ -226,7 +251,7 @@ Docker Compose 当前服务均已启动：backend、MCP、IoT Control MCP、Retr
 - `mcp-services/` 是唯一的独立子目录仓库，默认分支为 `main`；首个提交为 `ac596d3 Initial IoT diagnosis MCP server`。
 - MCP 仓库通过 `.gitignore` 排除了 SQLite 运行数据、本地 `.env`、Python/pytest 缓存和构建产物。
 - 主仓库通过根 `.gitignore` 排除 `mcp-services/`、运行数据、虚拟环境、依赖目录和构建产物。
-- v1.1 主仓库与 MCP 子仓库修改尚未提交。
+- 系统可靠性与可维护性规格的主仓库与 MCP 修改已完成最终独立 CI 复验。
 - 最近相关提交：
   - `d7c73a0 Fix frontend lint compatibility`
   - `ad9542a Add verified fault case workflow`

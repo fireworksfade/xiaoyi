@@ -1,6 +1,6 @@
 # 小yi 系统可靠性与可维护性改进规格 v1.0
 
-- 状态：Draft
+- 状态：Implemented（自动化门槛已完成；7 天耐久运行作为发布前持续验收）
 - 日期：2026-09-13
 - 适用范围：`frontend/`、`backend/`、`mcp-services/`、`compose.yaml`
 - 基线：当前主仓库与 IoT MCP 仓库实现

@@ -154,7 +154,7 @@ Compose 默认通过单个 `iot-simulator-fleet` 服务模拟一套真实规模�
 
 ## 验证
 
-主仓库测试只依赖 `backend[dev]`；前端测试使用 Vitest。命令均可在干净虚拟环境中直接运行：
+主仓库测试只依赖 `backend[dev]`；前端使用 Vitest 与 Playwright。命令均可在干净环境中直接运行：
 
 ```powershell
 # 后端：lint + 格式检查 + 测试
@@ -162,15 +162,18 @@ cd backend
 python -m pip install -e ".[dev]"
 python -m ruff check app tests scripts
 python -m ruff format --check app tests scripts
+python -m mypy app
 python -m pytest -q tests
 
-# 前端：lint + 格式 + 类型 + 组件测试 + 构建
+# 前端：lint + 格式 + 类型 + 组件测试 + mock-runtime E2E + 构建
 cd ..\frontend
 npm ci
 npm run lint
 npm run format:check
 npm run typecheck
 npm test
+npx playwright install chromium
+npm run test:e2e
 npm run build
 ```
 
@@ -180,6 +183,8 @@ MCP 仓库（`mcp-services/`）是独立 Git 仓库，测试只依赖 `mcp-servi
 cd mcp-services
 python -m pip install -e ".[dev]"
 python -m ruff check common iot_diagnosis iot_control model_service scripts tests
+python -m ruff format --check common iot_diagnosis iot_control model_service scripts tests
+python -m mypy common iot_diagnosis iot_control model_service
 python -m pytest -q tests
 ```
 

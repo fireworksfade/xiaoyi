@@ -14,7 +14,6 @@ from app.db import SessionFactory
 from app.main import app
 from app.models import MCPServer, MCPTool, ToolRiskPolicy
 from app.services.mcp_capabilities import resolve_mcp_server
-from tests.test_remediation import login
 
 DIAGNOSIS_TOOLS = {
     "list_fault_cases": ToolRiskPolicy.READ_ONLY,
@@ -25,6 +24,11 @@ DIAGNOSIS_TOOLS = {
 CONTROL_TOOLS = {
     "decide_remediation_proposal": ToolRiskPolicy.APPROVAL_REQUIRED,
 }
+
+
+def _login(client: TestClient) -> str:
+    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
+    return response.json()["data"]["csrf_token"]
 
 
 async def _seed_server(
@@ -189,7 +193,7 @@ def test_policy_mismatch_detected_via_api() -> None:
         raise AssertionError("should not invoke remote tool")
 
     with TestClient(app) as client:
-        csrf = login(client)
+        csrf = _login(client)
         response = client.delete(
             "/api/v1/fault-cases/FD663EB01",
             params={"service_id": server_id},

@@ -60,7 +60,11 @@ async def probe_readiness(
             "readiness database check failed",
             extra={"event": "readiness_check_failed", "error_code": DB_BEHIND},
         )
-        checks["database"] = {"status": "failed", "error_code": "DEPENDENCY_UNAVAILABLE", "detail": str(exc)[:200]}
+        checks["database"] = {
+            "status": "failed",
+            "error_code": "DEPENDENCY_UNAVAILABLE",
+            "detail": str(exc)[:200],
+        }
 
     # 2. schema 版本
     try:
@@ -94,15 +98,13 @@ async def probe_readiness(
 
             async with _SF() as db:
                 rows = (
-                    (
-                        await db.scalars(
-                            select(MCPServer).where(
-                                MCPServer.deleted_at.is_(None),
-                                MCPServer.server_key.in_(required_keys),
-                            )
+                    await db.scalars(
+                        select(MCPServer).where(
+                            MCPServer.deleted_at.is_(None),
+                            MCPServer.server_key.in_(required_keys),
                         )
-                    ).all()
-                )
+                    )
+                ).all()
             by_key = {row.server_key: row for row in rows}
             for key in required_keys:
                 server = by_key.get(key)

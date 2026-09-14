@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from app.config import Settings
 from app.mcp_http import mcp_httpx_client_factory
@@ -24,7 +24,7 @@ class RuntimeMCPServer:
 
 
 class AgentRuntime(Protocol):
-    async def stream(
+    def stream(
         self,
         messages: list[dict[str, str]],
         mcp_servers: list[RuntimeMCPServer],
@@ -99,7 +99,7 @@ class OpenAIAgentsRuntime:
                     name=server.name,
                     params={
                         "url": server.url,
-                        "headers": headers,
+                        "headers": headers or {},
                         "timeout": 15,
                         "httpx_client_factory": mcp_httpx_client_factory,
                     },
@@ -152,7 +152,7 @@ class OpenAIAgentsRuntime:
                 )
                 result = Runner.run_streamed(
                     agent,
-                    input=messages,
+                    input=cast(Any, messages),
                     # 闭环运维包含诊断、执行、轮询与验证多个环节，需要更多轮次
                     max_turns=14,
                     run_config=RunConfig(

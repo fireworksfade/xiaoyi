@@ -89,9 +89,9 @@ def test_dry_run_reports_candidates_without_deleting() -> None:
 
     async def remaining():
         async with SessionFactory() as db:
-            return await db.scalar(select(func.count()).select_from(Attachment).where(
-                Attachment.user_id == user_id
-            ))
+            return await db.scalar(
+                select(func.count()).select_from(Attachment).where(Attachment.user_id == user_id)
+            )
 
     assert asyncio.run(remaining()) == 2  # dry-run 不修改任何行
 
@@ -248,9 +248,11 @@ def test_completed_run_deltas_compacted_after_window() -> None:
     async def verify():
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
-            events = list((await db.scalars(select(RunEvent.event_type).where(
-                RunEvent.run_id == run_id
-            ))).all())
+            events = list(
+                (
+                    await db.scalars(select(RunEvent.event_type).where(RunEvent.run_id == run_id))
+                ).all()
+            )
             return run, events
 
     run, event_types = asyncio.run(verify())
