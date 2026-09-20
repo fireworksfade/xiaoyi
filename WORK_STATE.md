@@ -1,6 +1,19 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-15（Asia/Shanghai）
+更新时间：2026-09-20（Asia/Shanghai）
+
+## 2026-09-20 RAG 检索链路升级（structure_token 分块 + Dense/BM25/RRF/Reranker Hybrid）
+
+- 按 `specs/RAG 检索链路升级 Spec.md` 完成 P0-P5 全部六目标：
+  - Phase 1 结构感知分块：新增 `iot_diagnosis/chunking/`（models / markdown_parser / token_chunker / token_counter）。Parser 保留 Markdown heading 层级、fenced code、日志行边界、编号步骤、表格结构；Chunker 按 token 预算合并相邻块（heading context 计入预算、未过半可跨小节合并），超长块按行/步骤/句子/表格行拆分，token 硬切分仅作 fallback；相邻拆分片段间按完整结构产生 overlap。默认 512/64（`RAG_CHUNK_SIZE`/`RAG_CHUNK_OVERLAP`），token 计数用 Qwen BPE 启发式近似（可选 `RAG_TOKENIZER_PATH` 加载真实 tokenizer）。
+  - Chunk 元数据：`knowledge_document` 新增 heading / metadata_json / token_count 列（迁移 0004），Qdrant payload 补齐 heading_path / block_type / token_count；`Chunk` 数据模型与 Spec §5 一致。
+  - Phase 3 BM25：迁移 0004 创建 SQLite FTS5 `knowledge_chunks_fts`，索引文本做下划线分隔 + CJK 二元组展开（支持 ERR_CONNECTION_RESET、MQTT_KEEPALIVE、mosquitto.conf、AT+CGATT 等精确技术词与中文短语）；`bm25()` 负分数封装为正分数，写路径（摄取/删除/种子）同事务同步 FTS，FTS5 不可用时 sparse 自动降级 lexical 兜底。
+  - Phase 4/5 Hybrid：`iot_diagnosis/retrieval/` 包（config/dense/bm25/fusion/hybrid）。Dense(Qdrant) + BM25(FTS5) 候选按 chunk_id 去重 → RRF(k=60) 融合 → Top 60 进 Qwen3-Reranker-0.6B；fault_cases/realtime_db 走 lexical 排名通道并入 RRF，知识文档仅在 FTS5 结构性不可用时使用 legacy lexical fallback。关闭 sparse 后严格退化为 Dense。Qwen 概率接近饱和时以 Qwen rank 2 倍权重、RRF rank 1 倍权重做稳定化最终排序。`search_knowledge` 支持 dense/sparse/hybrid 策略与功能开关，响应包含 dense/sparse/merged/rerank/returned 计数及完整延迟分解；debug 模式透出各 rank/RRF/reranker 分数。Embedding 与 Reranker 模型未变（AC8/AC9），未引入 Qdrant Sparse（AC15）。
+- Eval：修复本地 Dense Eval 将 `source_id` 错作返回字段、导致 Dense 候选被过滤的问题。真实 Qwen3 策略矩阵（512/64）：Dense-only Recall@5 0.9231 / MRR 0.9615；BM25-only 0.8846 / 0.7033；Hybrid+RRF 0.9615 / 0.8590；稳定化 Qwen3 Reranker 0.9615 / 0.9615，验证 BM25、RRF 与 Reranker 均有有效贡献。四档真实 Qwen3 Recall@5 均为 0.9615；512 的 MRR 0.9615 为最高，P95 2.95s 明显低于 768 的 4.20s 和 1024 的 5.61s，维持 512/64 为生产默认。
+- 在线生产库已备份并应用迁移 0004，36 份文档按 512/64 重摄取为 602 个 chunk；SQLite FTS 行数同为 602，Qdrant payload 已实测包含 heading_path/block_type/token_count。Diagnosis 已切换 GPU/Qwen3 档位，readiness 显示两个模型 ready、1024 维、outbox=0。
+- 文档/配置：`.env.example` 与 compose 增加 RAG_* 透传，README 补充检索链路与 chunk eval 说明。
+- 自查修复两处分块配置问题：`chunk_document` 缺省参数现走 `RAG_CHUNK_SIZE`/`RAG_CHUNK_OVERLAP`（此前误用类默认值，违反 Spec §17）；`scripts/ingest_documents.py` 与 `ingest_recommended_documents.py` 的 `--chunk-size`/`--overlap` 默认值从旧字符分块遗留的 1200/120 改为缺省走 env（512/64），评测库已按 512/64 重建。
+- 验证：MCP 149 passed；backend 89 passed、1 skipped；前端 lint/format/typecheck、22 个组件测试与 production build 通过；ruff check/format、mypy（CI 范围四包）通过；Spec AC1-AC15 逐条核对通过（含 AC10 无常态 legacy lexical、AC11 无 raw score 相加、AC12 Dense fallback、AC15 无 Qdrant Sparse、AC2 payload 链路实测）。
 
 ## 当前目标
 
