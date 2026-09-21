@@ -1,111 +1,156 @@
-# 小yi 通用智能体
+# 小yi：面向 IoT 的通用智能体
 
-一个 ChatGPT 风格的通用 Agent，使用 FastAPI、OpenAI Agents SDK 和动态 MCP 服务。浏览器只访问主后端；设备状态、日志、知识检索、故障案例与诊断由统一的 IoT Diagnosis MCP Server 提供，设备修复命令的下发、审批与恢复验证由独立的 IoT Control MCP Server 提供，Agent 可自主完成"诊断 → 决策 → 执行 → 验证"的闭环运维（低风险动作直接执行，高风险动作需在界面一键批准）。
+小yi 是一个 ChatGPT 风格的 IoT 智能运维 Agent。它把设备状态、日志、知识检索、故障诊断、修复审批和恢复验证串成一条可审计的闭环：
 
-## 项目结构
+> 发现异常 → 汇集证据 → 生成诊断 → 选择动作 → 执行或审批 → 验证恢复 → 沉淀案例
 
-- `frontend/`：小yi 对话界面
-- `backend/`：认证、对话、Agent 运行、MCP 管理和审计边界
-- `mcp-services/`：统一 IoT Diagnosis MCP、IoT Control MCP、MQTT 接入与模拟器
-- `specs/`：IoT Diagnosis MCP v1.0 基线、v1.1 completion、v1.2 core-model、v1.3 discovery 与 IoT Control MCP v1.0 规格
+浏览器只访问 FastAPI 主后端；设备与知识查询由 **IoT Diagnosis MCP** 提供，修复动作由独立的 **IoT Control MCP** 提供。低风险动作可自动执行，高风险动作必须由用户在界面中批准。
 
-## 仓库边界
+## 核心能力
 
-本地目录由两个 Git 仓库组成：
+- **对话式诊断**：基于设备状态、遥测、日志、知识文档和已验证案例回答问题，并保留证据与诊断追踪。
+- **混合 RAG**：结构化分块，Dense + BM25 召回、RRF 融合和 Reranker 重排；支持无模型下载的 Portable 档位和 Qwen3 GPU 档位。
+- **闭环修复**：自动执行低风险动作；高风险动作生成审批卡，批准后下发命令并验证恢复。
+- **持续学习**：已验证的自动修复结果通过 MQTT 事件回写故障案例库。
+- **可靠运行**：运行恢复、SSE 事件缓冲、上下文预算、消息分页、数据保留、结构化日志、就绪探针和 Prometheus 指标均已内置。
+- **本地可演示**：Docker Compose 默认启动 12 台 ESP32 模拟设备，无 API Key、GPU 或模型下载也能体验完整链路。
 
-- 主仓库位于项目根目录，跟踪 `frontend/`、`backend/`、`deploy/`、`specs/`、Compose 配置和项目文档。
-- `mcp-services/` 是独立仓库，并由主仓库的 `.gitignore` 排除。
+## 系统架构
 
-分别克隆时，请将 MCP 仓库放在主仓库的 `mcp-services/` 目录，确保 `compose.yaml` 中的构建路径无需修改。
+```mermaid
+flowchart LR
+    UI[Web 对话界面] -->|Cookie + CSRF + SSE| API[FastAPI 主后端]
+    API -->|MCP| Diagnosis[IoT Diagnosis MCP]
+    API -->|MCP| Control[IoT Control MCP]
+    Diagnosis --> SQLite[(SQLite 事实源)]
+    Diagnosis --> MySQL[(MySQL 镜像)]
+    Diagnosis --> Qdrant[(Qdrant 向量库)]
+    Diagnosis -. GPU 档位 .-> Models[Qwen3 Embedding / Reranker]
+    Diagnosis <--> MQTT[MQTT Broker]
+    Control <--> MQTT
+    Fleet[ESP32 模拟机群] <--> MQTT
+```
 
-## 本地端口
+两个 MCP 服务只通过 MQTT Topic 契约共享设备事件，不直接耦合。主后端负责认证、对话、Agent 运行、MCP 接入策略和审计边界。
 
-- 前端：`http://localhost:3000`
-- FastAPI：`http://127.0.0.1:8000`
-- IoT Diagnosis MCP：`http://127.0.0.1:9001/mcp`
-- IoT Control MCP：`http://127.0.0.1:9002/mcp`
-- MySQL：`127.0.0.1:3306`
-- Qdrant：`http://127.0.0.1:6333`
-- Retrieval Models：`http://127.0.0.1:9010/health`
+## 快速开始
 
-## 部署档位（检索模型）
+### 1. 准备环境
 
-| 档位 | 命令 | 检索实现 | 宿主要求 |
-| --- | --- | --- | --- |
-| Portable（默认） | `docker compose up -d --build` | 本地确定性 hash embedding + weighted reranker（384 维集合） | Docker，无 GPU、无模型下载 |
-| GPU | `docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build` | Qwen3-Embedding/Reranker-0.6B（1024 维集合） | NVIDIA runtime、约 4 GiB 空闲显存、首次下载约 2.5 GiB |
-| GPU offline | GPU 命令再叠加 `-f compose.retrieval-offline.yaml` | 已缓存 Qwen3，禁止联网 | 完整模型缓存 |
+- Docker Desktop（包含 Docker Compose）
+- Node.js `>= 22.13.0`（运行前端）
+- Python `>= 3.12`（仅本地开发或运行维护脚本时需要）
 
-模型服务健康语义：`/live` 进程存活即 200；`/ready` 两个模型加载完成才 200，加载期间 503 + `status=loading`；offline 模式缓存不完整时 503 + `error_code=MODEL_CACHE_INCOMPLETE`，不联网下载、不进入无说明的重启循环。缓存可用性可提前用 `python -m scripts.check_model_cache` 校验。
+主项目与 MCP 服务是两个独立仓库，目录必须保持如下关系：
 
-## 本地全套启动
+```text
+xiaoyi/
+├── backend/
+├── frontend/
+├── mcp-services/       # 独立 Git 仓库
+├── compose.yaml
+└── README.md
+```
 
-Docker Desktop 启动后，一次拉起主后端、IoT Diagnosis MCP、MQTT、MySQL、Qdrant 和 ESP32 模拟机群（12 台设备，见下文"模拟机群"）：
+首次克隆：
+
+```powershell
+git clone https://github.com/fireworksfade/xiaoyi.git
+cd xiaoyi
+git clone https://github.com/fireworksfade/xiaoyi-mcp-services.git mcp-services
+```
+
+### 2. 启动后端与 IoT 服务
+
+默认使用 Portable 检索和确定性的 Mock Agent Runtime：
 
 ```powershell
 docker compose up -d --build
+docker compose ps
 ```
 
-前端保留热更新模式：
+首次启动或重建数据卷后，注册并启用两个 MCP 服务：
+
+```powershell
+docker compose exec backend python scripts/bootstrap_local_mcp.py
+```
+
+### 3. 启动前端
 
 ```powershell
 cd frontend
+npm ci
 npm run dev
 ```
 
-首次启动或重建数据卷后，注册并启用本地 MCP 工具：
+打开 [http://localhost:3000](http://localhost:3000)，使用本地演示账号登录：
+
+| 角色 | 用户名 | 密码 |
+| --- | --- | --- |
+| 管理员 | `admin` | `admin123` |
+| 操作员 | `operator` | `operator123` |
+
+这些账号只用于本地开发，禁止用于生产环境。
+
+### 4. 停止服务
 
 ```powershell
-cd backend
-python scripts/bootstrap_local_mcp.py
+docker compose down
 ```
 
-运行状态可用 `docker compose ps` 查看；停止时运行 `docker compose down`。数据保存在
-Docker 命名卷中，普通停止不会清空对话、知识库或设备数据。
+普通停止不会删除命名卷中的对话、知识库或设备数据。只有明确需要重置数据时才应删除卷。
 
-开发环境没有 `OPENAI_API_KEY` 时，主 Agent 使用确定性 Mock Runtime；配置密钥并设置 `AGENT_RUNTIME=openai` 后启用 OpenAI Agents SDK。诊断 MCP 可另外通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
+## 服务与端口
 
-诊断服务以 SQLite 为本地事实源，同时镜像写入 MySQL，并将知识文档和已由人工确认的故障案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 并由后台任务重试；写入结果会明确返回 `complete` 或 `pending`。检索模型按上文"部署档位"选择：Portable 档位使用本地确定性检索（384 维 `iot_diagnosis_portable` 集合），GPU 档位使用 `Qwen3-Embedding-0.6B` 生成 1024 维语义向量并由 `Qwen3-Reranker-0.6B` 重排（1024 维 `iot_diagnosis_qwen3` 集合）。Embedding 与 Qdrant 写入支持批处理，`rebuild_vector_index` 可从 SQLite 重建全部或指定来源的向量。实时状态问题由 Rule Router 直接返回 `answer` 和 `realtime_state`，不调用诊断模型；复杂问题进入多源 RAG 与诊断流程。诊断结果附带证据来源，并可使用 `get_diagnosis_trace` 查询完整结果快照、最终上下文和观测字段。`list_devices`、`list_diagnoses` 和 `list_knowledge_documents` 提供设备、诊断历史和知识目录的过滤与分页发现能力。
+| 服务 | 地址 | 说明 |
+| --- | --- | --- |
+| Web 前端 | `http://localhost:3000` | 对话、审批与运行记录 |
+| FastAPI | `http://127.0.0.1:8000` | 主后端及 `/api/v1` API |
+| IoT Diagnosis MCP | `http://127.0.0.1:9001/mcp` | 查询、检索与诊断 |
+| IoT Control MCP | `http://127.0.0.1:9002/mcp` | 动作、审批与恢复验证 |
+| MQTT | `127.0.0.1:1883` | 本地设备消息总线 |
+| MySQL | `127.0.0.1:3306` | 诊断数据镜像 |
+| Qdrant | `http://127.0.0.1:6333` | 知识与案例向量库 |
+| Retrieval Models | `http://127.0.0.1:9010` | 仅 GPU 档位启动 |
+
+## 检索部署档位
+
+| 档位 | 启动命令 | 检索实现 | 环境要求 |
+| --- | --- | --- | --- |
+| Portable（默认） | `docker compose up -d --build` | 384 维 hash embedding + weighted reranker | Docker；无 GPU、无模型下载 |
+| GPU | `docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build` | Qwen3-Embedding/Reranker-0.6B，1024 维 | NVIDIA runtime；建议至少 4 GiB 空闲显存；首次下载约 2.5 GiB |
+| GPU offline | GPU 命令追加 `-f compose.retrieval-offline.yaml` | 使用已缓存的 Qwen3 模型并禁止联网 | 模型缓存必须完整 |
+
+Portable 与 GPU 档位分别使用 `iot_diagnosis_portable` 和 `iot_diagnosis_qwen3` 集合，避免不同向量维度混写。
+
+模型服务的 `/live` 表示进程存活，`/ready` 仅在两个模型加载完成后返回 200。离线缓存不完整时会返回 503 和 `MODEL_CACHE_INCOMPLETE`，不会尝试联网下载。
 
 ## 自主运维闭环
 
-IoT Control MCP（端口 9002）让 Agent 从"只诊不治"升级为闭环处置：低风险动作（重连 MQTT/WiFi、传感器校准、调整上报间隔）由 Agent 直接下发并轮询验证；高风险动作（重启设备、固件升级）由 Agent 创建修复提案，在聊天界面的审批卡上一键批准后由系统执行并自动验证恢复。命令走 `iot/{device_id}/cmd` 下行主题，设备回执 `cmd_ack`，Control MCP 在验证窗口内采样状态与日志判定是否恢复。恢复成功后 Control MCP 发布修复完成事件（`iot/{device_id}/remediation`），诊断服务消费事件并自动沉淀为已验证故障案例（`verified_by=auto-remediation:{command_id}`），案例库随自主运维持续积累——两个 MCP 之间只通过 MQTT 主题契约通信。详见 `specs/iot-control-mcp-spec-v1.0.md`。
+IoT Control MCP 按风险策略处理设备动作：
 
-## 诊断存储配置
+- 重连 MQTT/WiFi、传感器校准、调整上报间隔等低风险动作可由 Agent 直接执行并轮询验证。
+- 重启设备、固件升级等高风险动作只生成修复提案；用户在聊天审批卡中批准后才会执行。
+- 命令通过 `iot/{device_id}/cmd` 下发，设备返回 `cmd_ack`；控制服务在验证窗口内根据状态和日志判断是否恢复。
+- 恢复成功后发布 `iot/{device_id}/remediation` 事件，诊断服务将结果保存为已验证故障案例。
 
-Docker Compose 默认创建 `iot_diagnosis` MySQL 数据库和 `iot_diagnosis_qwen3` Qdrant 集合，数据分别保存在 `mysql-data`、`qdrant-data` 和 `diagnosis-data` 命名卷。可在启动前通过环境变量覆盖本地数据库密码：
+## 模拟机群
 
-```powershell
-$env:MYSQL_PASSWORD = "change-this-password"
-$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
-docker compose up -d --build
-```
+`iot-simulator-fleet` 根据 `mcp-services/iot_diagnosis/fleet.json` 模拟 12 台 ESP32，覆盖车间、仓库、冷库、配电房、锅炉房和温室等位置：
 
-直接运行 MCP 时，可复制 `mcp-services/.env.example` 中的配置，并按需要设置：
+- 8 台健康设备；
+- 1 台 MQTT 超时设备；
+- 1 台 WiFi 弱信号设备；
+- 1 台传感器卡死设备；
+- 1 台周期性掉线并自愈的网络不稳定设备。
 
-```text
-DIAGNOSIS_MYSQL_DSN=mysql://iot_diagnosis:password@127.0.0.1:3306/iot_diagnosis
-DIAGNOSIS_QDRANT_URL=http://127.0.0.1:6333
-DIAGNOSIS_QDRANT_COLLECTION=iot_diagnosis_qwen3
-DIAGNOSIS_SYNC_RETRY_SECONDS=30
-DIAGNOSIS_EMBEDDING_PROVIDER=openai_compatible
-DIAGNOSIS_EMBEDDING_BASE_URL=http://127.0.0.1:9010/v1
-DIAGNOSIS_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
-DIAGNOSIS_EMBEDDING_DIMENSIONS=1024
-DIAGNOSIS_VECTOR_BATCH_SIZE=32
-DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL=http://127.0.0.1:9010/health
-DIAGNOSIS_RERANKER_PROVIDER=qwen3
-DIAGNOSIS_RERANKER_URL=http://127.0.0.1:9010/rerank
-```
-
-启动后访问 `http://127.0.0.1:9001/health` 检查进程存活，访问 `http://127.0.0.1:9001/ready` 检查依赖是否就绪。正常情况下 `storage.sqlite`、`storage.mysql` 和 `storage.qdrant` 均为 `connected`，`storage.outbox.pending` 为零，且 `retrieval_models.status` 为 `ready`；已配置依赖不可用时 readiness 返回 HTTP 503。
-
-生产环境可设置 `DIAGNOSIS_MCP_BEARER_TOKEN` 保护 `/mcp`。随后用同一个值重新注册后端连接：
+修改 `fleet.json` 后运行以下命令即可重载：
 
 ```powershell
-cd backend
-python scripts/bootstrap_local_mcp.py --credential "replace-with-a-long-random-token"
+docker compose restart iot-simulator-fleet
 ```
+
+设备友好名称仅在首次注册时写入；已有数据卷不会自动覆盖旧名称。
 
 ## 知识摄取与评测
 
@@ -115,59 +160,110 @@ python scripts/bootstrap_local_mcp.py --credential "replace-with-a-long-random-t
 ..\backend\.venv\Scripts\python.exe -m scripts.ingest_documents .\docs\mqtt-guide.pdf --source mqtt_docs --document-id mqtt-guide --title "MQTT Guide"
 ```
 
-相同 `document-id` 再次摄取会原子替换旧分块。运行确定性 RAG/Router 评测：
+相同 `document-id` 会原子替换旧分块。运行确定性 RAG/Router 评测：
 
 ```powershell
 ..\backend\.venv\Scripts\python.exe -m scripts.evaluate_rag --database .\data\iot_diagnosis_eval.db
 ```
 
-运行 Compose 中真实 Qwen3 Embedding/Reranker 评测：
+在 GPU Compose 档位中运行真实 Qwen3 检索评测：
 
 ```powershell
-docker exec last-work-iot-diagnosis-mcp-1 python /app/scripts/evaluate_rag.py --profile live-retrieval --database /app/data/iot_diagnosis.db
+docker compose -f compose.yaml -f compose.retrieval-gpu.yaml exec iot-diagnosis-mcp python /app/scripts/evaluate_rag.py --profile live-retrieval --database /app/data/iot_diagnosis.db
 ```
 
-## MQTT 联调
+## 配置说明
 
-Docker Desktop 启动后，可运行本地开发 Broker：
+### Agent Runtime
 
-```powershell
-docker compose up -d mqtt
+Compose 默认设置 `AGENT_RUNTIME=mock`，无需模型密钥即可稳定演示。需要接入 OpenAI Agents SDK 时，可在本地后端配置中设置：
+
+```text
+AGENT_RUNTIME=openai
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=your-model
 ```
 
-然后运行符合新 Topic 规范的模拟节点：
+本地开发以 `backend/.env.example` 为模板。容器部署时应通过安全的环境注入或 Compose override 覆盖配置，不要提交密钥。
+
+诊断服务也可通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
+
+### 存储与鉴权
+
+诊断服务以 SQLite 为本地事实源，异步镜像到 MySQL，并把知识文档和已确认案例写入 Qdrant。外部写入失败时会进入 SQLite outbox 后台重试，写入结果会标记为 `complete` 或 `pending`。
+
+可在启动前覆盖本地数据库密码：
 
 ```powershell
-python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
+$env:MYSQL_PASSWORD = "change-this-password"
+$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
+docker compose up -d --build
 ```
 
-新服务订阅 `iot/{device_id}/status`、`iot/{device_id}/telemetry`、
-`iot/{device_id}/logs`、`iot/{device_id}/fault` 和 `iot/{device_id}/heartbeat`，并根据心跳超时判定离线。诊断 MCP 不提供设备重启、固件更新或网络配置修改等控制能力。
-
-## 模拟机群
-
-Compose 默认通过单个 `iot-simulator-fleet` 服务模拟一套真实规模的 ESP32 机群（`mcp-services/iot_diagnosis/fleet.json`）：12 台设备覆盖车间、仓库、冷库、配电房、锅炉房、温室等典型部署位置，各自拥有友好名称、温度/RSSI 基线、固件版本与上报间隔（5–15 秒）。场景构成：8 台健康节点、ESP32_05 MQTT 超时、ESP32_06 WiFi 弱信号、ESP32_09 传感器卡死（78 °C），以及 ESP32_10 随机掉线 60–120 秒后自愈的"网络不稳定"节点。设备首帧上报即自动注册进设备表，无需任何手工配置。增删节点只需编辑 `fleet.json` 后 `docker compose restart iot-simulator-fleet`。
-
-注意：`fleet.json` 中的友好名称只在设备首次注册时写入。若旧数据卷中设备曾以默认名注册（如 ESP32_06），需删除 `diagnosis-data` 卷重新初始化才能更新名称。
-
-开发 Broker 仅绑定 `127.0.0.1` 且允许匿名连接，只用于本机联调；实验室或生产环境应启用用户名、TLS 和 Topic ACL。
-
-## 验证
-
-主仓库测试只依赖 `backend[dev]`；前端使用 Vitest 与 Playwright。命令均可在干净环境中直接运行：
+生产环境应设置 `DIAGNOSIS_MCP_BEARER_TOKEN` 保护 MCP 端点，并用相同凭据重新注册：
 
 ```powershell
-# 后端：lint + 格式检查 + 测试
+docker compose exec backend python scripts/bootstrap_local_mcp.py --credential "replace-with-a-long-random-token"
+```
+
+## 健康检查与可观测性
+
+- 主后端：`GET /live` 检查进程，`GET /ready` 检查数据库、迁移、Dispatcher 和必需 MCP，`GET /metrics` 暴露 Prometheus 指标。
+- Diagnosis MCP：`GET /health` 检查进程，`GET /ready` 检查存储、outbox 和检索模型。
+- Control MCP：`GET /health` 检查进程，`GET /ready` 检查控制服务就绪状态。
+- 应用日志使用 JSON 结构化输出，并在可用时携带 `request_id`、`run_id`、`trace_id`、`device_id` 和 `error_code`。
+
+快速查看容器状态与日志：
+
+```powershell
+docker compose ps
+docker compose logs -f backend iot-diagnosis-mcp iot-control-mcp
+```
+
+## 本地开发
+
+### 后端
+
+```powershell
 cd backend
-python -m pip install -e ".[dev]"
-python -m ruff check app tests scripts
-python -m ruff format --check app tests scripts
-python -m mypy app
-python -m pytest -q tests
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+```
 
-# 前端：lint + 格式 + 类型 + 组件测试 + mock-runtime E2E + 构建
-cd ..\frontend
+### 前端
+
+```powershell
+cd frontend
+Copy-Item .env.example .env.local
 npm ci
+npm run dev
+```
+
+前端默认通过同源代理请求 `/api/backend/api/v1`，再转发到 `BACKEND_BASE_URL`。这让本地和线上共用 Cookie、CSRF 与 SSE 链路，无需依赖第三方 Cookie。
+
+两个服务启动后，可验证登录、会话、消息与 SSE 真实链路：
+
+```powershell
+cd backend
+.venv\Scripts\python scripts/smoke_frontend_backend.py
+```
+
+## 测试
+
+主仓库：
+
+```powershell
+# 后端
+cd backend
+.venv\Scripts\python -m ruff check app tests scripts
+.venv\Scripts\python -m ruff format --check app tests scripts
+.venv\Scripts\python -m mypy app
+.venv\Scripts\python -m pytest -q tests
+
+# 前端
+cd ..\frontend
 npm run lint
 npm run format:check
 npm run typecheck
@@ -177,7 +273,7 @@ npm run test:e2e
 npm run build
 ```
 
-MCP 仓库（`mcp-services/`）是独立 Git 仓库，测试只依赖 `mcp-services[dev]`，不得导入主后端 `app.*`：
+MCP 仓库（不得导入主后端 `app.*`）：
 
 ```powershell
 cd mcp-services
@@ -188,34 +284,15 @@ python -m mypy common iot_diagnosis iot_control model_service
 python -m pytest -q tests
 ```
 
-## 前后端联调
+## 项目结构
 
-分别启动后端和前端：
+| 路径 | 职责 |
+| --- | --- |
+| `frontend/` | React 对话界面、修复审批与运行记录 |
+| `backend/` | 认证、对话、Agent 运行、MCP 管理、审计与可观测性 |
+| `mcp-services/` | 独立仓库：Diagnosis MCP、Control MCP、模型服务、MQTT 接入与模拟器 |
+| `deploy/` | 本地基础设施配置 |
+| `specs/` | RAG 与 IoT MCP 设计规格 |
+| `compose*.yaml` | Portable、GPU 和离线检索部署编排 |
 
-```powershell
-cd backend
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-cd frontend
-npm run dev
-```
-
-浏览器使用 `http://localhost:3000`。前端默认请求
-`/api/backend/api/v1`，由前端同源代理转发到 `BACKEND_BASE_URL`（默认可在
-`frontend/.env.local` 中设为 `http://localhost:8000`）。这样本地和线上共用同一套
-Cookie、CSRF 与 SSE 链路，不依赖第三方 Cookie。
-
-两个服务启动后，可运行包含登录、会话增删改查、消息提交和 SSE 的真实链路检查：
-
-```powershell
-cd backend
-python scripts/smoke_frontend_backend.py
-```
-
-直接访问后端并验证 CORS 时，可额外传入：
-
-```powershell
-python scripts/smoke_frontend_backend.py --api-base http://localhost:8000/api/v1
-```
-
-后端已提供容器镜像；本地可在 Docker Desktop 启动后运行 `docker compose up --build backend`。
+开发 Broker 仅绑定 `127.0.0.1` 且允许匿名连接，只适合本机联调。实验室或生产环境必须启用身份认证、TLS 和 Topic ACL，并关闭演示账号自动播种。
