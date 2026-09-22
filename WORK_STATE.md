@@ -84,7 +84,7 @@
 
 ## 2026-09-12 案例自动沉淀（IoT Control MCP v1.1）
 
-- `execute_device_action` / `create_remediation_proposal` 新增可选 `diagnosis_id`，Agent 指令要求必传；提案批准后 diagnosis_id 传递到命令行。
+- `execute_device_action` / `create_remediation_proposal` 的 `diagnosis_id` 已改为必填；Agent Runtime 从真实诊断输出自动注入并拒绝篡改，Control 写入前还会向 Diagnosis 验证记录存在、成功且设备一致；提案批准前再次复核，随后 diagnosis_id 传递到命令行。
 - 恢复验证成功且关联诊断的命令进入归档队列；Control MCP 后台任务经高层 `mcp.client.Client`（Transport 适配器注入 Bearer 头）调用诊断 MCP `get_diagnosis_trace` 组装案例并经 `add_verified_fault_case` 写入案例库（`verified_by=auto-remediation:{command_id}`），`case_id` 回写命令；前端审批卡显示沉淀结果。
 - 归档失败重试 5 次后放弃（case_error 记录原因）；诊断记录不存在直接跳过；device_command/remediation_proposal 表通过启动迁移补齐新列。
 - MCP 56 passed（新增 9 个归档测试）；后端 18 passed；前端 lint/build 通过。
@@ -106,7 +106,7 @@
 ## 2026-09-12 架构解耦（事件化归档 + 语义事件）
 
 - Control MCP 不再通过 MCP 调用诊断服务：恢复验证收敛后向 `iot/{device_id}/remediation` 发布完成事件（`iot_control/remediation_events.py`），诊断服务订阅并自行沉淀案例（`iot_diagnosis/remediation.py`），经 `iot/{device_id}/remediation_case` 回发确认，Control 订阅确认把 case_id 关联回命令。`case_archive.py` 与服务间 MCP 客户端已删除，Control 对 Diagnosis 零感知。
-- diagnosis_id 缺失时诊断服务按设备+时间窗兜底关联最近一次成功诊断（`latest_remediation_diagnosis`，窗口 `DIAGNOSIS_REMEDIATION_CORRELATION_MINUTES`）。
+- 已删除 diagnosis_id 缺失时按设备+时间窗口猜测最近诊断的兜底；缺失、无效、失败或设备不匹配的诊断关联均拒绝执行/沉淀案例。
 - 后端 `process_agent_run` 把提案工具结果翻译为语义事件 `remediation.proposal_created`（后端定义的干净载荷），前端改吃语义事件，不再匹配 MCP 工具名或解析 MCP 信封。
 - MCP 61 passed（控制 17 + 诊断事件 8 + 既有回归）；后端 18 passed；前端 lint/build 通过；compose 移除 Control 的 DIAGNOSIS_MCP_URL/TOKEN 配置。
 

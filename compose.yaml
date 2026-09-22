@@ -105,6 +105,9 @@ services:
       CONTROL_PROPOSAL_TTL_MINUTES: "30"
       CONTROL_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
       CONTROL_MCP_PUBLIC_URL: ${CONTROL_MCP_PUBLIC_URL:-http://iot-control-mcp:9002}
+      CONTROL_DIAGNOSIS_VERIFY_URL: http://iot-diagnosis-mcp:9001/internal/diagnoses/verify
+      CONTROL_DIAGNOSIS_VERIFY_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
+      CONTROL_DIAGNOSIS_VERIFY_TIMEOUT_SECONDS: "3"
       MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
@@ -115,6 +118,8 @@ services:
     depends_on:
       mqtt:
         condition: service_started
+      iot-diagnosis-mcp:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9002/ready', timeout=3)"]
       interval: 10s

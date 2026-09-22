@@ -4,6 +4,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from app.agent.remediation_correlation import (
+    RemediationCorrelationError,
+    RemediationCorrelationState,
+)
 from app.config import Settings
 from app.mcp_http import mcp_httpx_client_factory
 
@@ -73,7 +77,39 @@ class OpenAIAgentsRuntime:
         from agents.mcp import MCPServerManager, MCPServerStreamableHttp, create_static_tool_filter
         from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
         from agents.models.openai_responses import OpenAIResponsesModel
+        from mcp.types import CallToolResult, TextContent
         from openai import AsyncOpenAI
+
+        correlation = RemediationCorrelationState()
+
+        class CorrelatedMCPServer(MCPServerStreamableHttp):
+            async def call_tool(
+                self,
+                tool_name: str,
+                arguments: dict[str, Any] | None,
+                meta: dict[str, Any] | None = None,
+            ) -> CallToolResult:
+                correlation.begin_tool_call(tool_name, arguments)
+                try:
+                    prepared = correlation.prepare_arguments(tool_name, arguments)
+                except RemediationCorrelationError as exc:
+                    payload = {
+                        "ok": False,
+                        "data": None,
+                        "error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                            "retryable": False,
+                        },
+                    }
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
+                        structuredContent=payload,
+                        isError=True,
+                    )
+                result = await super().call_tool(tool_name, prepared, meta)
+                correlation.record_tool_result(tool_name, result.structured_content)
+                return result
 
         client = AsyncOpenAI(
             api_key=self.settings.openai_api_key,
@@ -95,7 +131,7 @@ class OpenAIAgentsRuntime:
         for server in mcp_servers:
             headers = {"Authorization": server.authorization} if server.authorization else None
             clients.append(
-                MCPServerStreamableHttp(
+                CorrelatedMCPServer(
                     name=server.name,
                     params={
                         "url": server.url,
