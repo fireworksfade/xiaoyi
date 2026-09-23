@@ -4,7 +4,7 @@ from sqlalchemy import select
 from app.api.common import envelope
 from app.api.deps import CurrentUser, Db
 from app.models import OperationWorkflow, OperationWorkflowStep
-from app.services.workflows import workflow_view
+from app.services.workflows import sync_workflow_from_control, workflow_view
 
 router = APIRouter(prefix="/operation-workflows", tags=["operation-workflows"])
 
@@ -21,6 +21,7 @@ async def get_workflow(
     )
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WORKFLOW_NOT_FOUND")
+    await sync_workflow_from_control(db, workflow)
     steps = list(
         (
             await db.scalars(

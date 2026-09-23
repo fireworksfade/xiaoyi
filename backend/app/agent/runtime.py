@@ -202,12 +202,12 @@ class OpenAIAgentsRuntime:
                     params={
                         "url": server.url,
                         "headers": headers or {},
-                        "timeout": 15,
+                        "timeout": self.settings.mcp_agent_timeout_seconds,
                         "httpx_client_factory": mcp_httpx_client_factory,
                     },
                     cache_tools_list=True,
                     tool_filter=create_static_tool_filter(allowed_tool_names=server.allowed_tools),
-                    client_session_timeout_seconds=15,
+                    client_session_timeout_seconds=self.settings.mcp_agent_timeout_seconds,
                     use_structured_content=True,
                 )
             )

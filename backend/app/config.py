@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     completion_gate_enabled: bool = True
     completion_gate_max_continuations: int = 2
     hook_timeout_ms: int = 500
+    # Agent-side MCP client read timeout; covers slow external model backends behind MCP tools.
+    mcp_agent_timeout_seconds: int = 15
     # Recoverable context compaction / artifact storage.
     run_tool_output_inline_bytes: int = 65_536
     run_artifact_root: str = "./data/run-artifacts"

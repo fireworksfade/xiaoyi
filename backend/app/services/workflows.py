@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tool_semantics import SemanticEvent
+from app.agent.tool_semantics import SemanticEvent, SemanticEventError, ToolSemanticAdapter
+from app.config import get_settings
 from app.models import (
     AgentRun,
     OperationWorkflow,
@@ -17,6 +19,10 @@ from app.models import (
     new_id,
     utc_now,
 )
+from app.services.mcp_capabilities import resolve_mcp_server
+from app.services.mcp_catalog import invoke_remote_tool
+
+logger = logging.getLogger("xiaoyi.workflows")
 
 STEP_KEYS = ("diagnose", "select_action", "approve", "remediate", "verify", "archive_case")
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -164,6 +170,69 @@ async def _new_workflow(
     return workflow, steps
 
 
+async def sync_workflow_from_control(db: AsyncSession, workflow: OperationWorkflow) -> None:
+    """Re-read Control verification state and idempotently re-sync the workflow.
+
+    Spec §6.7 requires the workflow/run detail APIs to sync through the same
+    semantic adapter so restart-safe waiting states still advance after the
+    asynchronous verification window closes. Never raises: the persisted state
+    is served as-is when Control is unavailable or rejects the event.
+    """
+    resumable = workflow.status == "waiting_verification" or (
+        workflow.status == "completed" and workflow.outcome == "remediated_verified_archive_pending"
+    )
+    if not resumable or not workflow.command_id:
+        return
+    run = await db.get(AgentRun, workflow.agent_run_id)
+    if run is None:
+        return
+    try:
+        server = await resolve_mcp_server(
+            db,
+            required_tools={"get_action_result"},
+            default_kind="control",
+        )
+        result = await invoke_remote_tool(
+            server,
+            get_settings(),
+            "get_action_result",
+            {"command_id": workflow.command_id},
+            read_only=True,
+        )
+    except Exception:
+        logger.warning(
+            "control state unavailable for workflow sync",
+            extra={"event": "workflow_sync_unavailable", "workflow_id": workflow.id},
+        )
+        return
+    data = result.get("data") if isinstance(result, dict) else None
+    command = data.get("command") if isinstance(data, dict) else None
+    if not isinstance(command, dict) or not command.get("command_id"):
+        return
+    call_id = ":".join(
+        str(command.get(key) or "")
+        for key in ("command_id", "status", "verify_status", "case_status")
+    )
+    try:
+        events = ToolSemanticAdapter.adapt_tool_result(
+            run.id,
+            {
+                "tool_name": "get_action_result",
+                "call_id": f"sync:{call_id}",
+                "output": {"ok": True, "data": data},
+            },
+        )
+    except SemanticEventError:
+        return
+    for event in events:
+        try:
+            await apply_semantic_event(db, run, event)
+        except WorkflowError:
+            await db.rollback()
+            return
+    await db.commit()
+
+
 async def apply_semantic_event(
     db: AsyncSession, run: AgentRun, event: SemanticEvent
 ) -> OperationWorkflow | None:
@@ -186,15 +255,25 @@ async def apply_semantic_event(
         and bool(event.payload.get("case_id"))
     )
     if workflow.status in TERMINAL and not archive_completion:
+        if (
+            event.event_type == "remediation.verification_updated"
+            and event.payload.get("command_id") == workflow.command_id
+        ):
+            return workflow
         raise WorkflowError("WORKFLOW_STATE_CONFLICT", "terminal workflow cannot be advanced")
 
     payload = event.payload
+    if event.event_type == "diagnosis.completed" and _step(steps, "diagnose").status == "completed":
+        # A repeated, validated diagnosis of the same device carries no new
+        # transition; a different device is still rejected as multi-device.
+        _ensure_device(workflow, payload.get("device_id"))
+        return workflow
     _ensure_device(workflow, payload.get("device_id"))
     if payload.get("diagnosis_id"):
         _set_once(workflow, "diagnosis_id", payload["diagnosis_id"])
 
     if event.event_type == "diagnosis.completed":
-        if workflow.goal != "diagnosis" or _step(steps, "diagnose").status == "completed":
+        if workflow.goal != "diagnosis":
             raise WorkflowError("WORKFLOW_STATE_CONFLICT", "diagnosis is already complete")
         _complete(_step(steps, "diagnose"), payload)
         workflow.current_step = "select_action"

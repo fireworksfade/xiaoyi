@@ -265,3 +265,214 @@ def test_lifecycle_hooks_preserve_order_and_isolate_timeout() -> None:
     observations = asyncio.run(hooks.emit("after_tool", HookContext(run_id="run")))
     assert [item.name for item in observations] == ["first", "hook.failed", "last"]
     assert observations[1].data["hook"] == "slow"
+
+
+def test_control_sync_advances_waiting_verification(monkeypatch) -> None:
+    from app.services import workflows as workflow_service
+
+    run_id = asyncio.run(_seed_run())
+    diagnosis = SemanticEvent(
+        "diagnosis.completed",
+        f"{run_id}:diagnosis.completed:c1",
+        {
+            "device_id": "ESP32_05",
+            "diagnosis_id": "DIA_TEST",
+            "fault_type": "mqtt_connection",
+            "confidence": 0.9,
+        },
+    )
+    asyncio.run(_apply(run_id, diagnosis))
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "remediation.command_started",
+                f"{run_id}:remediation.command_started:c2",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "command_id": "CMD_TEST",
+                    "action": "reconnect_mqtt",
+                    "risk_level": "low",
+                },
+            ),
+        )
+    )
+
+    command_row = {
+        "command_id": "CMD_TEST",
+        "device_id": "ESP32_05",
+        "diagnosis_id": "DIA_TEST",
+        "status": "applied",
+        "verify_status": "succeeded",
+        "case_status": "archived",
+        "case_id": "F_SYNC_CASE",
+    }
+
+    async def fake_invoke(_server, _settings, tool, _arguments, *, read_only):
+        assert tool == "get_action_result"
+        assert read_only
+        return {"ok": True, "data": {"command": command_row}}
+
+    async def fake_resolve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(workflow_service, "resolve_mcp_server", fake_resolve)
+    monkeypatch.setattr(workflow_service, "invoke_remote_tool", fake_invoke)
+
+    async def sync_once() -> None:
+        async with SessionFactory() as db:
+            workflow, _steps = await get_workflow_for_run(db, run_id)
+            assert workflow is not None
+            await workflow_service.sync_workflow_from_control(db, workflow)
+
+    asyncio.run(sync_once())
+
+    async def check_complete() -> None:
+        async with SessionFactory() as db:
+            workflow, _steps = await get_workflow_for_run(db, run_id)
+            assert workflow is not None
+            assert workflow.status == "completed"
+            assert workflow.outcome == "remediated_verified"
+            assert workflow.case_id == "F_SYNC_CASE"
+
+    asyncio.run(check_complete())
+
+    async def broken_invoke(*_args, **_kwargs):
+        raise RuntimeError("control down")
+
+    monkeypatch.setattr(workflow_service, "invoke_remote_tool", broken_invoke)
+    asyncio.run(sync_once())
+    asyncio.run(check_complete())
+
+
+def test_repeated_same_device_diagnosis_is_ignored() -> None:
+    run_id = asyncio.run(_seed_run())
+    diagnosis = SemanticEvent(
+        "diagnosis.completed",
+        f"{run_id}:diagnosis.completed:c1",
+        {
+            "device_id": "ESP32_05",
+            "diagnosis_id": "DIA_TEST",
+            "fault_type": "mqtt_connection",
+            "confidence": 0.9,
+        },
+    )
+    asyncio.run(_apply(run_id, diagnosis))
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "remediation.command_started",
+                f"{run_id}:remediation.command_started:c2",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "command_id": "CMD_TEST",
+                    "action": "reconnect_mqtt",
+                    "risk_level": "low",
+                },
+            ),
+        )
+    )
+    repeated = SemanticEvent(
+        "diagnosis.completed",
+        f"{run_id}:diagnosis.completed:c3",
+        {
+            "device_id": "ESP32_05",
+            "diagnosis_id": "DIA_TEST_AGAIN",
+            "fault_type": "mqtt_connection",
+            "confidence": 0.95,
+        },
+    )
+    asyncio.run(_apply(run_id, repeated))
+
+    async def check() -> None:
+        async with SessionFactory() as db:
+            workflow, _steps = await get_workflow_for_run(db, run_id)
+            assert workflow is not None
+            assert workflow.status == "waiting_verification"
+            assert workflow.diagnosis_id == "DIA_TEST"
+
+    asyncio.run(check())
+
+
+def test_terminal_workflow_ignores_same_command_verification_only() -> None:
+    run_id = asyncio.run(_seed_run())
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "diagnosis.completed",
+                f"{run_id}:diagnosis.completed:c1",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "fault_type": "mqtt_connection",
+                    "confidence": 0.9,
+                },
+            ),
+        )
+    )
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "remediation.command_started",
+                f"{run_id}:remediation.command_started:c2",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "command_id": "CMD_TEST",
+                    "action": "reconnect_mqtt",
+                    "risk_level": "low",
+                },
+            ),
+        )
+    )
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "remediation.verification_updated",
+                f"{run_id}:remediation.verification_updated:c3",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "command_id": "CMD_TEST",
+                    "command_status": "succeeded",
+                    "verify_status": "succeeded",
+                    "case_status": "archived",
+                    "case_id": "F_CASE",
+                },
+            ),
+        )
+    )
+    asyncio.run(
+        _apply(
+            run_id,
+            SemanticEvent(
+                "remediation.verification_updated",
+                f"{run_id}:remediation.verification_updated:c4",
+                {
+                    "device_id": "ESP32_05",
+                    "diagnosis_id": "DIA_TEST",
+                    "command_id": "CMD_TEST",
+                    "command_status": "succeeded",
+                    "verify_status": "succeeded",
+                    "case_status": "archived",
+                    "case_id": "F_CASE",
+                    "detail": "late refinement",
+                },
+            ),
+        )
+    )
+
+    async def check() -> None:
+        async with SessionFactory() as db:
+            workflow, _steps = await get_workflow_for_run(db, run_id)
+            assert workflow is not None
+            assert workflow.status == "completed"
+            assert workflow.outcome == "remediated_verified"
+
+    asyncio.run(check())

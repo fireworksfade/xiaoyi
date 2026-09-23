@@ -13,13 +13,14 @@ from app.models import (
     AgentRun,
     Conversation,
     Message,
+    OperationWorkflowStep,
     RunEvent,
     RunStatus,
 )
 from app.observability.metrics import SSE_CONNECTIONS
 from app.services.run_state import is_retryable
 from app.services.runs import process_agent_run
-from app.services.workflows import get_workflow_for_run, workflow_view
+from app.services.workflows import get_workflow_for_run, sync_workflow_from_control, workflow_view
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 
@@ -128,6 +129,17 @@ async def get_run_workflow(
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     workflow, steps = await get_workflow_for_run(db, run_id)
+    if workflow is not None:
+        await sync_workflow_from_control(db, workflow)
+        steps = list(
+            (
+                await db.scalars(
+                    select(OperationWorkflowStep)
+                    .where(OperationWorkflowStep.workflow_id == workflow.id)
+                    .order_by(OperationWorkflowStep.sequence)
+                )
+            ).all()
+        )
     return envelope(request, workflow_view(workflow, steps) if workflow else None)
 
 
