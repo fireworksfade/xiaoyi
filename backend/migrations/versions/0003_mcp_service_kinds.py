@@ -10,10 +10,11 @@
 Revision ID: 0003_mcp_service_kinds
 Revises: 0002_run_recovery_fields
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "0003_mcp_service_kinds"
 down_revision: Union[str, None] = "0002_run_recovery_fields"
@@ -24,10 +25,14 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     with op.batch_alter_table("mcp_servers", schema=None) as batch_op:
         batch_op.add_column(
-            sa.Column("service_kind", sa.String(length=20), nullable=False, server_default="generic")
+            sa.Column(
+                "service_kind", sa.String(length=20), nullable=False, server_default="generic"
+            )
         )
         batch_op.add_column(
-            sa.Column("is_default_for_kind", sa.Boolean(), nullable=False, server_default=sa.false())
+            sa.Column(
+                "is_default_for_kind", sa.Boolean(), nullable=False, server_default=sa.false()
+            )
         )
 
 

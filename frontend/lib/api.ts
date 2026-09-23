@@ -299,6 +299,54 @@ export type AgentRunSummary = {
   updated_at: string;
 };
 
+export type WorkflowStep = {
+  step_key:
+    | 'diagnose'
+    | 'select_action'
+    | 'approve'
+    | 'remediate'
+    | 'verify'
+    | 'archive_case';
+  sequence: number;
+  status:
+    | 'pending'
+    | 'running'
+    | 'waiting'
+    | 'completed'
+    | 'skipped'
+    | 'failed';
+  evidence: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type OperationWorkflow = {
+  id: string;
+  agent_run_id: string;
+  goal: 'diagnosis' | 'remediation';
+  status:
+    | 'active'
+    | 'waiting_approval'
+    | 'waiting_verification'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
+  outcome: string | null;
+  current_step: WorkflowStep['step_key'];
+  device_id: string | null;
+  diagnosis_id: string | null;
+  proposal_id: string | null;
+  command_id: string | null;
+  case_id: string | null;
+  steps: WorkflowStep[];
+};
+
+export async function getAgentRunWorkflow(runId: string) {
+  return request<OperationWorkflow | null>(
+    `/agent-runs/${encodeURIComponent(runId)}/workflow`,
+  );
+}
+
 export async function listAgentRuns(
   options: { page?: number; pageSize?: number } = {},
 ) {
@@ -395,17 +443,46 @@ export type FaultCaseSummary = {
   verified_by: string;
   source: string;
   created_at: string;
+  lifecycle_status:
+    | 'candidate'
+    | 'verified'
+    | 'trusted'
+    | 'deprecated'
+    | 'invalid';
+  fault_signature: string;
+  cluster_id: string | null;
+  applicability: Record<string, unknown>;
+  source_diagnosis_id: string | null;
+  source_command_id: string | null;
+  reuse_count: number;
+  success_count: number;
+  failure_count: number;
+  reliability_score: number;
+  last_used_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  deprecated_reason: string | null;
 };
 
 export async function listFaultCases(params?: {
   deviceType?: string;
   limit?: number;
   offset?: number;
+  lifecycleStatus?: FaultCaseSummary['lifecycle_status'];
+  clusterId?: string;
+  faultType?: string;
+  minReliability?: number;
 }) {
   const search = new URLSearchParams();
   if (params?.deviceType) search.set('device_type', params.deviceType);
   if (params?.limit != null) search.set('limit', String(params.limit));
   if (params?.offset != null) search.set('offset', String(params.offset));
+  if (params?.lifecycleStatus)
+    search.set('lifecycle_status', params.lifecycleStatus);
+  if (params?.clusterId) search.set('cluster_id', params.clusterId);
+  if (params?.faultType) search.set('fault_type', params.faultType);
+  if (params?.minReliability != null)
+    search.set('min_reliability', String(params.minReliability));
   const query = search.toString();
   return request<{
     items: FaultCaseSummary[];

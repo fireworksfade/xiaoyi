@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     run_delta_merge_chars: int = 256
     run_delta_merge_ms: int = 200
     run_tool_output_max_bytes: int = 65_536
+    # IoT workflow, deterministic completion gate and lifecycle observations.
+    workflow_runtime_enabled: bool = True
+    workflow_version: int = 1
+    completion_gate_enabled: bool = True
+    completion_gate_max_continuations: int = 2
+    hook_timeout_ms: int = 500
+    # Recoverable context compaction / artifact storage.
+    run_tool_output_inline_bytes: int = 65_536
+    run_artifact_root: str = "./data/run-artifacts"
+    run_artifact_retention_hours: int = 168
+    context_keep_recent_tool_results: int = 3
+    context_compaction_target_ratio: float = 0.8
+    context_reactive_compaction_retries: int = 1
     # 保留策略（WP-11）：删除开关默认关闭（dry-run）；后台周期任务按 interval 执行
     retention_delete_enabled: bool = False
     retention_interval_hours: int = 6
@@ -97,6 +110,7 @@ class Settings(BaseSettings):
     def ensure_local_paths(self) -> None:
         if self.database_url.startswith("sqlite"):
             Path("data").mkdir(parents=True, exist_ok=True)
+        Path(self.run_artifact_root).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

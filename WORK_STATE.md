@@ -1,6 +1,19 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-20（Asia/Shanghai）
+更新时间：2026-09-23（Asia/Shanghai）
+
+## 2026-09-23 智能体运行时五项升级（Workflow / Gate / Hooks / Memory 治理 / 上下文压缩）
+
+- 按 `specs/智能体运行时五项升级 Spec.md` 完成全部五个目标的代码实现与自动化门槛收敛：
+  - **G1 Workflow Runtime**：新增 `operation_workflows` + `operation_workflow_steps`（迁移 0004，乐观锁 `lock_version`、关联 ID 不可变覆盖保护、终态不可回退）；`services/workflows.py` 消费 `agent/tool_semantics.py` 产出的稳定语义事件（`diagnosis.completed`、`remediation.*`、`case.archive_updated`）推进固定步骤 diagnose → select_action → approve → remediate → verify → archive_case；同一 Run 单设备单工作流（`WORKFLOW_MULTI_DEVICE_UNSUPPORTED`）；诊断型目标完成即收敛 `diagnosed`；审批 REST 端点经同一语义适配器幂等同步，`waiting_approval`/`waiting_verification` 重启不丢；新增 `GET /agent-runs/{run_id}/workflow`、`GET /operation-workflows/{id}`（所有权校验）与 SSE `workflow.*` 事件，前端 `use-conversation-run` 消费后展示阶段进度。
+  - **G2 Completion Gate**：`services/completion_gate.py` 纯结构化证据判定（判定表覆盖非工作流/诊断完成/待审批/拒绝过期/验证成功含 archive pending/业务失败/状态冲突/能力缺失），reason codes 与 Spec §7.5 一致；`services/runs.py` 集成有界续轮（默认 2 次，超限转 `PASS_HANDOFF`），Gate 决策写入 RunEvent 与 metrics（`xiaoyi_completion_gate_decisions_total` 等）；模型文本不作为完成证据。
+  - **G3 Lifecycle Hooks**：`agent/lifecycle.py` 静态注册 `before_run/after_tool/after_gate/after_run/on_error` 五个扩展点，固定顺序串行、500ms 超时、`HookObservation` 只观测不改控制流、单 Hook 失败只记 `hook.failed` 不回滚已提交终态；权限、审批、`diagnosis_id` 关联校验、状态迁移与 Gate 全部保留在显式主流程。
+  - **G4 领域 Memory 治理**（MCP 独立仓库）：迁移 `0005_fault_case_memory_governance.py` + MySQL `0002` 为 `fault_case` 补 lifecycle_status/fault_signature/cluster_id/applicability/reuse/success/failure/reliability_score 等治理字段（存量 verified=1 平迁 lifecycle `verified`）；新增 `fault_case_feedback`（`(fault_id, command_id)` 唯一，MQTT 重放不重复计数）；诊断输出新增 `supporting_case_ids` 白名单归因，只有明确采用的案例接收成功/失败反馈；Laplace 平滑 reliability + trusted 自动升级门槛（≥3 成功、≥0.8、失败率 ≤0.2）与只降不升的自动降级；检索过滤 invalid/deprecated 并按 cluster 多样化，治理信号只做过滤/tie-break 不与 raw score 相加。
+  - **G5 可恢复上下文压缩**：迁移 0005 新增 `run_artifacts` + `conversation_context_snapshots`；`services/artifacts.py` 提供 `LocalArtifactStore`（路径服务端生成 + 防穿越校验 + secret sanitizer + SHA-256）；超 `RUN_TOOL_OUTPUT_INLINE_BYTES` 的工具输出先脱敏完整归档再在 RunEvent/模型上下文留摘要 + artifact 引用 + 关键结构字段（L1）；`agent/runtime.py` 经模型输入过滤实现 L2 分层压缩并注入工作流快照，保护 tool call/result 配对；`services/context_compactor.py` 结构化保护层；保留策略纳入 retention dry-run 与删除指标。
+- 配置：`WORKFLOW_RUNTIME_ENABLED`/`COMPLETION_GATE_*`/`RUN_ARTIFACT_*`/`CONTEXT_*` 与 `FAULT_CASE_*` 均落入 `.env.example` 与 compose（artifact 目录位于 backend-data 持久化卷）。
+- 验证（AC34-AC36）：后端 ruff/format/mypy 通过、pytest 110 passed + 1 skipped（新增 `test_workflow_runtime.py`、`test_artifacts.py` 与迁移快照）；MCP ruff/format/mypy 通过、pytest 161 passed（新增 `test_fault_case_memory.py`）；前端 oxlint/oxfmt/typecheck 通过、组件测试 22 passed、Playwright E2E 1 passed、production build 通过。
+- 已提交主仓库与 MCP 仓库；根 `.gitignore` 新增忽略本地 `output/`、`tmp/`（个人材料）。
+- 待办（AC37/AC38，时间型验收）：Compose Portable 档位六场景 smoke 与升级/回滚演练需在下次带 Docker 环境的会话执行。
 
 ## 2026-09-20 RAG 检索链路升级（structure_token 分块 + Dense/BM25/RRF/Reranker Hybrid）
 

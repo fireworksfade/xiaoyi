@@ -19,6 +19,13 @@ services:
       SESSION_COOKIE_SAMESITE: lax
       # 容器 CMD 已先执行 python -m app.cli deploy；应用启动只校验版本
       DB_AUTO_UPGRADE: "false"
+      WORKFLOW_RUNTIME_ENABLED: "true"
+      COMPLETION_GATE_ENABLED: "true"
+      COMPLETION_GATE_MAX_CONTINUATIONS: "2"
+      HOOK_TIMEOUT_MS: "500"
+      RUN_TOOL_OUTPUT_INLINE_BYTES: "65536"
+      RUN_ARTIFACT_ROOT: /app/data/run-artifacts
+      RUN_ARTIFACT_RETENTION_HOURS: "168"
     volumes:
       - backend-data:/app/data
       - ./backend/app:/app/app:ro
@@ -67,6 +74,9 @@ services:
       MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
+      FAULT_CASE_TRUST_MIN_SUCCESSES: "3"
+      FAULT_CASE_TRUST_MIN_RELIABILITY: "0.8"
+      FAULT_CASE_CLUSTER_DIVERSITY: "true"
     volumes:
       - diagnosis-data:/app/data
       - ./mcp-services/common:/app/common:ro

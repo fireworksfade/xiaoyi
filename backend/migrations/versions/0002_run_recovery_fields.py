@@ -13,10 +13,11 @@
 Revision ID: 0002_run_recovery_fields
 Revises: 0001_current_schema
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "0002_run_recovery_fields"
 down_revision: Union[str, None] = "0001_current_schema"
@@ -35,12 +36,8 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0")
         )
-        batch_op.add_column(
-            sa.Column("interruption_reason", sa.String(length=120), nullable=True)
-        )
-        batch_op.create_index(
-            batch_op.f("ix_agent_runs_status"), ["status"], unique=False
-        )
+        batch_op.add_column(sa.Column("interruption_reason", sa.String(length=120), nullable=True))
+        batch_op.create_index(batch_op.f("ix_agent_runs_status"), ["status"], unique=False)
     op.execute("UPDATE agent_runs SET queued_at = created_at WHERE queued_at IS NULL")
     op.execute(
         "UPDATE agent_runs SET attempt_count = 1 "

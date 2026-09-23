@@ -41,7 +41,12 @@ class RemediationCorrelationState:
             return
         diagnosis_id = data.get("diagnosis_id")
         device_id = data.get("device_id")
-        if isinstance(diagnosis_id, str) and diagnosis_id and isinstance(device_id, str) and device_id:
+        if (
+            isinstance(diagnosis_id, str)
+            and diagnosis_id
+            and isinstance(device_id, str)
+            and device_id
+        ):
             self.diagnosis_by_device[device_id] = diagnosis_id
 
     def prepare_arguments(

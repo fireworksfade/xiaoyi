@@ -53,6 +53,7 @@ class ContextResult:
 
     messages: list[dict[str, str]]
     metadata: dict[str, Any]
+    included_history_ids: set[str] = field(default_factory=set)
 
 
 def _render_user_message(
@@ -209,4 +210,8 @@ def build_context(
         "estimated_input_tokens": used,
         "max_input_tokens": limits.max_input_tokens,
     }
-    return ContextResult(messages=final, metadata=metadata)
+    return ContextResult(
+        messages=final,
+        metadata=metadata,
+        included_history_ids={str(message_id) for message_id in included_ids if message_id},
+    )

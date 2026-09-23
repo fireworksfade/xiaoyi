@@ -125,7 +125,9 @@ def _is_ahead(current: str, head: str) -> bool:
     revisions = [rev.revision for rev in script.walk_revisions()]
     if current not in revisions:
         return True
-    return revisions.index(current) > revisions.index(head)
+    # walk_revisions() is newest -> oldest. A smaller index is therefore newer
+    # than the target head; a larger index is an ordinary database-behind case.
+    return revisions.index(current) < revisions.index(head)
 
 
 def verify_baseline_schema() -> list[str]:

@@ -9,10 +9,17 @@ from sqlalchemy import func, select
 from app.api.common import envelope, run_view
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.db import SessionFactory
-from app.models import AgentRun, Conversation, Message, RunEvent, RunStatus
+from app.models import (
+    AgentRun,
+    Conversation,
+    Message,
+    RunEvent,
+    RunStatus,
+)
 from app.observability.metrics import SSE_CONNECTIONS
 from app.services.run_state import is_retryable
 from app.services.runs import process_agent_run
+from app.services.workflows import get_workflow_for_run, workflow_view
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 
@@ -109,6 +116,19 @@ async def get_run(run_id: str, request: Request, db: Db, user: CurrentUser) -> d
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     return envelope(request, run_view(run))
+
+
+@router.get("/{run_id}/workflow")
+async def get_run_workflow(
+    run_id: str, request: Request, db: Db, user: CurrentUser
+) -> dict[str, object]:
+    run = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id)
+    )
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
+    workflow, steps = await get_workflow_for_run(db, run_id)
+    return envelope(request, workflow_view(workflow, steps) if workflow else None)
 
 
 @router.get("/{run_id}/events")

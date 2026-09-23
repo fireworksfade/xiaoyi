@@ -9,7 +9,11 @@ from app.agent.remediation_correlation import (
     RemediationCorrelationState,
 )
 from app.config import Settings
+from app.db import SessionFactory
 from app.mcp_http import mcp_httpx_client_factory
+from app.observability.metrics import CONTEXT_ARTIFACT_BYTES, CONTEXT_COMPACTIONS
+from app.services.artifacts import LocalArtifactStore, extract_critical_fields, sanitize_artifact
+from app.services.context_compactor import compact_model_input
 
 
 @dataclass(slots=True)
@@ -28,6 +32,9 @@ class RuntimeMCPServer:
 
 
 class AgentRuntime(Protocol):
+    run_id: str | None
+    workflow_snapshot: dict[str, Any] | None
+
     def stream(
         self,
         messages: list[dict[str, str]],
@@ -37,6 +44,9 @@ class AgentRuntime(Protocol):
 
 class MockAgentRuntime:
     """确定性联调 Runtime，不调用外部模型。"""
+
+    run_id: str | None = None
+    workflow_snapshot: dict[str, Any] | None = None
 
     async def stream(
         self,
@@ -66,6 +76,8 @@ class OpenAIAgentsRuntime:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is required for the OpenAI runtime")
         self.settings = settings
+        self.run_id: str | None = None
+        self.workflow_snapshot: dict[str, Any] | None = None
 
     async def stream(
         self,
@@ -77,10 +89,24 @@ class OpenAIAgentsRuntime:
         from agents.mcp import MCPServerManager, MCPServerStreamableHttp, create_static_tool_filter
         from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
         from agents.models.openai_responses import OpenAIResponsesModel
+        from agents.run_config import ModelInputData
         from mcp.types import CallToolResult, TextContent
         from openai import AsyncOpenAI
 
         correlation = RemediationCorrelationState()
+        runtime_run_id = self.run_id
+        runtime_settings = self.settings
+
+        def filter_model_input(data: Any) -> ModelInputData:
+            compacted = compact_model_input(
+                data.model_data.input,
+                workflow_snapshot=self.workflow_snapshot,
+                keep_recent_tool_results=self.settings.context_keep_recent_tool_results,
+                max_tool_output_chars=max(256, self.settings.run_tool_output_inline_bytes),
+            )
+            if compacted.compacted_outputs:
+                CONTEXT_COMPACTIONS.labels(layer="L2").inc(compacted.compacted_outputs)
+            return ModelInputData(input=compacted.items, instructions=data.model_data.instructions)
 
         class CorrelatedMCPServer(MCPServerStreamableHttp):
             async def call_tool(
@@ -103,12 +129,52 @@ class OpenAIAgentsRuntime:
                         },
                     }
                     return CallToolResult(
-                        content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
-                        structuredContent=payload,
-                        isError=True,
+                        content=[
+                            TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))
+                        ],
+                        structured_content=payload,
+                        is_error=True,
                     )
                 result = await super().call_tool(tool_name, prepared, meta)
                 correlation.record_tool_result(tool_name, result.structured_content)
+                output = result.structured_content
+                if runtime_run_id and isinstance(output, dict):
+                    sanitized = sanitize_artifact(output)
+                    raw = json.dumps(sanitized, ensure_ascii=False, default=str).encode("utf-8")
+                    if len(raw) > runtime_settings.run_tool_output_inline_bytes:
+                        async with SessionFactory() as db:
+                            artifact = await LocalArtifactStore(
+                                runtime_settings.run_artifact_root,
+                                runtime_settings.run_artifact_retention_hours,
+                            ).write(
+                                db,
+                                run_id=runtime_run_id,
+                                kind="tool_output",
+                                content=sanitized,
+                            )
+                            await db.commit()
+                        CONTEXT_ARTIFACT_BYTES.labels(kind="tool_output").inc(artifact.size_bytes)
+                        CONTEXT_COMPACTIONS.labels(layer="L1").inc()
+                        critical_fields = extract_critical_fields(sanitized)
+                        summary = {
+                            "ok": output.get("ok") is True,
+                            "data": critical_fields,
+                            "truncated": True,
+                            "artifact_id": artifact.id,
+                            "original_bytes": artifact.size_bytes,
+                            "sha256": artifact.sha256,
+                            "critical_fields": critical_fields,
+                            "summary": raw[:1024].decode("utf-8", errors="replace"),
+                        }
+                        return CallToolResult(
+                            content=[
+                                TextContent(
+                                    type="text", text=json.dumps(summary, ensure_ascii=False)
+                                )
+                            ],
+                            structured_content=summary,
+                            is_error=result.is_error,
+                        )
                 return result
 
         client = AsyncOpenAI(
@@ -195,6 +261,7 @@ class OpenAIAgentsRuntime:
                         tracing_disabled=True,
                         trace_include_sensitive_data=False,
                         workflow_name="xiaoyi-chat",
+                        call_model_input_filter=filter_model_input,
                     ),
                 )
                 final_parts: list[str] = []

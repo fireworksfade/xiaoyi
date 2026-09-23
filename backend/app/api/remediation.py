@@ -1,12 +1,15 @@
 from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import select
 
+from app.agent.tool_semantics import ToolSemanticAdapter
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
 from app.config import get_settings
-from app.models import MCPServer, ToolRiskPolicy
+from app.models import AgentRun, MCPServer, OperationWorkflow, ToolRiskPolicy
 from app.schemas import RemediationDecisionCreate
 from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
+from app.services.workflows import apply_semantic_event
 
 router = APIRouter(prefix="/remediation-proposals", tags=["IoT remediation"])
 
@@ -71,11 +74,35 @@ async def list_proposals(
 
 @router.get("/{proposal_id}")
 async def get_proposal(
-    proposal_id: str, request: Request, db: Db, _: CurrentUser
+    proposal_id: str, request: Request, db: Db, user: CurrentUser
 ) -> dict[str, object]:
     data = await call_control_tool(db, "get_action_result", {"proposal_id": proposal_id})
     if not isinstance(data, dict) or "proposal" not in data:
         raise HTTPException(status_code=404, detail="PROPOSAL_NOT_FOUND")
+    workflow = await db.scalar(
+        select(OperationWorkflow).where(OperationWorkflow.proposal_id == proposal_id)
+    )
+    if workflow is not None:
+        if workflow.user_id != user.id:
+            raise HTTPException(status_code=404, detail="PROPOSAL_NOT_FOUND")
+        command = data.get("command")
+        if isinstance(command, dict) and command.get("command_id"):
+            run = await db.get(AgentRun, workflow.agent_run_id)
+            if run is not None:
+                semantic_events = ToolSemanticAdapter.adapt_tool_result(
+                    run.id,
+                    {
+                        "tool_name": "get_action_result",
+                        "call_id": ":".join(
+                            str(command.get(key) or "")
+                            for key in ("command_id", "status", "verify_status", "case_status")
+                        ),
+                        "output": {"ok": True, "data": data},
+                    },
+                )
+                for semantic_event in semantic_events:
+                    await apply_semantic_event(db, run, semantic_event)
+                await db.commit()
     return envelope(request, data)
 
 
@@ -120,6 +147,23 @@ async def decide_proposal(
         code = error.get("code") if isinstance(error, dict) else "MCP_TOOL_FAILED"
         raise HTTPException(status_code=422, detail=str(code))
     data = result.get("data")
+
+    # Approval is an out-of-band continuation of the original workflow. Reuse it
+    # and the same idempotent semantic event path instead of creating another run.
+    workflow = await db.scalar(
+        select(OperationWorkflow).where(OperationWorkflow.proposal_id == proposal_id)
+    )
+    if workflow is not None and isinstance(data, dict):
+        run = await db.get(AgentRun, workflow.agent_run_id)
+        if run is not None:
+            decision_event = ToolSemanticAdapter.proposal_decision(
+                proposal_id=proposal_id,
+                version=payload.expected_version,
+                decision=payload.decision,
+                data=data,
+                decided_by=admin.username,
+            )
+            await apply_semantic_event(db, run, decision_event)
 
     add_audit_log(
         db,

@@ -43,3 +43,7 @@ Thumbs.db
 
 # Frontend build artifacts
 *.tsbuildinfo
+
+# Local personal working files
+/output/
+/tmp/

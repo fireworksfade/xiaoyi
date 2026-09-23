@@ -19,7 +19,12 @@ from app.models import MCPServer, MCPTool, ToolRiskPolicy
 # 常用能力组合：调用方也可直接传工具名集合
 CAPABILITY_KNOWLEDGE_READ = {"list_knowledge_documents"}
 CAPABILITY_KNOWLEDGE_WRITE = {"ingest_knowledge_text", "delete_knowledge_document"}
-CAPABILITY_FAULT_CASES = {"list_fault_cases", "delete_fault_case", "add_verified_fault_case"}
+CAPABILITY_FAULT_CASES = {
+    "list_fault_cases",
+    "delete_fault_case",
+    "add_verified_fault_case",
+    "update_fault_case_lifecycle",
+}
 CAPABILITY_CONTROL_APPROVAL = {"decide_remediation_proposal"}
 
 

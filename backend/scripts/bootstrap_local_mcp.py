@@ -57,6 +57,7 @@ APPROVAL_REQUIRED_TOOLS = {
     "ingest_knowledge_text",
     "delete_knowledge_document",
     "delete_fault_case",
+    "update_fault_case_lifecycle",
     "decide_remediation_proposal",
 }
 

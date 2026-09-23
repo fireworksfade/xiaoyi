@@ -64,3 +64,20 @@ RETENTION_DELETED = Counter(
     "保留策略删除数量（按类别）",
     ["kind"],
 )
+
+WORKFLOWS = Counter("xiaoyi_workflows_total", "IoT 工作流终态数量", ["status", "outcome"])
+WORKFLOW_STEP_DURATION = Histogram(
+    "xiaoyi_workflow_step_duration_seconds", "工作流步骤耗时", ["step"]
+)
+COMPLETION_GATE_DECISIONS = Counter(
+    "xiaoyi_completion_gate_decisions_total", "完成门判定", ["action", "reason_code"]
+)
+COMPLETION_GATE_CONTINUATIONS = Counter(
+    "xiaoyi_completion_gate_continuations_total", "完成门续轮次数"
+)
+HOOK_FAILURES = Counter("xiaoyi_hook_failures_total", "生命周期 Hook 失败", ["hook", "event"])
+CONTEXT_COMPACTIONS = Counter("xiaoyi_context_compactions_total", "上下文压缩次数", ["layer"])
+CONTEXT_ARTIFACT_BYTES = Counter(
+    "xiaoyi_context_artifact_bytes_total", "上下文归档字节数", ["kind"]
+)
+CONTEXT_REACTIVE_FAILURES = Counter("xiaoyi_context_reactive_failures_total", "响应式压缩失败次数")

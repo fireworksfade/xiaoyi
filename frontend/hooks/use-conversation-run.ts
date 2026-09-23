@@ -158,6 +158,19 @@ export function useConversationRun({
             }));
           }
         }
+        if (event.type.startsWith('workflow.')) {
+          const step = displayValue(event.data.current_step, 'diagnose');
+          const status = displayValue(event.data.status, event.type.slice(9));
+          updateAssistant((message) => ({
+            ...message,
+            tools: [
+              ...(message.tools ?? []).filter(
+                (tool) => tool.name !== '运维工作流',
+              ),
+              { name: '运维工作流', result: `${step} · ${status}` },
+            ],
+          }));
+        }
         if (event.type === 'run.failed') {
           const error = event.data.error as
             | { message?: string }

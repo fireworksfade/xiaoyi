@@ -74,6 +74,11 @@ def test_empty_db_upgrades_to_head(isolated_migrations) -> None:
         "mcp_tools",
         "audit_logs",
         "model_configurations",
+        "operation_workflows",
+        "operation_workflow_steps",
+        "operation_workflow_events",
+        "run_artifacts",
+        "conversation_context_snapshots",
         "alembic_version",
     } <= tables
     columns = {item["name"] for item in inspect(engine).get_columns("agent_runs")}
@@ -199,4 +204,12 @@ def test_check_revision_empty_and_ok(isolated_migrations) -> None:
     url, _engine = isolated_migrations
     assert migrations.check_revision() == RevisionStatus.EMPTY
     _alembic_upgrade(url, "head")
+    assert migrations.check_revision() == RevisionStatus.OK
+
+
+def test_known_older_revision_is_behind_not_ahead(isolated_migrations) -> None:
+    url, _engine = isolated_migrations
+    _alembic_upgrade(url, "0003_mcp_service_kinds")
+    assert migrations.check_revision() == RevisionStatus.BEHIND
+    assert migrations.deploy() == "upgraded"
     assert migrations.check_revision() == RevisionStatus.OK

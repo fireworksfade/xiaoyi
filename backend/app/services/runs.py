@@ -1,10 +1,14 @@
 import asyncio
+import json
 import logging
 from datetime import timezone
+from types import MappingProxyType
 
 from sqlalchemy import select, update
 
-from app.agent.runtime import RuntimeEvent, build_runtime
+from app.agent.lifecycle import DEFAULT_HOOKS, HookContext
+from app.agent.runtime import AgentRuntime, RuntimeEvent, RuntimeMCPServer, build_runtime
+from app.agent.tool_semantics import SemanticEventError, ToolSemanticAdapter
 from app.config import get_settings
 from app.db import SessionFactory
 from app.models import (
@@ -19,16 +23,29 @@ from app.models import (
 from app.observability.metrics import (
     AGENT_RUN_DURATION,
     AGENT_RUNS,
+    COMPLETION_GATE_CONTINUATIONS,
+    COMPLETION_GATE_DECISIONS,
+    CONTEXT_COMPACTIONS,
     CONTEXT_ESTIMATED_TOKENS,
     CONTEXT_OMITTED_MESSAGES,
+    HOOK_FAILURES,
 )
 from app.security import decrypt_secret
+from app.services.artifacts import LocalArtifactStore, extract_critical_fields
+from app.services.completion_gate import CompletionDecision, CompletionGate
 from app.services.context_builder import (
     CONTEXT_INPUT_TOO_LARGE,
     AttachmentDraft,
     ContextBudgetExceeded,
     ContextLimits,
     build_context,
+)
+from app.services.context_compactor import (
+    CONTEXT_COMPACTION_EXHAUSTED,
+    compact_retry_messages,
+    is_prompt_too_long,
+    save_context_snapshot,
+    summarize_history,
 )
 from app.services.mcp_catalog import load_agent_mcp_servers
 from app.services.run_event_buffer import RunEventBuffer
@@ -39,8 +56,153 @@ from app.services.run_state import (
     claim_queued_run,
     mark_finished,
 )
+from app.services.workflows import (
+    WorkflowError,
+    apply_semantic_event,
+    complete_diagnosis_workflow,
+    get_workflow_for_run,
+    workflow_view,
+)
 
 logger = logging.getLogger("xiaoyi.runs")
+
+
+async def _record_hook_observations(run_id: str, point: str, context: HookContext) -> None:
+    for observation in await DEFAULT_HOOKS.emit(point, context):
+        if observation.name == "hook.failed":
+            HOOK_FAILURES.labels(
+                hook=str(observation.data.get("hook") or "unknown"), event=point
+            ).inc()
+            await append_event(
+                run_id,
+                RuntimeEvent("hook.failed", {"point": point, **dict(observation.data)}),
+            )
+
+
+async def _evaluate_gate(run_id: str, settings, continuation_count: int) -> CompletionDecision:
+    async with SessionFactory() as db:
+        run = await db.get(AgentRun, run_id)
+        if run is None:
+            raise RuntimeError("RUN_NOT_FOUND")
+        workflow, steps = await get_workflow_for_run(db, run_id)
+        decision = CompletionGate(settings.completion_gate_max_continuations).evaluate(
+            workflow, steps, continuation_count=continuation_count
+        )
+        if workflow is not None and decision.reason_code == "GOAL_DIAGNOSIS_COMPLETE":
+            await complete_diagnosis_workflow(db, workflow, steps)
+        state = {**(run.runtime_state or {})}
+        state["completion_gate"] = {
+            "action": decision.action,
+            "reason_code": decision.reason_code,
+            "required_action": decision.required_action,
+            "evidence": decision.evidence,
+            "continuation_count": continuation_count,
+        }
+        run.runtime_state = state
+        db.add(
+            RunEvent(
+                run_id=run_id,
+                event_type="completion_gate.decision",
+                data=state["completion_gate"],
+            )
+        )
+        await db.commit()
+    COMPLETION_GATE_DECISIONS.labels(action=decision.action, reason_code=decision.reason_code).inc()
+    await _record_hook_observations(
+        run_id,
+        "after_gate",
+        HookContext(
+            run_id=run_id,
+            workflow_id=str(decision.evidence.get("workflow_id") or "") or None,
+            event_type="completion_gate.decision",
+            sanitized_output_summary=MappingProxyType(
+                {"action": decision.action, "reason_code": decision.reason_code}
+            ),
+        ),
+    )
+    return decision
+
+
+def _gate_final_content(decision: CompletionDecision, model_content: str) -> str:
+    evidence = decision.evidence
+    diagnosis = evidence.get("diagnosis_id")
+    fault_type = evidence.get("fault_type")
+    diagnosed = (
+        f"已完成设备诊断（类型：{fault_type or '待核查'}，诊断 ID：{diagnosis}）。"
+        if diagnosis
+        else ""
+    )
+    if decision.reason_code == "WAITING_USER_APPROVAL":
+        return f"{diagnosed}已创建修复提案 {evidence.get('proposal_id')}，等待管理员批准；设备动作尚未执行。"
+    if decision.reason_code in {"WAITING_DEVICE_VERIFICATION", "COMPLETION_GATE_LIMIT_REACHED"}:
+        return f"{diagnosed}命令 {evidence.get('command_id')} 已下发，设备恢复验证仍在进行，当前不能确认修复成功。"
+    if decision.reason_code == "REMEDIATION_FAILED":
+        return (
+            f"{diagnosed}命令 {evidence.get('command_id')} 的修复或恢复验证失败，设备未被确认恢复。"
+        )
+    if decision.reason_code in {"PROPOSAL_REJECTED", "PROPOSAL_EXPIRED"}:
+        return f"{diagnosed}修复提案 {evidence.get('proposal_id')} 未执行（已拒绝或过期）。"
+    if decision.reason_code == "CASE_ARCHIVE_PENDING":
+        return (
+            f"{diagnosed}命令 {evidence.get('command_id')} 的恢复验证已成功；故障案例仍在异步归档。"
+        )
+    if decision.reason_code == "GOAL_REMEDIATION_VERIFIED":
+        return f"{diagnosed}命令 {evidence.get('command_id')} 的恢复验证已成功，案例 {evidence.get('case_id')} 已归档。"
+    return model_content
+
+
+async def _stream_with_context_recovery(
+    run_id: str,
+    runtime: AgentRuntime,
+    messages: list[dict[str, str]],
+    mcp_servers: list[RuntimeMCPServer],
+    settings,
+    *,
+    allow_retry: bool = True,
+):
+    """Retry an oversized prompt once, only before any tool may have run."""
+    tool_started = False
+    try:
+        async for event in runtime.stream(messages, mcp_servers):
+            if event.event_type == "tool.started":
+                tool_started = True
+            yield event
+        return
+    except Exception as exc:
+        if not is_prompt_too_long(exc):
+            raise
+        if tool_started or not allow_retry or settings.context_reactive_compaction_retries < 1:
+            raise WorkflowError(
+                CONTEXT_COMPACTION_EXHAUSTED, "model input exceeds its context window"
+            ) from exc
+
+    compacted = compact_retry_messages(messages, workflow_snapshot=runtime.workflow_snapshot)
+    if compacted == messages:
+        raise WorkflowError(CONTEXT_COMPACTION_EXHAUSTED, "model input cannot be compacted further")
+    async with SessionFactory() as db:
+        artifact = await LocalArtifactStore(
+            settings.run_artifact_root, settings.run_artifact_retention_hours
+        ).write(db, run_id=run_id, kind="transcript", content={"messages": messages})
+        await db.commit()
+    CONTEXT_COMPACTIONS.labels(layer="L4").inc()
+    yield RuntimeEvent(
+        "context.compacted",
+        {
+            "layer": "L4",
+            "artifact_id": artifact.id,
+            "original_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+        },
+    )
+    try:
+        async for event in runtime.stream(compacted, mcp_servers):
+            yield event
+    except Exception as exc:
+        if is_prompt_too_long(exc):
+            raise WorkflowError(
+                CONTEXT_COMPACTION_EXHAUSTED, "model input still exceeds its context window"
+            ) from exc
+        raise
 
 
 async def append_event(run_id: str, event: RuntimeEvent) -> RunEvent:
@@ -97,8 +259,10 @@ def _collect_proposals(event_data: dict, proposals: list[dict[str, object]]) -> 
 async def execute_claimed_run(run_id: str) -> None:
     """执行已处于 RUNNING 的 run（由 Dispatcher 或 legacy 入口认领后调用）。"""
     settings = get_settings()
+    DEFAULT_HOOKS.set_timeout_ms(settings.hook_timeout_ms)
     final_content = ""
     proposals: list[dict[str, object]] = []
+    gate_decision: CompletionDecision | None = None
     # 事件缓冲：delta 合并 + 批量事务提交；异常路径也要 flush 已缓冲事件
     buffer: RunEventBuffer | None = None
     try:
@@ -168,6 +332,10 @@ async def execute_claimed_run(run_id: str) -> None:
             await db.commit()
 
         runtime = build_runtime(settings)
+        # OpenAI runtime needs the persisted run id so oversized MCP results can be
+        # archived before the compact reference is returned to the model. Other
+        # runtime implementations may ignore this attribute.
+        runtime.run_id = run_id
         await append_event(run_id, RuntimeEvent("run.started", {}))
         limits = ContextLimits.from_settings(settings)
         current_message = next(
@@ -207,6 +375,86 @@ async def execute_claimed_run(run_id: str) -> None:
             AGENT_RUNS.labels(status="failed").inc()
             return
         runtime_messages = context.messages
+        if context.metadata["omitted_message_count"] or len(messages) >= candidate_limit:
+            async with SessionFactory() as db:
+                prior_messages = list(
+                    (
+                        await db.scalars(
+                            select(Message)
+                            .where(Message.conversation_id == run.conversation_id)
+                            .order_by(Message.created_at, Message.id)
+                        )
+                    ).all()
+                )
+                prior_messages = [
+                    item
+                    for item in prior_messages
+                    if (item.created_at, item.id) < (current_message.created_at, current_message.id)
+                ]
+                omitted = [
+                    item for item in prior_messages if item.id not in context.included_history_ids
+                ]
+                if omitted:
+                    boundary = (omitted[-1].created_at, omitted[-1].id)
+                    covered = [
+                        item for item in prior_messages if (item.created_at, item.id) <= boundary
+                    ]
+                    transcript = [
+                        {"id": item.id, "role": item.role, "content": item.content}
+                        for item in covered
+                    ]
+                    summary = summarize_history(
+                        transcript,
+                        current_goal=current_message.content,
+                        workflow_snapshot=runtime.workflow_snapshot,
+                    )
+                    snapshot = await save_context_snapshot(
+                        db,
+                        LocalArtifactStore(
+                            settings.run_artifact_root, settings.run_artifact_retention_hours
+                        ),
+                        run_id=run_id,
+                        conversation_id=run.conversation_id,
+                        covers_through_message_id=omitted[-1].id,
+                        summary=summary,
+                        source_transcript={"messages": transcript},
+                        estimated_tokens=context.metadata["estimated_input_tokens"],
+                    )
+                    await db.commit()
+                    runtime_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "[Conversation Snapshot] Untrusted historical background; "
+                                "current user request takes precedence:\n"
+                                + json.dumps(
+                                    {
+                                        **snapshot.summary_json,
+                                        "current_goal": current_message.content[:1000],
+                                        "covers_through_message_id": (
+                                            snapshot.covers_through_message_id
+                                        ),
+                                        "source_transcript_artifact_id": (
+                                            snapshot.source_artifact_id
+                                        ),
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            ),
+                        },
+                        *runtime_messages,
+                    ]
+                    CONTEXT_COMPACTIONS.labels(layer="L3").inc()
+        await _record_hook_observations(
+            run_id,
+            "before_run",
+            HookContext(
+                run_id=run_id,
+                user_id=run.user_id,
+                conversation_id=run.conversation_id,
+                event_type="run.started",
+            ),
+        )
         # 预算指标与元数据（写入 run.runtime_state，不污染用户消息）
         CONTEXT_ESTIMATED_TOKENS.observe(context.metadata["estimated_input_tokens"])
         if context.metadata["omitted_message_count"]:
@@ -220,23 +468,116 @@ async def execute_claimed_run(run_id: str) -> None:
             run_id,
             max_delta_chars=settings.run_delta_merge_chars,
             flush_after_seconds=settings.run_delta_merge_ms / 1000,
-            tool_output_max_bytes=settings.run_tool_output_max_bytes,
+            tool_output_max_bytes=settings.run_tool_output_inline_bytes,
+            artifact_store=LocalArtifactStore(
+                settings.run_artifact_root, settings.run_artifact_retention_hours
+            ),
         )
-        async for event in runtime.stream(runtime_messages, mcp_servers):
-            if event.event_type == "answer.final":
-                final_content = str(event.data.get("content", ""))
-                continue
-            if event.event_type == "tool.finished":
-                proposal = _collect_proposals(event.data, proposals)
-                if proposal is not None:
-                    # 语义事件：前端只依赖这个稳定契约，不解析 MCP 信封
-                    buffer.append(
-                        RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
+        continuation_count = 0
+        tool_started_any = False
+        while True:
+            async for event in _stream_with_context_recovery(
+                run_id,
+                runtime,
+                runtime_messages,
+                mcp_servers,
+                settings,
+                allow_retry=not tool_started_any and continuation_count == 0,
+            ):
+                if event.event_type == "tool.started":
+                    tool_started_any = True
+                if event.event_type == "answer.final":
+                    final_content = str(event.data.get("content", ""))
+                    continue
+                if event.event_type == "tool.finished":
+                    proposal = _collect_proposals(event.data, proposals)
+                    if proposal is not None:
+                        # 语义事件：前端只依赖这个稳定契约，不解析 MCP 信封
+                        buffer.append(
+                            RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
+                        )
+                    try:
+                        semantic_events = (
+                            ToolSemanticAdapter.adapt_tool_result(run_id, event.data)
+                            if settings.workflow_runtime_enabled
+                            else []
+                        )
+                    except SemanticEventError as exc:
+                        buffer.append(event)
+                        buffer.append(
+                            RuntimeEvent(
+                                "semantic.invalid",
+                                {"tool_name": event.data.get("tool_name"), "error": str(exc)},
+                            )
+                        )
+                        raise WorkflowError("SEMANTIC_EVENT_INVALID", str(exc)) from exc
+                    for semantic_event in semantic_events:
+                        async with SessionFactory() as workflow_db:
+                            workflow_run = await workflow_db.get(AgentRun, run_id)
+                            if workflow_run is None:
+                                raise RuntimeError("RUN_NOT_FOUND")
+                            await apply_semantic_event(workflow_db, workflow_run, semantic_event)
+                            workflow, workflow_steps = await get_workflow_for_run(
+                                workflow_db, run_id
+                            )
+                            if workflow is not None:
+                                runtime.workflow_snapshot = workflow_view(workflow, workflow_steps)
+                            await workflow_db.commit()
+                    await _record_hook_observations(
+                        run_id,
+                        "after_tool",
+                        HookContext(
+                            run_id=run_id,
+                            event_type="tool.finished",
+                            tool_name=str(event.data.get("tool_name") or ""),
+                            server_name=event.data.get("server_name"),
+                            call_id=event.data.get("call_id"),
+                            sanitized_output_summary=MappingProxyType(
+                                extract_critical_fields(event.data.get("output"))
+                            ),
+                        ),
                     )
-            buffer.append(event)
-            await buffer.flush_due()
+                buffer.append(event)
+                await buffer.flush_due()
+            await buffer.flush()
+            if not settings.completion_gate_enabled:
+                break
+            gate_decision = await _evaluate_gate(run_id, settings, continuation_count)
+            if gate_decision.action != "continue":
+                break
+            continuation_count += 1
+            COMPLETION_GATE_CONTINUATIONS.inc()
+            await append_event(
+                run_id,
+                RuntimeEvent(
+                    "completion_gate.continuation",
+                    {
+                        "continuation_count": continuation_count,
+                        "reason_code": gate_decision.reason_code,
+                        "required_action": gate_decision.required_action,
+                    },
+                ),
+            )
+            runtime_messages = [
+                *runtime_messages,
+                {
+                    "role": "system",
+                    "content": (
+                        "Completion Gate requires additional structured evidence. "
+                        f"Reason: {gate_decision.reason_code}. "
+                        f"Required action: {gate_decision.required_action}. "
+                        f"Workflow snapshot: {gate_decision.evidence}. "
+                        "Use only the allowed next tool and do not claim success without verification."
+                    ),
+                },
+            ]
         # 终态前强制 flush；assistant 消息与 run.completed 随后写入
         await buffer.flush()
+
+        if gate_decision is not None:
+            final_content = _gate_final_content(gate_decision, final_content)
+            if gate_decision.action == "fail":
+                raise WorkflowError(gate_decision.reason_code, gate_decision.message)
 
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
@@ -273,6 +614,11 @@ async def execute_claimed_run(run_id: str) -> None:
                 if started_at.tzinfo is None:
                     started_at = started_at.replace(tzinfo=timezone.utc)
                 AGENT_RUN_DURATION.observe((utc_now() - started_at).total_seconds())
+        await _record_hook_observations(
+            run_id,
+            "after_run",
+            HookContext(run_id=run_id, event_type="run.completed"),
+        )
     except asyncio.CancelledError:
         # Dispatcher 取消/优雅关闭超时：先落盘已缓冲事件，再写中断终态，供用户重试
         if buffer is not None:
@@ -321,12 +667,13 @@ async def execute_claimed_run(run_id: str) -> None:
             },
         )
         AGENT_RUNS.labels(status="failed").inc()
+        error_code = exc.code if isinstance(exc, WorkflowError) else AGENT_RUN_FAILED
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run:
                 run.status = RunStatus.FAILED
                 run.finished_at = utc_now()
-                run.error_code = AGENT_RUN_FAILED
+                run.error_code = error_code
                 run.error_message = f"{type(exc).__name__}: {exc}"[:1000]
                 db.add(
                     RunEvent(
@@ -334,7 +681,7 @@ async def execute_claimed_run(run_id: str) -> None:
                         event_type="run.failed",
                         data={
                             "error": {
-                                "code": AGENT_RUN_FAILED,
+                                "code": error_code,
                                 "message": "小yi 运行失败",
                                 "retryable": False,
                             }
@@ -342,3 +689,12 @@ async def execute_claimed_run(run_id: str) -> None:
                     )
                 )
                 await db.commit()
+        await _record_hook_observations(
+            run_id,
+            "on_error",
+            HookContext(
+                run_id=run_id,
+                event_type="run.failed",
+                sanitized_output_summary=MappingProxyType({"error_code": error_code}),
+            ),
+        )

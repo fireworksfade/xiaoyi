@@ -592,6 +592,12 @@ export function KnowledgeDialog(props: {
                                 >
                                   {origin.label}
                                 </Badge>
+                                <Badge
+                                  variant="outline"
+                                  className="shrink-0 text-[10px]"
+                                >
+                                  {item.lifecycle_status}
+                                </Badge>
                               </p>
                               <p className="mt-0.5 pl-6 text-xs text-slate-400">
                                 {item.fault_id} · {item.device_id} ·{' '}
@@ -643,6 +649,44 @@ export function KnowledgeDialog(props: {
                                 </dt>
                                 <dd className="inline">
                                   {item.symptoms.join('；') || '—'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="inline text-slate-400">
+                                  可信度：
+                                </dt>
+                                <dd className="inline">
+                                  {(item.reliability_score * 100).toFixed(0)}% ·
+                                  复用 {item.reuse_count} 次（成功{' '}
+                                  {item.success_count} / 失败{' '}
+                                  {item.failure_count}）
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="inline text-slate-400">
+                                  适用范围：
+                                </dt>
+                                <dd className="inline font-mono">
+                                  {Object.keys(item.applicability).length
+                                    ? JSON.stringify(item.applicability)
+                                    : '—'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="inline text-slate-400">
+                                  案例簇：
+                                </dt>
+                                <dd className="inline font-mono">
+                                  {item.cluster_id ?? '—'}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="inline text-slate-400">
+                                  来源：
+                                </dt>
+                                <dd className="inline font-mono">
+                                  {item.source_diagnosis_id ?? '—'} /{' '}
+                                  {item.source_command_id ?? '—'}
                                 </dd>
                               </div>
                               <div>

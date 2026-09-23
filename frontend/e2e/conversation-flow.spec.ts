@@ -123,8 +123,54 @@ test('login, create, stream, rename, refresh recovery, and delete', async ({
         contentType: 'text/event-stream',
         body:
           'event: answer.delta\ndata: {"id":1,"data":{"delta":"诊断完成"}}\n\n' +
-          'event: run.completed\ndata: {"id":2,"data":{}}\n\n',
+          'event: workflow.waiting_verification\ndata: {"id":2,"data":{"current_step":"verify","status":"waiting_verification"}}\n\n' +
+          'event: run.completed\ndata: {"id":3,"data":{}}\n\n',
       });
+    }
+    if (path === '/agent-runs' && method === 'GET') {
+      const items = runConversationId
+        ? [
+            {
+              id: 'run-1',
+              conversation_id: runConversationId,
+              status: 'COMPLETED',
+              final_message_id: 'm-assistant',
+              error: null,
+              created_at: now,
+              updated_at: now,
+            },
+          ]
+        : [];
+      return fulfillJson(
+        route,
+        envelope({ items, page: 1, page_size: 50, total: items.length }),
+      );
+    }
+    if (path === '/agent-runs/run-1/workflow') {
+      return fulfillJson(
+        route,
+        envelope({
+          id: 'workflow-1',
+          agent_run_id: 'run-1',
+          goal: 'remediation',
+          status: 'waiting_verification',
+          outcome: null,
+          current_step: 'verify',
+          device_id: 'ESP32_05',
+          diagnosis_id: 'DIA_TEST',
+          proposal_id: null,
+          command_id: 'CMD_TEST',
+          case_id: null,
+          steps: [
+            { step_key: 'diagnose', status: 'completed', sequence: 1 },
+            { step_key: 'select_action', status: 'completed', sequence: 2 },
+            { step_key: 'approve', status: 'skipped', sequence: 3 },
+            { step_key: 'remediate', status: 'running', sequence: 4 },
+            { step_key: 'verify', status: 'waiting', sequence: 5 },
+            { step_key: 'archive_case', status: 'pending', sequence: 6 },
+          ],
+        }),
+      );
     }
 
     const conversationMatch = path.match(/^\/conversations\/([^/]+)$/);
@@ -175,6 +221,11 @@ test('login, create, stream, rename, refresh recovery, and delete', async ({
   await page.reload();
   await expect(page.getByText('诊断完成')).toBeVisible();
   await expect(page.getByRole('heading', { name: '设备诊断' })).toBeVisible();
+  await page.getByRole('button', { name: '运行记录' }).click();
+  await expect(page.getByText('ESP32_05 · 等待恢复验证')).toBeVisible();
+  await expect(page.getByText('等待中')).toBeVisible();
+  await expect(page.getByRole('link', { name: /artifact/i })).toHaveCount(0);
+  await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: '管理对话：设备诊断' }).click();
   await page.getByRole('menuitem', { name: '删除' }).click();

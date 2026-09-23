@@ -178,6 +178,94 @@ class RunEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class OperationWorkflow(Base):
+    __tablename__ = "operation_workflows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), unique=True, index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    workflow_type: Mapped[str] = mapped_column(String(80), default="iot_remediation_v1")
+    workflow_version: Mapped[int] = mapped_column(Integer, default=1)
+    goal: Mapped[str] = mapped_column(String(24), default="diagnosis")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    outcome: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    current_step: Mapped[str] = mapped_column(String(40), default="diagnose")
+    device_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    diagnosis_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    proposal_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    command_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    case_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    lock_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperationWorkflowStep(Base):
+    __tablename__ = "operation_workflow_steps"
+    __table_args__ = (UniqueConstraint("workflow_id", "step_key", name="uq_workflow_step_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("operation_workflows.id"), index=True)
+    step_key: Mapped[str] = mapped_column(String(40))
+    sequence: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    input_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class OperationWorkflowEvent(Base):
+    __tablename__ = "operation_workflow_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("operation_workflows.id"), index=True)
+    event_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(80))
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class RunArtifact(Base):
+    __tablename__ = "run_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    storage_uri: Mapped[str] = mapped_column(String(1000))
+    content_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    redaction_version: Mapped[str] = mapped_column(String(40), default="v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConversationContextSnapshot(Base):
+    __tablename__ = "conversation_context_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    covers_through_message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id"), unique=True, index=True
+    )
+    summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_artifact_id: Mapped[str] = mapped_column(ForeignKey("run_artifacts.id"))
+    estimated_tokens: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class MCPServer(Base):
     __tablename__ = "mcp_servers"
 

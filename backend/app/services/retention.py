@@ -16,13 +16,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import and_, delete, func, or_, select
 
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import AgentRun, Attachment, RunEvent, RunStatus, Session, utc_now
+from app.models import (
+    AgentRun,
+    Attachment,
+    ConversationContextSnapshot,
+    RunArtifact,
+    RunEvent,
+    RunStatus,
+    Session,
+    utc_now,
+)
 from app.observability.metrics import RETENTION_DELETED
 
 logger = logging.getLogger("xiaoyi.retention")
@@ -173,6 +183,66 @@ async def compact_run_events(
     }
 
 
+async def cleanup_run_artifacts(
+    db,
+    *,
+    root: str,
+    batch_size: int,
+    delete_enabled: bool,
+) -> dict[str, Any]:
+    root_path = Path(root).expanduser().resolve()
+    expired = (RunArtifact.expires_at.is_not(None), RunArtifact.expires_at < utc_now())
+    active_sources = select(ConversationContextSnapshot.source_artifact_id)
+    conditions = (*expired, RunArtifact.id.not_in(active_sources))
+    expired_count = (
+        await db.scalar(select(func.count()).select_from(RunArtifact).where(*expired)) or 0
+    )
+    scanned = await db.scalar(select(func.count()).select_from(RunArtifact).where(*conditions)) or 0
+    size_bytes = (
+        await db.scalar(
+            select(func.coalesce(func.sum(RunArtifact.size_bytes), 0)).where(*conditions)
+        )
+        or 0
+    )
+    deleted = 0
+    if delete_enabled:
+        while True:
+            artifacts = list(
+                (
+                    await db.scalars(
+                        select(RunArtifact)
+                        .where(*conditions)
+                        .order_by(RunArtifact.id)
+                        .limit(batch_size)
+                    )
+                ).all()
+            )
+            if not artifacts:
+                break
+            for artifact in artifacts:
+                path = Path(artifact.storage_uri).resolve()
+                if root_path == path or root_path in path.parents:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.exception(
+                            "artifact deletion failed", extra={"artifact_id": artifact.id}
+                        )
+                        continue
+                await db.delete(artifact)
+                deleted += 1
+            await db.commit()
+            if len(artifacts) < batch_size:
+                break
+    return {
+        "scanned": int(scanned),
+        "protected": int(expired_count - scanned),
+        "deleted": deleted,
+        "size_bytes": int(size_bytes),
+        "dry_run": not delete_enabled,
+    }
+
+
 async def run_retention(*, delete_enabled: bool = False, settings=None) -> dict[str, Any]:
     """执行一轮清理（或 dry-run 统计），返回可序列化报告。"""
     settings = settings or get_settings()
@@ -197,6 +267,12 @@ async def run_retention(*, delete_enabled: bool = False, settings=None) -> dict[
             batch_size=batch_size,
             delete_enabled=delete_enabled,
         )
+        artifacts = await cleanup_run_artifacts(
+            db,
+            root=getattr(settings, "run_artifact_root", "./data/run-artifacts"),
+            batch_size=batch_size,
+            delete_enabled=delete_enabled,
+        )
     if delete_enabled:
         if attachments["deleted"]:
             RETENTION_DELETED.labels(kind="attachments").inc(attachments["deleted"])
@@ -204,7 +280,14 @@ async def run_retention(*, delete_enabled: bool = False, settings=None) -> dict[
             RETENTION_DELETED.labels(kind="sessions").inc(sessions["deleted"])
         if events["deleted"]:
             RETENTION_DELETED.labels(kind="run_events").inc(events["deleted"])
-    return {"attachments": attachments, "sessions": sessions, "run_events": events}
+        if artifacts["deleted"]:
+            RETENTION_DELETED.labels(kind="run_artifacts").inc(artifacts["deleted"])
+    return {
+        "attachments": attachments,
+        "sessions": sessions,
+        "run_events": events,
+        "run_artifacts": artifacts,
+    }
 
 
 async def retention_loop(delete_enabled: bool, interval_hours: int) -> None:
