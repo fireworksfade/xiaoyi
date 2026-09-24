@@ -23,7 +23,6 @@ CAPABILITY_FAULT_CASES = {
     "list_fault_cases",
     "delete_fault_case",
     "add_verified_fault_case",
-    "update_fault_case_lifecycle",
 }
 CAPABILITY_CONTROL_APPROVAL = {"decide_remediation_proposal"}
 

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteAgentRun,
   deleteConversation,
   listConversationMessages,
   streamAgentRun,
+  stopAgentRun,
 } from '@/lib/api';
 
 function jsonResponse(body: unknown, status = 200) {
@@ -80,6 +82,55 @@ describe('api client', () => {
       code: 'CSRF_TOKEN_MISSING',
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('deletes an agent run with the CSRF-protected endpoint', async () => {
+    const fetchSpy = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        expect(url).toContain('/agent-runs/run-1');
+        expect(init?.method).toBe('DELETE');
+        expect(new Headers(init?.headers).get('X-CSRF-Token')).toBe(
+          'test-csrf',
+        );
+        return jsonResponse({ data: { deleted: true, run_id: 'run-1' } });
+      },
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await expect(deleteAgentRun('run-1')).resolves.toEqual({
+      deleted: true,
+      run_id: 'run-1',
+    });
+  });
+
+  it('stops an agent run with the CSRF-protected endpoint', async () => {
+    const fetchSpy = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        expect(url).toContain('/agent-runs/run-1/stop');
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('X-CSRF-Token')).toBe(
+          'test-csrf',
+        );
+        return jsonResponse({ data: { run_id: 'run-1', stopped: true } });
+      },
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    await expect(stopAgentRun('run-1')).resolves.toEqual({
+      run_id: 'run-1',
+      stopped: true,
+    });
   });
 });
 

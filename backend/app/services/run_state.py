@@ -16,9 +16,10 @@ from app.db import SessionFactory
 from app.models import AgentRun, RunEvent, RunStatus, utc_now
 
 # 允许用户重试的错误码（其余失败不自动/不建议重试）
-RETRYABLE_ERROR_CODES = {"RUN_INTERRUPTED"}
+RETRYABLE_ERROR_CODES = {"RUN_INTERRUPTED", "RUN_STOPPED"}
 
 RUN_INTERRUPTED = "RUN_INTERRUPTED"
+RUN_STOPPED = "RUN_STOPPED"
 AGENT_RUN_FAILED = "AGENT_RUN_FAILED"
 
 
@@ -48,6 +49,37 @@ async def claim_queued_run(run_id: str) -> bool:
         )
         await db.commit()
         return result.rowcount > 0
+
+
+async def stop_queued_run(run_id: str) -> bool:
+    """Atomically stop a queued run before the dispatcher can claim it."""
+    async with SessionFactory() as db:
+        result = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(AgentRun)
+                .where(AgentRun.id == run_id, AgentRun.status == RunStatus.QUEUED)
+                .values(
+                    status=RunStatus.FAILED,
+                    finished_at=utc_now(),
+                    error_code=RUN_STOPPED,
+                    error_message="用户已停止运行",
+                    interruption_reason=RUN_STOPPED,
+                )
+            ),
+        )
+        if not result.rowcount:
+            await db.rollback()
+            return False
+        db.add(
+            RunEvent(
+                run_id=run_id,
+                event_type="run.failed",
+                data=failure_payload(RUN_STOPPED, "用户已停止运行", retryable=True),
+            )
+        )
+        await db.commit()
+        return True
 
 
 async def touch_progress(run_id: str, when: datetime | None = None) -> None:

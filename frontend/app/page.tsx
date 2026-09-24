@@ -92,7 +92,13 @@ export default function Home() {
     reset: resetMessages,
     skipAutoScrollRef,
   } = useConversationMessages({ scrollRef });
-  const { running, submit: submitConversationRun } = useConversationRun({
+  const {
+    running,
+    stopping,
+    stopError,
+    stop: stopConversationRun,
+    submit: submitConversationRun,
+  } = useConversationRun({
     conversationId: backendConversationId,
     attachments,
     toolSelection,
@@ -344,15 +350,17 @@ export default function Home() {
           <MessageComposer
             input={input}
             running={running}
+            stopping={stopping}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
-            error={composerError}
+            error={stopError ?? composerError}
             fileInputRef={fileInputRef}
             toolSources={toolSources}
             toolSelection={toolSelection}
             toolMenuOpen={toolMenuOpen}
             onInputChange={setInput}
             onSubmit={() => void submitMessage()}
+            onStop={stopConversationRun}
             onFile={(file) => void uploadDraftAttachment(file)}
             onRemoveAttachment={removeDraftAttachment}
             onToolMenuOpenChange={(open) => {

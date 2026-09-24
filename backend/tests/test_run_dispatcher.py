@@ -7,11 +7,13 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.agent.runtime import RuntimeEvent
 from app.db import SessionFactory
 from app.main import app
 from app.models import AgentRun, Conversation, Message, RunEvent, RunStatus, User, utc_now
 from app.services.run_dispatcher import RunDispatcher
 from app.services.run_state import claim_queued_run
+from app.services.runs import execute_claimed_run
 
 
 async def _make_queued_run() -> AgentRun:
@@ -143,6 +145,94 @@ async def test_stop_grace_timeout_marks_interrupted() -> None:
     assert "RUN_INTERRUPTED" in codes
 
 
+async def test_cancel_queued_run_prevents_execution() -> None:
+    processed: list[str] = []
+
+    async def fake_process(run_id: str) -> None:
+        processed.append(run_id)
+
+    run = await _make_queued_run()
+    dispatcher = RunDispatcher(fake_process, poll_interval_seconds=0.05)
+    assert await dispatcher.cancel(run.id)
+    dispatcher.start()
+    try:
+        await asyncio.sleep(0.15)
+        refreshed = await _get_run(run.id)
+        assert refreshed.status == RunStatus.FAILED
+        assert refreshed.error_code == "RUN_STOPPED"
+        assert processed == []
+    finally:
+        await dispatcher.stop()
+
+
+async def test_cancel_running_run_keeps_dispatcher_available() -> None:
+    started = asyncio.Event()
+    processed: list[str] = []
+
+    async def slow_process(run_id: str) -> None:
+        processed.append(run_id)
+        started.set()
+        await asyncio.sleep(60)
+
+    dispatcher = RunDispatcher(slow_process, poll_interval_seconds=0.05)
+    dispatcher.start()
+    try:
+        run = await _make_queued_run()
+        dispatcher.notify(run.id)
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert await dispatcher.cancel(run.id)
+        refreshed = await _get_run(run.id)
+        assert refreshed.status == RunStatus.FAILED
+        assert refreshed.error_code == "RUN_STOPPED"
+        assert dispatcher.running
+        assert not await dispatcher.cancel(run.id)
+        following = await _make_queued_run()
+        dispatcher.notify(following.id)
+        for _ in range(40):
+            if following.id in processed:
+                break
+            await asyncio.sleep(0.05)
+        assert following.id in processed
+        assert await dispatcher.cancel(following.id)
+        async with SessionFactory() as db:
+            events = list(
+                (await db.scalars(select(RunEvent).where(RunEvent.run_id == run.id))).all()
+            )
+        assert [event.data["error"]["code"] for event in events] == ["RUN_STOPPED"]
+    finally:
+        await dispatcher.stop()
+
+
+async def test_cancel_real_run_flushes_events_and_stops_once(monkeypatch) -> None:
+    started = asyncio.Event()
+
+    class SlowRuntime:
+        async def stream(self, messages, mcp_servers):
+            yield RuntimeEvent("answer.delta", {"delta": "部分回答"})
+            started.set()
+            await asyncio.sleep(60)
+
+    monkeypatch.setattr("app.services.runs.build_runtime", lambda _settings: SlowRuntime())
+    dispatcher = RunDispatcher(execute_claimed_run, poll_interval_seconds=0.05)
+    dispatcher.start()
+    try:
+        run = await _make_queued_run()
+        dispatcher.notify(run.id)
+        await asyncio.wait_for(started.wait(), timeout=3)
+        assert await dispatcher.cancel(run.id)
+        refreshed = await _get_run(run.id)
+        assert refreshed.status == RunStatus.FAILED
+        assert refreshed.error_code == "RUN_STOPPED"
+        async with SessionFactory() as db:
+            events = list(
+                (await db.scalars(select(RunEvent).where(RunEvent.run_id == run.id))).all()
+            )
+        assert sum(event.event_type == "run.failed" for event in events) == 1
+        assert any(event.event_type == "answer.delta" for event in events)
+    finally:
+        await dispatcher.stop()
+
+
 def test_submit_message_runs_via_dispatcher() -> None:
     """API 提交消息后由 Dispatcher 执行到终态（mock runtime）。"""
     with TestClient(app) as client:
@@ -170,6 +260,18 @@ def test_submit_message_runs_via_dispatcher() -> None:
                 break
             time.sleep(0.1)
         assert final_status == "completed"
+
+
+def test_stop_endpoint_requires_auth_and_csrf() -> None:
+    with TestClient(app) as client:
+        path = "/api/v1/agent-runs/missing/stop"
+        assert client.post(path).status_code == 401
+        csrf = client.post(
+            "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+        ).json()["data"]["csrf_token"]
+        assert client.post(path).status_code == 403
+        response = client.post(path, headers={"X-CSRF-Token": csrf})
+        assert response.status_code == 404
 
 
 def test_retry_creates_new_run_and_keeps_original() -> None:

@@ -1,17 +1,38 @@
 # IoT Diagnosis 项目工作状态
 
-更新时间：2026-09-23（Asia/Shanghai）
+更新时间：2026-09-24（Asia/Shanghai）
 
-## 2026-09-23 智能体运行时五项升级（Workflow / Gate / Hooks / Memory 治理 / 上下文压缩）
+## 2026-09-24 停止 Agent 输出与联调验收
 
-- 按 `specs/智能体运行时五项升级 Spec.md` 完成全部五个目标的代码实现与自动化门槛收敛：
+- 前端消息输入区新增停止按钮，调用 `POST /agent-runs/{run_id}/stop`；后端对 queued/running 运行执行取消，写入 `RUN_STOPPED` 可重试终态，SSE 收到 `run.stopped` 后保留已输出内容并结束当前流。
+- 修复 Diagnosis MCP 在迁移 0005 增加字段后写入 fault case 仍使用无列名 `INSERT` 的兼容问题，改为显式列清单；迁移文件与当前数据库版本保持一致。
+- 联调门槛：后端 pytest 118 passed + 1 skipped；MCP pytest 156 passed；前端组件测试 28 passed、浏览器 E2E 通过、lint/typecheck/format/build 通过；真实前端同源代理登录、会话 CRUD、停止/消息 SSE smoke 通过。
+- Compose 全部服务健康，Diagnosis MCP readiness 正常，outbox pending=0。
+
+## 2026-09-24 历史命令查询误推进当前工作流修复
+
+- 用户截图对应 Run `c86f310f-6440-4039-8c35-d5ba9bf5c3b1` 失败码 `REQUIRED_EVIDENCE_MISSING`：本轮仅查询历史 `get_action_result`，却被当作当前工作流验证事件；无本轮诊断时误抛“diagnosis must complete first”。
+- `apply_semantic_event` 现仅允许已绑定的本轮 `command_id` 接收验证更新；历史命令只读查询不会创建或推进工作流。关联设备、诊断 ID 和命令 ID 的强制校验仍适用于真正绑定的命令。前端 `run.failed` 改为显示运行错误与稳定码，并将未完成的工具标为“未完成”，不再误称连接后端失败。
+- 回归覆盖无工作流、有诊断但未绑定命令、已绑定其他命令，以及本轮命令仍可正常完成。后端 Ruff/format/mypy、pytest 116 passed + 1 skipped；前端 lint/format/typecheck、23 项组件测试、1 项 E2E、production build 全部通过。
+- 后端镜像已重建并健康。真实 API 只读查询历史命令 `CMD_20260923_BFAE27A5`：Run `7c8cdfee-b142-45a2-a45c-6e603ac022d9` completed，`get_action_result` 成功 1 次，工作流数量 0；测试对话已清理。此前重复诊断导致的 `WORKFLOW_STATE_CONFLICT` 仍按 AC11 作为关联保护拒绝。
+
+## 2026-09-24 智能体运行时五项升级 Spec 收尾验收
+
+- `specs/智能体运行时五项升级 Spec.md` 状态由 Draft 更新为 Accepted，AC1–AC29 的证据矩阵写入 §20。
+- 修复后端 `test_artifacts.py` 跨测试模块导入导致独立 pytest 收集失败；前端工作流刷新恢复和错误文案由 API、组件测试和浏览器 E2E 覆盖。
+- 当前完整门槛：后端、MCP 和前端的 lint、类型检查、单元测试、E2E 与 production build 均通过。
+- Diagnosis MCP 已用当前源码重建并恢复 healthy；服务 readiness 正常，outbox pending=0。
+- 七天十二节点耐久观察仍归系统可靠性规格的独立时间型验收，不属于本 Spec 的 AC1–AC29。
+
+## 2026-09-23 智能体运行时四项升级（Workflow / Gate / Hooks / 上下文压缩）
+
+- 按 `specs/智能体运行时五项升级 Spec.md` 完成四个目标的代码实现与自动化门槛收敛：
   - **G1 Workflow Runtime**：新增 `operation_workflows` + `operation_workflow_steps`（迁移 0004，乐观锁 `lock_version`、关联 ID 不可变覆盖保护、终态不可回退）；`services/workflows.py` 消费 `agent/tool_semantics.py` 产出的稳定语义事件（`diagnosis.completed`、`remediation.*`、`case.archive_updated`）推进固定步骤 diagnose → select_action → approve → remediate → verify → archive_case；同一 Run 单设备单工作流（`WORKFLOW_MULTI_DEVICE_UNSUPPORTED`）；诊断型目标完成即收敛 `diagnosed`；审批 REST 端点经同一语义适配器幂等同步，`waiting_approval`/`waiting_verification` 重启不丢；新增 `GET /agent-runs/{run_id}/workflow`、`GET /operation-workflows/{id}`（所有权校验）与 SSE `workflow.*` 事件，前端 `use-conversation-run` 消费后展示阶段进度。
   - **G2 Completion Gate**：`services/completion_gate.py` 纯结构化证据判定（判定表覆盖非工作流/诊断完成/待审批/拒绝过期/验证成功含 archive pending/业务失败/状态冲突/能力缺失），reason codes 与 Spec §7.5 一致；`services/runs.py` 集成有界续轮（默认 2 次，超限转 `PASS_HANDOFF`），Gate 决策写入 RunEvent 与 metrics（`xiaoyi_completion_gate_decisions_total` 等）；模型文本不作为完成证据。
   - **G3 Lifecycle Hooks**：`agent/lifecycle.py` 静态注册 `before_run/after_tool/after_gate/after_run/on_error` 五个扩展点，固定顺序串行、500ms 超时、`HookObservation` 只观测不改控制流、单 Hook 失败只记 `hook.failed` 不回滚已提交终态；权限、审批、`diagnosis_id` 关联校验、状态迁移与 Gate 全部保留在显式主流程。
-  - **G4 领域 Memory 治理**（MCP 独立仓库）：迁移 `0005_fault_case_memory_governance.py` + MySQL `0002` 为 `fault_case` 补 lifecycle_status/fault_signature/cluster_id/applicability/reuse/success/failure/reliability_score 等治理字段（存量 verified=1 平迁 lifecycle `verified`）；新增 `fault_case_feedback`（`(fault_id, command_id)` 唯一，MQTT 重放不重复计数）；诊断输出新增 `supporting_case_ids` 白名单归因，只有明确采用的案例接收成功/失败反馈；Laplace 平滑 reliability + trusted 自动升级门槛（≥3 成功、≥0.8、失败率 ≤0.2）与只降不升的自动降级；检索过滤 invalid/deprecated 并按 cluster 多样化，治理信号只做过滤/tie-break 不与 raw score 相加。
-  - **G5 可恢复上下文压缩**：迁移 0005 新增 `run_artifacts` + `conversation_context_snapshots`；`services/artifacts.py` 提供 `LocalArtifactStore`（路径服务端生成 + 防穿越校验 + secret sanitizer + SHA-256）；超 `RUN_TOOL_OUTPUT_INLINE_BYTES` 的工具输出先脱敏完整归档再在 RunEvent/模型上下文留摘要 + artifact 引用 + 关键结构字段（L1）；`agent/runtime.py` 经模型输入过滤实现 L2 分层压缩并注入工作流快照，保护 tool call/result 配对；`services/context_compactor.py` 结构化保护层；保留策略纳入 retention dry-run 与删除指标。
-- 配置：`WORKFLOW_RUNTIME_ENABLED`/`COMPLETION_GATE_*`/`RUN_ARTIFACT_*`/`CONTEXT_*` 与 `FAULT_CASE_*` 均落入 `.env.example` 与 compose（artifact 目录位于 backend-data 持久化卷）。
-- 验证（AC34-AC36）：后端 ruff/format/mypy 通过、pytest 113 passed + 1 skipped（新增 `test_workflow_runtime.py`、`test_artifacts.py` 与迁移快照）；MCP ruff/format/mypy 通过、pytest 161 passed（新增 `test_fault_case_memory.py`）；前端 oxlint/oxfmt/typecheck 通过、组件测试 22 passed、Playwright E2E 1 passed、production build 通过。
+  - **G4 可恢复上下文压缩**：迁移 0005 新增 `run_artifacts` + `conversation_context_snapshots`；`services/artifacts.py` 提供 `LocalArtifactStore`（路径服务端生成 + 防穿越校验 + secret sanitizer + SHA-256）；超 `RUN_TOOL_OUTPUT_INLINE_BYTES` 的工具输出先脱敏完整归档再在 RunEvent/模型上下文留摘要 + artifact 引用 + 关键结构字段（L1）；`agent/runtime.py` 经模型输入过滤实现 L2 分层压缩并注入工作流快照，保护 tool call/result 配对；`services/context_compactor.py` 结构化保护层；保留策略纳入 retention dry-run 与删除指标。
+- 配置：`WORKFLOW_RUNTIME_ENABLED`/`COMPLETION_GATE_*`/`RUN_ARTIFACT_*`/`CONTEXT_*` 落入 `.env.example` 与 compose（artifact 目录位于 backend-data 持久化卷）。
+- 验证：后端、MCP 和前端的 lint、类型检查、单元测试、E2E 与 production build 通过。
 - 已提交主仓库与 MCP 仓库；根 `.gitignore` 新增忽略本地 `output/`、`tmp/`（个人材料）。
 - 在线 Compose 验收（AC37，Portable 档位、真实 LLM）发现并修复三处问题后全链路通过：
   - **修复 1（MCP 超时）**：外部模型当日变慢（diagnose_fault 实测 50s），后端 Agent 侧 MCP 客户端写死 15s 全部超时。改为可配置 `MCP_AGENT_TIMEOUT_SECONDS`（默认不变 15s，compose 设 90s），历史遗留的延迟敏感问题，非本次升级引入。
@@ -19,11 +40,10 @@
   - **修复 3（冗余事件幂等）**：模型在等待验证/完成后重复 `diagnose_fault`（同设备）或重复轮询 `get_action_result`（同命令状态细化）会触发 `WORKFLOW_STATE_CONFLICT` 使 AgentRun 失败。按 §6.6 幂等精神改为无副作用忽略；跨设备（AC2）、异命令推进终态仍硬失败。回归测试 4 条。
 - AC37 smoke 六场景（真实 API + 真实模型）：
   1. 诊断型：workflow 创建唯一、diagnose 带证据（DIA_20260923_623BF300，置信 0.99），余步 `diagnosis_goal` 跳过，`diagnosed` 收敛；
-  2. 低风险：`reconnect_mqtt` 执行 → 验证 succeeded → 案例 `F3FEE5D5B` 自动归档（lifecycle=verified、fault_signature、cluster_id、source_* 全齐）；诊断 `supporting_case_ids=['F3215CFC4']` 白名单归因 → 反馈 1 条 succeeded，reliability 0.667（Laplace），last_used/last_success 更新；
+  2. 低风险：`reconnect_mqtt` 执行 → 验证 succeeded → 案例自动归档 → 工作流完成；
   3. 高风险：`update_firmware` 提案 `RPR_20260923_BCBC983B` → `waiting_approval`（AgentRun 完成、不占线程）→ admin REST+CSRF 批准 → 原工作流推进（无第二工作流）→ 验证成功 → 案例 `F24F7EA84` 归档 → `remediated_verified`；
   4. 大输出归档：临时 inline=512 触发 L1，10 个工具输出归档（最大 4199B），RunEvent 结构含 truncated/artifact_id/original_bytes/sha256/summary/critical_fields（§10.5），文件 SHA-256 与大小实测一致且路径均在配置根内；
-  5. 案例治理：案例 14→17、`fault_case_feedback` 3 条 succeeded、outbox pending=0（SQLite/MySQL/Qdrant 一致）；
-  6. SSE `workflow.*` 事件、Gate 决策事件与 reason codes 全部落 RunEvent。
+  5. SSE `workflow.*` 事件、Gate 决策事件与 reason codes 全部落 RunEvent。
 - AC38 演练：`WORKFLOW_RUNTIME_ENABLED/COMPLETION_GATE_ENABLED=false` 后新诊断请求恢复旧行为（不建工作流）、既有工作流只读可查、conversations/agent_runs/workflows/案例数量无损、未回滚 schema；恢复开关后行为如常。演练中的 `WORKFLOW_MULTI_DEVICE_UNSUPPORTED`（模型跨设备）与终态保护均按设计硬失败。
 - 待办：无阻塞项；时间型验收（7 天耐久）按既有节奏继续。
 

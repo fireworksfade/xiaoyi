@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -9,7 +10,17 @@ from app.agent.runtime import RuntimeEvent
 from app.agent.tool_semantics import ToolSemanticAdapter
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import AgentRun, ConversationContextSnapshot, Message, RunArtifact, utc_now
+from app.models import (
+    AgentRun,
+    Conversation,
+    ConversationContextSnapshot,
+    Message,
+    RunArtifact,
+    RunStatus,
+    User,
+    UserRole,
+    utc_now,
+)
 from app.services.artifacts import LocalArtifactStore, extract_critical_fields, sanitize_artifact
 from app.services.context_compactor import (
     compact_model_input,
@@ -20,7 +31,30 @@ from app.services.retention import cleanup_run_artifacts
 from app.services.run_event_buffer import RunEventBuffer
 from app.services.runs import _stream_with_context_recovery
 from app.services.workflows import WorkflowError
-from tests.test_run_event_buffer import _seed_run
+
+
+async def _seed_run() -> str:
+    async with SessionFactory() as db:
+        user = User(
+            username=f"artifact-{uuid.uuid4().hex[:10]}", password_hash="x", role=UserRole.ADMIN
+        )
+        db.add(user)
+        await db.flush()
+        conversation = Conversation(user_id=user.id, title="归档测试")
+        db.add(conversation)
+        await db.flush()
+        message = Message(conversation_id=conversation.id, role="user", content="hi")
+        db.add(message)
+        await db.flush()
+        run = AgentRun(
+            user_id=user.id,
+            conversation_id=conversation.id,
+            user_message_id=message.id,
+            status=RunStatus.RUNNING,
+        )
+        db.add(run)
+        await db.commit()
+        return run.id
 
 
 def test_sanitizer_redacts_nested_credentials() -> None:

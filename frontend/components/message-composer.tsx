@@ -7,6 +7,7 @@ import {
   FileText,
   Loader2,
   Paperclip,
+  Square,
   Wrench,
   X,
 } from 'lucide-react';
@@ -27,6 +28,7 @@ import type { ToolSource, UploadedAttachment } from '@/lib/api';
 type MessageComposerProps = {
   input: string;
   running: boolean;
+  stopping: boolean;
   attachments: UploadedAttachment[];
   attachmentBusy: boolean;
   error: string | null;
@@ -36,6 +38,7 @@ type MessageComposerProps = {
   toolMenuOpen: boolean;
   onInputChange: (value: string) => void;
   onSubmit: () => void;
+  onStop: () => void;
   onFile: (file: File) => void;
   onRemoveAttachment: (attachment: UploadedAttachment) => void;
   onToolMenuOpenChange: (open: boolean) => void;
@@ -45,6 +48,7 @@ type MessageComposerProps = {
 export function MessageComposer({
   input,
   running,
+  stopping,
   attachments,
   attachmentBusy,
   error,
@@ -54,6 +58,7 @@ export function MessageComposer({
   toolMenuOpen,
   onInputChange,
   onSubmit,
+  onStop,
   onFile,
   onRemoveAttachment,
   onToolMenuOpenChange,
@@ -189,15 +194,30 @@ export function MessageComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!input.trim() || running}
-              className="size-8 rounded-md bg-slate-900 text-white hover:bg-slate-700"
-            >
-              <ArrowUp />
-              <span className="sr-only">发送消息</span>
-            </Button>
+            {running ? (
+              <Button
+                type="button"
+                size="icon"
+                disabled={stopping}
+                onClick={onStop}
+                className="size-8 rounded-md bg-slate-900 text-white hover:bg-slate-700"
+              >
+                {stopping ? <Loader2 className="animate-spin" /> : <Square />}
+                <span className="sr-only">
+                  {stopping ? '正在停止' : '停止生成'}
+                </span>
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!input.trim()}
+                className="size-8 rounded-md bg-slate-900 text-white hover:bg-slate-700"
+              >
+                <ArrowUp />
+                <span className="sr-only">发送消息</span>
+              </Button>
+            )}
           </div>
         </div>
         {error ? (

@@ -32,6 +32,7 @@ ERROR_CLASSES: dict[str, ErrorClass] = {
     ),
     # 任务中断：可由用户重试
     "RUN_INTERRUPTED": ErrorClass("RUN_INTERRUPTED", 409, "运行被取消，可重试", True, "warning"),
+    "RUN_STOPPED": ErrorClass("RUN_STOPPED", 409, "用户已停止运行", True, "info"),
     # 数据库 schema 不兼容：运维处理后重试
     "DATABASE_SCHEMA_BEHIND": ErrorClass(
         "DATABASE_SCHEMA_BEHIND", 503, "数据库版本落后，请先执行迁移", False, "error"

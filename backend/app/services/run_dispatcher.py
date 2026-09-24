@@ -20,9 +20,11 @@ from app.models import AgentRun, RunStatus
 from app.services.run_state import (
     AGENT_RUN_FAILED,
     RUN_INTERRUPTED,
+    RUN_STOPPED,
     append_failure_event,
     claim_queued_run,
     mark_finished,
+    stop_queued_run,
 )
 
 logger = logging.getLogger("xiaoyi.run_dispatcher")
@@ -42,6 +44,7 @@ class RunDispatcher:
         self._notify_queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
         self._current_task: asyncio.Task | None = None
+        self._current_run_id: str | None = None
         self._stopping = False
         self._running = False
 
@@ -90,6 +93,17 @@ class RunDispatcher:
         if not self._stopping:
             self._notify_queue.put_nowait(run_id)
 
+    async def cancel(self, run_id: str) -> bool:
+        """Stop a queued or currently executing run; return false if already terminal."""
+        if await stop_queued_run(run_id):
+            return True
+        current = self._current_task
+        if self._current_run_id != run_id or current is None or current.done():
+            return False
+        current.cancel(RUN_STOPPED)
+        await asyncio.gather(current, return_exceptions=True)
+        return True
+
     async def _worker(self) -> None:
         while not self._stopping:
             try:
@@ -124,11 +138,16 @@ class RunDispatcher:
         run_id = await self._next_queued_run()
         if run_id is None:
             return
-        self._current_task = asyncio.create_task(self._execute(run_id))
+        self._current_run_id = run_id
+        task = asyncio.create_task(self._execute(run_id))
+        self._current_task = task
         try:
-            await self._current_task
+            await asyncio.gather(task, return_exceptions=True)
         finally:
+            if task.cancelled() and not self._stopping:
+                await _finalize_cancelled(run_id, RUN_STOPPED)
             self._current_task = None
+            self._current_run_id = None
 
     async def _next_queued_run(self) -> str | None:
         async with SessionFactory() as db:
@@ -146,8 +165,9 @@ class RunDispatcher:
         logger.info("run started", extra={"event": "run_started", "run_id": run_id})
         try:
             await self._process_run(run_id)
-        except asyncio.CancelledError:
-            await _finalize_cancelled(run_id)
+        except asyncio.CancelledError as exc:
+            code = RUN_STOPPED if RUN_STOPPED in exc.args else RUN_INTERRUPTED
+            await _finalize_cancelled(run_id, code)
             raise
         except Exception as exc:
             code = getattr(exc, "error_code", None) or AGENT_RUN_FAILED
@@ -161,17 +181,18 @@ class RunDispatcher:
             )
 
 
-async def _finalize_cancelled(run_id: str) -> None:
+async def _finalize_cancelled(run_id: str, code: str = RUN_INTERRUPTED) -> None:
     """仅在处理函数未收敛终态时补写中断终态，避免重复 run.failed 事件。"""
     async with SessionFactory() as db:
         status = await db.scalar(select(AgentRun.status).where(AgentRun.id == run_id))
     if status in {RunStatus.COMPLETED, RunStatus.FAILED}:
         return
-    await append_failure_event(run_id, RUN_INTERRUPTED, "运行被取消，可重试", retryable=True)
+    message = "用户已停止运行" if code == RUN_STOPPED else "运行被取消，可重试"
+    await append_failure_event(run_id, code, message, retryable=True)
     await mark_finished(
         run_id,
         status=RunStatus.FAILED,
-        error_code=RUN_INTERRUPTED,
-        error_message="运行被取消，可重试",
-        interruption_reason=RUN_INTERRUPTED,
+        error_code=code,
+        error_message=message,
+        interruption_reason=code,
     )

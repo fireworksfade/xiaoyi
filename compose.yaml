@@ -75,9 +75,6 @@ services:
       MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
-      FAULT_CASE_TRUST_MIN_SUCCESSES: "3"
-      FAULT_CASE_TRUST_MIN_RELIABILITY: "0.8"
-      FAULT_CASE_CLUSTER_DIVERSITY: "true"
     volumes:
       - diagnosis-data:/app/data
       - ./mcp-services/common:/app/common:ro

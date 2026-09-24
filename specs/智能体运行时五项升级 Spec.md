@@ -1,8 +1,8 @@
 # 智能体运行时五项升级 Spec
 
 版本：v1.0  
-状态：Draft  
-更新时间：2026-09-22（Asia/Shanghai）
+状态：Accepted
+更新时间：2026-09-24（Asia/Shanghai）
 
 ## 1. 背景
 
@@ -102,29 +102,7 @@ Hooks 主要用于：
 
 权限、审批、工具授权、`diagnosis_id` 关联校验、状态迁移和 Completion Gate 必须保留为显式主流程或强制策略，不得依赖可选 Hook。
 
-### G4. 自动案例沉淀后的领域 Memory 治理
-
-保留现有自动沉淀链路：
-
-```text
-恢复验证成功
-  → remediation 事件
-  → 关联明确 diagnosis_id
-  → 写入 verified 故障案例
-  → SQLite / MySQL / Qdrant 同步
-```
-
-在此基础上新增：
-
-- 案例适用范围；
-- 规范化故障签名和相似案例聚类；
-- 实际复用成功/失败反馈；
-- 可信度与生命周期状态；
-- 过期、失效和人工废弃；
-- 检索阶段的兼容性过滤和多样化；
-- 全链路幂等和审计。
-
-### G5. 可恢复的上下文压缩
+### G4. 可恢复的上下文压缩
 
 将现有“超限后省略”升级为分层、可恢复的压缩管线：
 
@@ -181,12 +159,11 @@ Hooks 主要用于：
 4. 没有 `verify_status=succeeded`，不得宣称修复成功。
 5. 模型文本不是状态迁移证据；只有经过校验的工具结果、数据库记录和领域事件可以作为证据。
 6. 自动沉淀案例必须来自明确关联、验证成功的修复事件。
-7. 案例复用反馈必须能够追溯到唯一诊断和唯一命令，重复事件不得重复计数。
-8. Completion Gate 不得隐藏失败；业务失败允许生成诚实的最终答复，但不得伪装为恢复成功。
-9. Hook 不得绕过工具权限、审批、关联校验或数据库事务。
-10. 上下文压缩不得破坏 tool call / tool result 配对，不得丢失当前用户请求和安全约束。
-11. 归档前必须先执行脱敏；Artifact 不保存 API Key、Authorization Header、Cookie 或 Session Token。
-12. 新表和新字段必须通过版本化迁移创建，禁止运行时动态补丁。
+7. Completion Gate 不得隐藏失败；业务失败允许生成诚实的最终答复，但不得伪装为恢复成功。
+8. Hook 不得绕过工具权限、审批、关联校验或数据库事务。
+9. 上下文压缩不得破坏 tool call / tool result 配对，不得丢失当前用户请求和安全约束。
+10. 归档前必须先执行脱敏；Artifact 不保存 API Key、Authorization Header、Cookie 或 Session Token。
+11. 新表和新字段必须通过版本化迁移创建，禁止运行时动态补丁。
 
 ## 5. Target Architecture
 
@@ -226,10 +203,6 @@ Recovery succeeded
        │
        ▼
 Automatic verified case write
-       │
-       ▼
-Memory governance
-applicability / cluster / feedback / confidence / lifecycle
 ```
 
 ## 6. G1：Workflow Runtime 详细设计
@@ -616,191 +589,7 @@ tool result
 
 因此 Hook 失败不会造成工具已执行但工作流状态未更新。
 
-## 9. G4：领域 Memory 治理详细设计
-
-### 9.1 与自动沉淀案例的关系
-
-自动沉淀案例继续作为唯一自动写入入口之一。本次不重做写入闭环，而是补齐：
-
-```text
-写入 verified 案例
-  → 生成 fault_signature
-  → 分配 case_cluster
-  → 检索时按适用范围过滤
-  → 诊断显式记录 supporting_case_ids
-  → 修复结果回写复用反馈
-  → 更新可信度和生命周期
-```
-
-恢复验证成功自动生成的案例直接进入 `verified`，不降级为 `candidate`。`candidate` 仅保留给未来未经闭环验证的导入来源，本轮不自动创建 candidate。
-
-### 9.2 案例生命周期
-
-```text
-candidate → verified → trusted
-                   ↘ deprecated
-                   ↘ invalid
-```
-
-规则：
-
-- `verified`：至少一次与明确诊断关联的恢复验证成功；
-- `trusted`：满足最小复用次数和成功率门槛；默认至少 3 次独立成功、失败率不高于 20%；
-- `deprecated`：适用固件、硬件或配置已过期，默认不进入普通召回；
-- `invalid`：案例被证明错误或存在安全问题，禁止进入检索上下文；
-- 自动规则可以提出状态建议，但 `deprecated` 和 `invalid` 的人工恢复、删除仍要求 approval_required；
-- 原始案例不因聚类被物理合并或删除。
-
-### 9.3 数据模型
-
-Diagnosis MCP 新增迁移 `0005_fault_case_memory_governance.py`。
-
-`fault_case` 新增：
-
-```text
-lifecycle_status       candidate | verified | trusted | deprecated | invalid
-fault_signature        stable string, indexed
-cluster_id             nullable string, indexed
-applicability_json     JSON text
-source_diagnosis_id    nullable string, indexed
-source_command_id      nullable string, unique where not null
-reuse_count            integer default 0
-success_count          integer default 0
-failure_count          integer default 0
-reliability_score      real default 0.5
-last_used_at           nullable timestamp
-last_success_at        nullable timestamp
-last_failure_at        nullable timestamp
-deprecated_reason      nullable text
-```
-
-兼容规则：
-
-- 现有 `verified` 字段暂时保留；
-- `lifecycle_status in ('verified','trusted')` 时 `verified=1`；
-- 存量 `verified=1` 案例迁移为 `lifecycle_status='verified'`；
-- MySQL 镜像和 Qdrant payload 同步新增治理字段；
-- Qdrant payload 变更后必须提供批量 rebuild 路径。
-
-新增 `fault_case_feedback`：
-
-```text
-feedback_id            UUID PK
-fault_id               FK fault_case.fault_id
-diagnosis_id           string
-command_id             string
-device_id              string
-outcome                succeeded | failed | inconclusive
-evidence_json          JSON text
-created_at             timestamp
-```
-
-唯一约束：`(fault_id, command_id)`，保证 MQTT 重放和重试不重复计数。
-
-### 9.4 Fault Signature 与聚类
-
-`fault_signature` 必须由确定性规范化器生成，输入至少包括：
-
-- `device_type`；
-- `fault_type`；
-- 规范化 fault name；
-- 日志错误码和关键 token；
-- 根因类别；
-- 已执行动作。
-
-禁止只按 `fault_name` 去重。
-
-`cluster_id` 表示相似案例组：
-
-- 首版采用确定性 signature 前缀/关键错误码规则；
-- 可使用现有 embedding 辅助离线提出候选，但不得在无阈值、无审计的情况下自动合并原始案例；
-- 检索结果默认每个 cluster 最多返回一条，除非调用方显式要求展开。
-
-### 9.5 Supporting Case Attribution
-
-只有“被诊断明确采用”的案例才接收后续成功/失败反馈。
-
-Diagnosis 输出新增：
-
-```text
-supporting_case_ids: [fault_id]
-```
-
-要求：
-
-- ID 必须来自本次检索上下文；
-- LLM 输出不存在或无效时，不得猜测全部召回案例均被使用；
-- heuristic fallback 可以选择规则明确命中的单个案例，否则为空；
-- `diagnosis_record.result_json` 保存该列表；
-- remediation 事件通过 `diagnosis_id` 解析 supporting cases，再写反馈；
-- 没有 supporting cases 不影响新案例自动沉淀。
-
-### 9.6 反馈与可信度
-
-恢复验证结果产生反馈：
-
-- `verify_status=succeeded` → supporting case 写 `succeeded`；
-- 明确执行失败或恢复验证失败 → 写 `failed`；
-- 用户取消、提案拒绝、能力不可用 → `inconclusive`，不计成功率；
-- 每条反馈保存命令、设备和证据摘要。
-
-聚合：
-
-```text
-reuse_count = succeeded + failed + inconclusive
-reliability_score = (success_count + 1) / (success_count + failure_count + 2)
-```
-
-该分数使用 Laplace 平滑，取值 `[0,1]`。`inconclusive` 不进入分母，但保留复用记录。
-
-自动升级 `trusted` 必须同时满足：
-
-```text
-success_count >= 3
-reliability_score >= 0.8
-failure_count / max(success_count + failure_count, 1) <= 0.2
-```
-
-自动降级只允许从 `trusted → verified`。自动标记 `invalid` 被禁止；连续失败达到阈值时生成审计告警和人工复核建议。
-
-### 9.7 检索策略
-
-检索按以下顺序处理：
-
-1. 排除 `invalid`；
-2. 默认排除 `deprecated`，调试或审计模式可显式包含；
-3. 根据 `device_type`、固件和 applicability 做兼容性分层；
-4. 继续使用现有 Dense / lexical / RRF / Reranker；
-5. 按 cluster 做结果多样化；
-6. 在相关性接近时，以 `trusted > verified > candidate`、较高可靠性和较新成功时间作为稳定 tie-break。
-
-禁止把 embedding raw score、BM25 raw score、reliability_score 直接相加。治理信号采用过滤、分层和 tie-break，不破坏现有 RRF/Reranker 分数语义。
-
-### 9.8 管理 API 与 UI
-
-现有案例列表增加筛选：
-
-```text
-lifecycle_status
-cluster_id
-device_type
-fault_type
-min_reliability
-```
-
-案例详情展示：
-
-- 来源诊断和命令；
-- 适用范围；
-- 生命周期状态；
-- 复用次数、成功/失败次数；
-- reliability score；
-- 最近使用和失败原因；
-- 同 cluster 案例。
-
-状态修改、删除继续要求管理员、CSRF、approval_required MCP 工具和审计日志。
-
-## 10. G5：可恢复上下文压缩详细设计
+## 9. G4：可恢复上下文压缩详细设计
 
 ### 10.1 当前链路的升级边界
 
@@ -951,7 +740,7 @@ created_at                datetime
 
 现有消费者忽略新增字段后仍能工作。
 
-## 11. 配置
+## 10. 配置
 
 新增建议配置：
 
@@ -961,10 +750,6 @@ WORKFLOW_VERSION=1
 COMPLETION_GATE_ENABLED=true
 COMPLETION_GATE_MAX_CONTINUATIONS=2
 HOOK_TIMEOUT_MS=500
-
-FAULT_CASE_TRUST_MIN_SUCCESSES=3
-FAULT_CASE_TRUST_MIN_RELIABILITY=0.8
-FAULT_CASE_CLUSTER_DIVERSITY=true
 
 RUN_TOOL_OUTPUT_INLINE_BYTES=65536
 RUN_ARTIFACT_ROOT=./data/run-artifacts
@@ -976,7 +761,7 @@ CONTEXT_REACTIVE_COMPACTION_RETRIES=1
 
 生产环境要求 `RUN_ARTIFACT_ROOT` 位于持久化卷，不得使用临时容器文件系统。
 
-## 12. 可观测性
+## 11. 可观测性
 
 新增结构化事件：
 
@@ -987,9 +772,6 @@ workflow_conflict
 completion_gate_decision
 completion_gate_continuation
 hook_failed
-case_feedback_recorded
-case_lifecycle_changed
-case_cluster_assigned
 context_artifact_written
 context_compacted
 context_reactive_compaction
@@ -1003,8 +785,6 @@ xiaoyi_workflow_step_duration_seconds{step}
 xiaoyi_completion_gate_decisions_total{action,reason_code}
 xiaoyi_completion_gate_continuations_total
 xiaoyi_hook_failures_total{hook,event}
-xiaoyi_fault_case_feedback_total{outcome}
-xiaoyi_fault_case_lifecycle_total{status}
 xiaoyi_context_compactions_total{layer}
 xiaoyi_context_artifact_bytes_total{kind}
 xiaoyi_context_reactive_failures_total
@@ -1012,7 +792,7 @@ xiaoyi_context_reactive_failures_total
 
 日志不得包含密钥、Cookie、完整附件和未脱敏工具原文。
 
-## 13. 安全要求
+## 12. 安全要求
 
 1. Workflow 不新增工具权限，只能消费当前用户已经获准的 MCP 工具。
 2. 工作流状态不能将 `proposal_only` 升级成可执行权限。
@@ -1023,9 +803,9 @@ xiaoyi_context_reactive_failures_total
 7. Artifact 持久化前执行脱敏，写入后使用 SHA-256 校验完整性。
 8. Artifact 路径不得由 MCP、模型或用户直接指定。
 9. Context Snapshot 被视为不可信背景数据，不得覆盖当前用户请求或 system policy。
-10. 案例状态变更和删除必须保留现有审批与审计边界。
+10. 案例删除必须保留现有审批与审计边界。
 
-## 14. 迁移与兼容
+## 13. 迁移与兼容
 
 ### 14.1 后端
 
@@ -1042,22 +822,7 @@ xiaoyi_context_reactive_failures_total
 - 新 RunEvent 类型对旧前端保持向后兼容；
 - 不修改现有 `RunStatus` 枚举。
 
-### 14.2 Diagnosis MCP
-
-新增：
-
-```text
-0005_fault_case_memory_governance.py
-```
-
-- SQLite 为事实源；
-- 同步升级 MySQL schema；
-- Qdrant payload 通过 rebuild 更新；
-- 存量 verified 案例迁移为 lifecycle `verified`；
-- 原 `list_fault_cases`、`search_fault_cases` 默认只返回可用案例，响应新增字段但不删除旧字段；
-- 原 `verified` 字段至少保留一个兼容发布周期。
-
-## 15. 实施阶段
+## 14. 实施阶段
 
 ### Phase 1：语义事件与轻量 Hooks
 
@@ -1079,15 +844,7 @@ xiaoyi_context_reactive_failures_total
 - 增加有界 continuation；
 - 覆盖 diagnosis、低风险、高风险、拒绝和失败路径。
 
-### Phase 4：领域 Memory 治理
-
-- 扩展案例 schema；
-- fault signature、cluster、多样化；
-- supporting case attribution；
-- 反馈回写和可信度更新；
-- 管理 UI。
-
-### Phase 5：可恢复上下文压缩
+### Phase 4：可恢复上下文压缩
 
 - Artifact Store 和脱敏；
 - RunEventBuffer 先归档后摘要；
@@ -1097,7 +854,7 @@ xiaoyi_context_reactive_failures_total
 
 每个 Phase 必须独立可发布、可关闭；不得要求五项全部完成后系统才能运行。
 
-## 16. 测试计划
+## 15. 测试计划
 
 ### 16.1 后端单元测试
 
@@ -1114,14 +871,6 @@ xiaoyi_context_reactive_failures_total
 ### 16.2 MCP 单元测试
 
 - 自动沉淀仍直接生成 verified 案例；
-- 存量案例迁移；
-- fault signature 稳定性；
-- cluster 多样化；
-- supporting_case_ids 白名单校验；
-- feedback 幂等；
-- reliability 聚合；
-- trusted 自动升级和失败后降级；
-- deprecated/invalid 检索过滤；
 - SQLite/MySQL/Qdrant 同步和 outbox 恢复。
 
 ### 16.3 集成测试
@@ -1143,10 +892,9 @@ xiaoyi_context_reactive_failures_total
 - 刷新页面后恢复阶段状态；
 - 审批卡与工作流状态一致；
 - 失败、等待和完成使用不同文案；
-- 案例详情显示可信度和适用范围；
 - 普通用户看不到 Artifact 路径和敏感信息。
 
-## 17. Acceptance Criteria
+## 16. Acceptance Criteria
 
 ### Workflow Runtime
 
@@ -1174,46 +922,33 @@ xiaoyi_context_reactive_failures_total
 - **AC16**：权限、审批、关联校验、状态迁移和 Gate 均不依赖可选 Hook。
 - **AC17**：Hook context 不包含密钥、Cookie、完整附件和未脱敏大输出。
 
-### Memory 治理
-
-- **AC18**：现有恢复成功自动沉淀链路继续生成 lifecycle `verified` 案例。
-- **AC19**：存量 verified 案例迁移后数量不变、内容不丢失、仍可检索。
-- **AC20**：相同 command 事件重放不重复写案例反馈。
-- **AC21**：只有 diagnosis 明确记录的 supporting cases 接收结果反馈。
-- **AC22**：reliability 计算、trusted 升级和降级规则为确定性并有边界测试。
-- **AC23**：invalid 案例不进入普通检索，deprecated 默认不进入普通检索。
-- **AC24**：默认 Top-K 每个 cluster 最多一条，同时保持现有 RAG Eval 不发生不可接受回退。
-- **AC25**：治理信号不与 Dense/BM25 raw score 直接相加。
-- **AC26**：SQLite、MySQL、Qdrant 字段和 outbox 最终一致，失败可重放至 pending=0。
-
 ### Context Compact
 
-- **AC27**：大工具结果先脱敏完整归档，再在 RunEvent 和模型输入中摘要。
-- **AC28**：摘要包含 artifact_id、原始字节数、SHA-256 和关键结构字段。
-- **AC29**：压缩不破坏 tool call/result 配对，不丢失当前用户请求和 Workflow Snapshot。
-- **AC30**：`diagnosis_id`、`proposal_id`、`command_id`、`case_id` 在任何压缩层级后仍可用于 Gate。
-- **AC31**：prompt too long 最多补救一次，再失败返回 `CONTEXT_COMPACTION_EXHAUSTED`。
-- **AC32**：Artifact 路径不可穿越配置根目录，普通 API 不泄露 storage URI。
-- **AC33**：Artifact 纳入 retention dry-run、执行开关、删除指标和失败诊断期。
+- **AC18**：大工具结果先脱敏完整归档，再在 RunEvent 和模型输入中摘要。
+- **AC19**：摘要包含 artifact_id、原始字节数、SHA-256 和关键结构字段。
+- **AC20**：压缩不破坏 tool call/result 配对，不丢失当前用户请求和 Workflow Snapshot。
+- **AC21**：`diagnosis_id`、`proposal_id`、`command_id`、`case_id` 在任何压缩层级后仍可用于 Gate。
+- **AC22**：prompt too long 最多补救一次，再失败返回 `CONTEXT_COMPACTION_EXHAUSTED`。
+- **AC23**：Artifact 路径不可穿越配置根目录，普通 API 不泄露 storage URI。
+- **AC24**：Artifact 纳入 retention dry-run、执行开关、删除指标和失败诊断期。
 
 ### 全量门槛
 
-- **AC34**：后端 Ruff、format、mypy、pytest 全部通过。
-- **AC35**：MCP Ruff、format、mypy、pytest 全部通过。
-- **AC36**：前端 lint、format、typecheck、组件测试、E2E 和 production build 全部通过。
-- **AC37**：Docker Compose Portable 档位完成诊断、低风险修复、高风险审批、恢复验证、案例治理和上下文大输出 smoke。
-- **AC38**：升级和回滚演练均不丢失现有对话、Run、提案、命令和故障案例。
+- **AC25**：后端 Ruff、format、mypy、pytest 全部通过。
+- **AC26**：MCP Ruff、format、mypy、pytest 全部通过。
+- **AC27**：前端 lint、format、typecheck、组件测试、E2E 和 production build 全部通过。
+- **AC28**：Docker Compose Portable 档位完成诊断、低风险修复、高风险审批、恢复验证和上下文大输出 smoke。
+- **AC29**：升级和回滚演练均不丢失现有对话、Run、提案、命令和故障案例。
 
-## 18. Rollback
+## 17. Rollback
 
 - `WORKFLOW_RUNTIME_ENABLED=false`：新请求恢复当前 AgentRun 行为；已存在工作流保留只读查询。
 - `COMPLETION_GATE_ENABLED=false`：仅用于紧急回滚，生产关闭必须产生告警。
 - Hooks 可逐个静态禁用，但强制策略不可禁用。
-- 案例治理检索可回退到 `verified=1` 旧逻辑；新增字段和反馈表不删除。
 - Context Compact 可回退到当前 ContextBuilder 和 RunEvent 摘要；Artifact 只读保留直至 retention 清理。
 - 回滚不得降级数据库 schema 或删除新增列，代码必须保持向后读取兼容。
 
-## 19. 主要改动位置
+## 18. 主要改动位置
 
 后端预计涉及：
 
@@ -1238,7 +973,6 @@ backend/migrations/versions/0005_run_artifacts_and_context_snapshots.py
 Diagnosis MCP 预计涉及：
 
 ```text
-mcp-services/iot_diagnosis/migrations/0005_fault_case_memory_governance.py
 mcp-services/iot_diagnosis/mysql_migrations/
 mcp-services/iot_diagnosis/remediation.py
 mcp-services/iot_diagnosis/diagnosis.py
@@ -1261,7 +995,7 @@ frontend/lib/api.ts
 frontend/hooks/use-conversation-run.ts
 ```
 
-## 20. 最终交付定义
+## 19. 最终交付定义
 
 本 Spec 完成后，小yi应形成以下稳定闭环：
 
@@ -1271,8 +1005,25 @@ frontend/hooks/use-conversation-run.ts
   → Workflow Runtime 保存业务阶段
   → Completion Gate 用结构化证据决定结束、继续或交接
   → 恢复成功自动沉淀 verified 案例
-  → 后续复用结果反哺案例可信度和生命周期
   → 长对话和大工具结果通过可恢复压缩持续运行
 ```
 
 最终目标不是把小yi改造成通用 Agent 平台，而是让现有 IoT 运维 Agent 在长流程、审批、恢复、经验复用和上下文增长场景下更加确定、可恢复、可审计。
+
+## 20. 验收记录（2026-09-24）
+
+| 验收项 | 结果与证据 |
+| --- | --- |
+| AC1–AC7 Workflow Runtime | 语义事件、单设备约束、幂等、审批复用、重启恢复、所有权和前端刷新由后端工作流测试、前端 E2E 与 2026-09-23 在线烟测覆盖。 |
+| AC8–AC13 Completion Gate | 判定表、稳定 reason code、有界续轮、失败与交接路径由后端测试覆盖；在线 RunEvent 已核对 Gate 决策与证据摘要。 |
+| AC14–AC17 Hooks | 静态注册、顺序、超时、失败隔离和脱敏边界由后端契约测试覆盖；强制策略仍在主流程。 |
+| AC18–AC24 Context Compact | Artifact 脱敏、路径、哈希、关键字段、配对保护、快照单调性、超长提示补救和 retention 由后端测试覆盖；2026-09-23 在线大输出烟测验证 10 个归档文件的字节数与 SHA-256。 |
+| AC25 后端门槛 | Ruff check/format、mypy 通过；追加历史命令只读回归后 pytest 通过。 |
+| AC26 MCP 门槛 | Ruff check/format、mypy 通过；pytest 通过。 |
+| AC27 前端门槛 | lint、format、typecheck、组件测试、1 项 Playwright E2E 与 production build 通过。组件测试覆盖 Run 失败与连接失败的文案区分。 |
+| AC28 Compose 烟测 | 2026-09-23 在 Portable 档位用真实 API/模型完成诊断、低风险与高风险修复、审批、验证和大输出归档；2026-09-24 复核 backend/Diagnosis/Control readiness 均正常。 |
+| AC29 回滚演练 | 2026-09-23 关闭 Workflow 与 Gate 开关后，新请求回到旧行为，已有工作流只读可查；对话、Run、工作流和案例计数无损，恢复开关后行为正常。 |
+
+收尾修复：后端测试去除跨测试模块导入，保证独立 pytest 收集；此前的七天十二节点耐久观察属于系统可靠性规格的独立时间型验收，不计入本 Spec 的 AC1–AC29。
+
+验收后回归：用户查询历史命令时曾触发 `REQUIRED_EVIDENCE_MISSING`。现仅允许与本轮工作流已绑定的命令结果推进验证；2026-09-24 重建后端后，以真实 API 查询历史命令，`get_action_result` 成功且 Run completed，本轮工作流数量为 0。既有跨设备与关联 ID 冲突仍保持硬拒绝。

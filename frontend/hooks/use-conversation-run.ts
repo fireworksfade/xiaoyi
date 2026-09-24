@@ -8,6 +8,7 @@ import {
   createConversation,
   ensureDemoSession,
   streamAgentRun,
+  stopAgentRun,
   submitAgentMessage,
   type Conversation,
   type RemediationProposal,
@@ -35,6 +36,21 @@ function replaceMessageText(text: string) {
   return (message: ChatMessage): ChatMessage => ({ ...message, text });
 }
 
+class RunFailure extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+const RUN_ERROR_MESSAGES: Record<string, string> = {
+  REQUIRED_EVIDENCE_MISSING: '缺少当前工作流所需的诊断证据',
+  WORKFLOW_STATE_CONFLICT: '诊断与修复证据不一致',
+  WORKFLOW_MULTI_DEVICE_UNSUPPORTED: '一次运行只能处理一台设备',
+};
+
 export function useConversationRun({
   conversationId: initialConversationId,
   attachments,
@@ -46,7 +62,38 @@ export function useConversationRun({
   onFinished,
 }: UseConversationRunOptions) {
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
   const messageSeedRef = useRef(0);
+  const activeRunIdRef = useRef<string | null>(null);
+  const stopRequestedRef = useRef(false);
+  const stopRequestStartedRef = useRef(false);
+
+  async function requestStop(runId: string) {
+    if (stopRequestStartedRef.current) return;
+    stopRequestStartedRef.current = true;
+    try {
+      await stopAgentRun(runId);
+    } catch (error) {
+      if (activeRunIdRef.current !== runId) return;
+      stopRequestStartedRef.current = false;
+      stopRequestedRef.current = false;
+      setStopping(false);
+      if (!(error instanceof ApiError && error.code === 'RUN_NOT_ACTIVE')) {
+        setStopError(
+          error instanceof Error ? `停止失败：${error.message}` : '停止失败',
+        );
+      }
+    }
+  }
+
+  function stop() {
+    if (!running || stopRequestedRef.current) return;
+    stopRequestedRef.current = true;
+    setStopping(true);
+    setStopError(null);
+    if (activeRunIdRef.current) void requestStop(activeRunIdRef.current);
+  }
 
   async function submit(value: string) {
     const content = value.trim();
@@ -69,6 +116,11 @@ export function useConversationRun({
     ]);
     clearAttachments();
     clearComposerError();
+    setStopError(null);
+    activeRunIdRef.current = null;
+    stopRequestedRef.current = false;
+    stopRequestStartedRef.current = false;
+    setStopping(false);
     setRunning(true);
     let activeConversationId = initialConversationId;
 
@@ -112,6 +164,8 @@ export function useConversationRun({
           mcpServerIds: selectedServerId ? [selectedServerId] : [],
         },
       );
+      activeRunIdRef.current = runId;
+      if (stopRequestedRef.current) void requestStop(runId);
 
       await streamAgentRun(runId, (event) => {
         if (event.type === 'answer.delta') {
@@ -173,19 +227,48 @@ export function useConversationRun({
         }
         if (event.type === 'run.failed') {
           const error = event.data.error as
-            | { message?: string }
+            | { code?: string; message?: string }
             | null
             | undefined;
-          throw new Error(error?.message ?? '小yi 运行失败');
+          throw new RunFailure(error?.message ?? '小yi运行失败', error?.code);
         }
       });
     } catch (error) {
-      const code = error instanceof ApiError ? `（${error.code}）` : '';
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-      updateAssistant(
-        replaceMessageText(`连接后端失败：${errorMessage}${code}`),
-      );
+      if (error instanceof RunFailure) {
+        if (error.code === 'RUN_STOPPED') {
+          updateAssistant((current) => ({
+            ...current,
+            text: current.text ? `${current.text}\n\n已停止生成` : '已停止生成',
+            tools: current.tools?.map((tool) =>
+              tool.result === '正在运行…'
+                ? { ...tool, result: '未完成' }
+                : tool,
+            ),
+          }));
+          return true;
+        }
+        const message =
+          (error.code && RUN_ERROR_MESSAGES[error.code]) || error.message;
+        updateAssistant((current) => ({
+          ...current,
+          text: `小yi运行失败：${message}${error.code ? `（${error.code}）` : ''}`,
+          tools: current.tools?.map((tool) =>
+            tool.result === '正在运行…' ? { ...tool, result: '未完成' } : tool,
+          ),
+        }));
+      } else {
+        const code = error instanceof ApiError ? `（${error.code}）` : '';
+        const errorMessage =
+          error instanceof Error ? error.message : '未知错误';
+        updateAssistant(
+          replaceMessageText(`连接后端失败：${errorMessage}${code}`),
+        );
+      }
     } finally {
+      activeRunIdRef.current = null;
+      stopRequestedRef.current = false;
+      stopRequestStartedRef.current = false;
+      setStopping(false);
       setRunning(false);
       try {
         await onFinished(activeConversationId);
@@ -196,5 +279,5 @@ export function useConversationRun({
     return true;
   }
 
-  return { running, submit };
+  return { running, stopping, stopError, submit, stop };
 }

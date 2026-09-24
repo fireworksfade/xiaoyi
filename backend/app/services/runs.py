@@ -52,6 +52,7 @@ from app.services.run_event_buffer import RunEventBuffer
 from app.services.run_state import (
     AGENT_RUN_FAILED,
     RUN_INTERRUPTED,
+    RUN_STOPPED,
     append_failure_event,
     claim_queued_run,
     mark_finished,
@@ -619,30 +620,32 @@ async def execute_claimed_run(run_id: str) -> None:
             "after_run",
             HookContext(run_id=run_id, event_type="run.completed"),
         )
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         # Dispatcher 取消/优雅关闭超时：先落盘已缓冲事件，再写中断终态，供用户重试
         if buffer is not None:
             try:
                 await buffer.flush()
             except Exception:
                 pass
+        code = RUN_STOPPED if RUN_STOPPED in exc.args else RUN_INTERRUPTED
+        message = "用户已停止运行" if code == RUN_STOPPED else "运行被取消，可重试"
         AGENT_RUNS.labels(status="interrupted").inc()
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run and run.status == RunStatus.RUNNING:
                 run.status = RunStatus.FAILED
                 run.finished_at = utc_now()
-                run.error_code = RUN_INTERRUPTED
-                run.error_message = "运行被取消，可重试"
-                run.interruption_reason = RUN_INTERRUPTED
+                run.error_code = code
+                run.error_message = message
+                run.interruption_reason = code
                 db.add(
                     RunEvent(
                         run_id=run_id,
                         event_type="run.failed",
                         data={
                             "error": {
-                                "code": RUN_INTERRUPTED,
-                                "message": "运行被取消，可重试",
+                                "code": code,
+                                "message": message,
                                 "retryable": True,
                             }
                         },

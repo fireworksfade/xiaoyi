@@ -169,6 +169,14 @@ def test_conversation_run_flow() -> None:
         )
         assert replay.json()["data"] == {"run_id": run_id, "idempotent_replay": True}
 
+        missing_csrf = client.delete(f"/api/v1/agent-runs/{run_id}")
+        assert missing_csrf.status_code == 403
+
+        deleted = client.delete(f"/api/v1/agent-runs/{run_id}", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json()["data"] == {"deleted": True, "run_id": run_id}
+        assert client.get(f"/api/v1/agent-runs/{run_id}").status_code == 404
+
 
 def test_conversation_can_be_renamed_and_removed_from_history() -> None:
     with TestClient(app) as client:

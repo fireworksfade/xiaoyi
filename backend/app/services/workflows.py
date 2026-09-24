@@ -237,6 +237,14 @@ async def apply_semantic_event(
     db: AsyncSession, run: AgentRun, event: SemanticEvent
 ) -> OperationWorkflow | None:
     workflow, steps = await get_workflow_for_run(db, run.id)
+    if event.event_type == "remediation.verification_updated" and (
+        workflow is None
+        or workflow.command_id is None
+        or event.payload.get("command_id") != workflow.command_id
+    ):
+        # get_action_result may inspect a command from an earlier Run. Only the
+        # command already bound to this workflow can update its verification.
+        return workflow
     if workflow is None:
         if event.event_type != "diagnosis.completed":
             raise WorkflowError("REQUIRED_EVIDENCE_MISSING", "diagnosis must complete first")
