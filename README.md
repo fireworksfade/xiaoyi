@@ -290,10 +290,29 @@ python -m pytest -q tests
 | 路径 | 职责 |
 | --- | --- |
 | `frontend/` | React 对话界面、修复审批与运行记录 |
+| `frontend/app/` | 页面路由、布局、全局样式与同源后端代理 |
+| `frontend/components/` | 会话、知识库、设置、审批等业务组件 |
+| `frontend/components/ui/` | 当前业务使用的 11 个共享基础组件 |
+| `frontend/hooks/` | 会话列表、消息、运行状态与附件草稿逻辑 |
+| `frontend/lib/` | API 客户端、日期格式化和通用工具 |
+| `frontend/e2e/`、`frontend/test/` | 端到端测试、测试初始化与工具模块测试；组件和 Hook 测试随源码放置 |
 | `backend/` | 认证、对话、Agent 运行、MCP 管理、审计与可观测性 |
+| `backend/app/api/` | HTTP 接口、认证依赖与请求校验 |
+| `backend/app/agent/`、`backend/app/services/` | Agent 适配、运行编排、工作流、上下文与数据生命周期 |
+| `backend/migrations/`、`backend/tests/` | 数据库版本迁移与后端测试 |
 | `mcp-services/` | 独立仓库：Diagnosis MCP、Control MCP、模型服务、MQTT 接入与模拟器 |
 | `deploy/` | 本地基础设施配置 |
-| `specs/` | RAG 与 IoT MCP 设计规格 |
+| `specs/` | 智能体运行时升级设计与验收规格 |
+| `docs/` | 项目维护与结构优化说明 |
 | `compose*.yaml` | Portable、GPU 和离线检索部署编排 |
+
+### 维护约定
+
+- UI 组件按业务需要引入。移除组件前检查直接与间接引用，同时清理其独占依赖并更新 `package-lock.json`；拉取依赖变更后使用 `npm ci` 同步本地环境。
+- `.env*` 本地配置、数据库、依赖目录、构建产物和工具缓存不提交；配置示例文件继续纳入版本控制。
+- `.tmp/` 中的验收结果及 `tmp/`、`output/` 中的本地资料不随源码提交。确认已归档后再清理，不能仅凭目录名直接删除。
+- `mcp-services/` 单独提交和发布。历史数据库迁移、设计规格和验收依据应保留，部署时确认两个仓库的版本兼容。
+
+本次清理移除了 48 个未使用的 UI 组件、1 个 Hook 和 7 项直接依赖。后续建议先按业务组织前端并拆分大组件，再整理后端运行模块和历史文档；这些目录重构尚未执行。详细范围、验证结果和建议目标结构见 [项目清理与结构优化建议](docs/project-structure.md)。
 
 开发 Broker 仅绑定 `127.0.0.1` 且允许匿名连接，只适合本机联调。实验室或生产环境必须启用身份认证、TLS 和 Topic ACL，并关闭演示账号自动播种。
