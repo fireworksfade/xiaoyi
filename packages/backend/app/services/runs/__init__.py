@@ -6,6 +6,8 @@
 - orchestrator.py: 主编排逻辑 execute_claimed_run
 """
 
+from app.agent.runtime import build_runtime
+
 from .event_handler import append_event
 from .orchestrator import (
     _evaluate_gate,
@@ -22,6 +24,7 @@ _collect_proposals = collect_proposal
 
 __all__ = [
     "append_event",
+    "build_runtime",
     "execute_claimed_run",
     "process_agent_run",
     "collect_proposal",

@@ -152,11 +152,15 @@ async def _stream_with_context_recovery(
     allow_retry: bool,
 ):
     """流式执行运行，带上下文压缩恢复能力。"""
+    tool_started = False
     try:
         async for event in runtime.stream(runtime_messages, mcp_servers):
+            if event.event_type == "tool.started":
+                tool_started = True
             yield event
     except Exception as exc:
-        if not (allow_retry and is_prompt_too_long(exc)):
+        # 如果工具已经开始执行，不能重试（工具可能有副作用）
+        if tool_started or not (allow_retry and is_prompt_too_long(exc)):
             raise
         logger.info(
             "context budget exceeded, retrying with compact",
@@ -166,7 +170,29 @@ async def _stream_with_context_recovery(
             compacted = compact_retry_messages(
                 runtime_messages, workflow_snapshot=runtime.workflow_snapshot
             )
+            if compacted == runtime_messages:
+                raise WorkflowError(
+                    CONTEXT_COMPACTION_EXHAUSTED, "model input cannot be compacted further"
+                )
+
+            # 保存压缩前的转录并发出事件
+            async with SessionFactory() as db:
+                artifact = await LocalArtifactStore(
+                    settings.run_artifact_root, settings.run_artifact_retention_hours
+                ).write(db, run_id=run_id, kind="transcript", content={"messages": runtime_messages})
+                await db.commit()
+
             CONTEXT_COMPACTIONS.labels(layer="L2").inc()
+            yield RuntimeEvent(
+                "context.compacted",
+                {
+                    "layer": "L2",
+                    "artifact_id": artifact.id,
+                    "original_bytes": artifact.size_bytes,
+                    "sha256": artifact.sha256,
+                },
+            )
+
             async for event in runtime.stream(compacted, mcp_servers):
                 yield event
         except Exception as inner_exc:

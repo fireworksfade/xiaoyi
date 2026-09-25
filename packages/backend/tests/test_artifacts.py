@@ -230,7 +230,7 @@ def test_prompt_too_long_retries_once_after_archiving_transcript(tmp_path: Path)
         return [
             event
             async for event in _stream_with_context_recovery(
-                run_id, runtime, messages, [], settings
+                run_id, runtime, messages, [], settings, allow_retry=True
             )
         ]
 
@@ -269,7 +269,7 @@ def test_prompt_too_long_after_tool_start_never_replays_tool(tmp_path: Path) -> 
 
     async def collect() -> None:
         async for _event in _stream_with_context_recovery(
-            run_id, runtime, [{"role": "user", "content": "repair"}], [], settings
+            run_id, runtime, [{"role": "user", "content": "repair"}], [], settings, allow_retry=True
         ):
             pass
 
