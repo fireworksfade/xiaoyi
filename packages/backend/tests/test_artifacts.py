@@ -30,7 +30,6 @@ from app.services.context_compactor import (
 from app.services.retention import cleanup_run_artifacts
 from app.services.run_event_buffer import RunEventBuffer
 from app.services.runs import _stream_with_context_recovery
-from app.services.workflows import WorkflowError
 
 
 async def _seed_run() -> str:
