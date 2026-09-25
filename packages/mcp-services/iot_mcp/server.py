@@ -614,6 +614,12 @@ def decide_remediation_proposal(
     return success({**proposal, "command": command, "delivered": delivered})
 
 
+@mcp.custom_route("/ready", methods=["GET"])
+async def ready_check(_request: Request) -> JSONResponse:
+    """Health check endpoint for Docker healthcheck."""
+    return JSONResponse({"status": "ready"})
+
+
 if __name__ == "__main__":
     host = os.getenv("IOT_MCP_HOST", "0.0.0.0")
     port = int(os.getenv("IOT_MCP_PORT", "9000"))

@@ -9,6 +9,7 @@ COPY pyproject.toml README.md ./
 COPY common ./common
 COPY iot_diagnosis ./iot_diagnosis
 COPY iot_control ./iot_control
+COPY iot_mcp ./iot_mcp
 COPY knowledge ./knowledge
 COPY evals ./evals
 COPY scripts ./scripts
