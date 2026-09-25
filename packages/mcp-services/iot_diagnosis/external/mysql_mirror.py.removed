@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import unquote, urlsplit
+from urllib.request import Request, urlopen
+
+from iot_diagnosis.embeddings import EmbeddingProvider, embedding_provider_from_env
+
+logger = logging.getLogger("xiaoyi.iot_diagnosis.external")
+
+
+def feature_vector(text: str, dimensions: int = 384) -> list[float]:
+    from iot_diagnosis.embeddings import HashEmbeddingProvider
+
+    return HashEmbeddingProvider(dimensions).embed(text)
+
+
+class MySQLMirror:
+    def __init__(self, dsn: str):
+        parsed = urlsplit(dsn)
+        if parsed.scheme != "mysql" or not parsed.hostname or not parsed.path.strip("/"):
+            raise ValueError("DIAGNOSIS_MYSQL_DSN_INVALID")
+        self.params = {
+            "host": parsed.hostname,
+            "port": parsed.port or 3306,
+            "user": unquote(parsed.username or ""),
+            "password": unquote(parsed.password or ""),
+            "database": parsed.path.strip("/"),
+            "charset": "utf8mb4",
+            "autocommit": True,
+        }
+        self.ensure_schema()
+
+    def _connect(self):
+        import pymysql
+
+        return pymysql.connect(**self.params)
+
+    def ensure_schema(self) -> None:
+        """外部 MySQL schema 走有序迁移（幂等 DDL），不在读写路径动态建表。"""
+        from pathlib import Path
+
+        from common.migrations import MySqlMigration, MySQLMigrationRunner, load_migration_module
+
+        migration_dir = Path(__file__).resolve().parent / "mysql_migrations"
+        migrations = [
+            MySqlMigration.of(load_migration_module(path))
+            for path in sorted(migration_dir.glob("0*.py"))
+            if not path.name.startswith("__")
+        ]
+        runner = MySQLMigrationRunner(migrations, service="iot_diagnosis-mysql")
+        runner.ensure(self._connect)
+
+    def upsert_device_status(self, device: dict[str, Any], status: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO device(device_id, device_type, name, firmware_version, created_at)
+                VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
+                device_type=VALUES(device_type), name=VALUES(name), firmware_version=VALUES(firmware_version)""",
+                (
+                    device["device_id"],
+                    device["device_type"],
+                    device["name"],
+                    device.get("firmware_version"),
+                    device.get("created_at") or status["timestamp"],
+                ),
+            )
+            cursor.execute(
+                """INSERT INTO device_status
+                (device_id, online, wifi_status, rssi, mqtt_status, temperature, uptime, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE online=VALUES(online), wifi_status=VALUES(wifi_status),
+                rssi=VALUES(rssi), mqtt_status=VALUES(mqtt_status), temperature=VALUES(temperature),
+                uptime=VALUES(uptime)""",
+                (
+                    status["device_id"],
+                    status["online"],
+                    status["wifi_status"],
+                    status.get("rssi"),
+                    status["mqtt_status"],
+                    status.get("temperature"),
+                    status.get("uptime"),
+                    status["timestamp"],
+                ),
+            )
+
+    def upsert_device_statuses(
+        self, devices: list[dict[str, Any]], statuses: list[dict[str, Any]]
+    ) -> None:
+        if not devices and not statuses:
+            return
+        with self._connect() as db, db.cursor() as cursor:
+            if devices:
+                cursor.executemany(
+                    """INSERT INTO device(device_id, device_type, name, firmware_version, created_at)
+                    VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
+                    device_type=VALUES(device_type), name=VALUES(name),
+                    firmware_version=VALUES(firmware_version)""",
+                    [
+                        (
+                            item["device_id"],
+                            item["device_type"],
+                            item["name"],
+                            item.get("firmware_version"),
+                            item["created_at"],
+                        )
+                        for item in devices
+                    ],
+                )
+            if statuses:
+                cursor.executemany(
+                    """INSERT INTO device_status
+                    (device_id, online, wifi_status, rssi, mqtt_status, temperature, uptime, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE online=VALUES(online), wifi_status=VALUES(wifi_status),
+                    rssi=VALUES(rssi), mqtt_status=VALUES(mqtt_status),
+                    temperature=VALUES(temperature), uptime=VALUES(uptime)""",
+                    [
+                        (
+                            item["device_id"],
+                            item["online"],
+                            item["wifi_status"],
+                            item.get("rssi"),
+                            item["mqtt_status"],
+                            item.get("temperature"),
+                            item.get("uptime"),
+                            item["timestamp"],
+                        )
+                        for item in statuses
+                    ],
+                )
+
+    def add_log(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """INSERT IGNORE INTO device_log(device_id, level, module, message, timestamp)
+                VALUES (%s, %s, %s, %s, %s)""",
+                (
+                    item["device_id"],
+                    item["level"],
+                    item["module"],
+                    item["message"],
+                    item["timestamp"],
+                ),
+            )
+
+    def add_logs(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.executemany(
+                """INSERT IGNORE INTO device_log(device_id, level, module, message, timestamp)
+                VALUES (%s, %s, %s, %s, %s)""",
+                [
+                    (
+                        item["device_id"],
+                        item["level"],
+                        item["module"],
+                        item["message"],
+                        item["timestamp"],
+                    )
+                    for item in items
+                ],
+            )
+
+    def upsert_document(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO knowledge_document
+                (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
+                title=VALUES(title), content=VALUES(content), device_type=VALUES(device_type),
+                document_id=VALUES(document_id), chunk_index=VALUES(chunk_index)""",
+                (
+                    item["source"],
+                    item["source_id"],
+                    item["title"],
+                    item["content"],
+                    item.get("device_type"),
+                    item["created_at"],
+                    item.get("document_id"),
+                    int(item.get("chunk_index") or 0),
+                ),
+            )
+
+    def delete_document(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """DELETE FROM knowledge_document
+                WHERE source=%s AND (
+                    document_id=%s OR source_id=%s OR source_id LIKE %s
+                )""",
+                (
+                    item["source"],
+                    item["document_id"],
+                    item["document_id"],
+                    f"{item['document_id']}#%",
+                ),
+            )
+
+    def delete_fault_case(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM fault_case WHERE fault_id=%s",
+                (item["fault_id"],),
+            )
+
+    def upsert_fault_case(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO fault_case
+                (fault_id, device_id, device_type, fault_type, fault_name, symptoms_json, logs_json,
+                 cause, solution, verified, verified_by, source, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE fault_name=VALUES(fault_name), symptoms_json=VALUES(symptoms_json),
+                logs_json=VALUES(logs_json), cause=VALUES(cause), solution=VALUES(solution),
+                verified=VALUES(verified), verified_by=VALUES(verified_by), updated_at=VALUES(updated_at)""",
+                (
+                    item["fault_id"],
+                    item.get("device_id"),
+                    item["device_type"],
+                    item["fault_type"],
+                    item["fault_name"],
+                    json.dumps(item["symptoms"], ensure_ascii=False),
+                    json.dumps(item["logs"], ensure_ascii=False),
+                    item["cause"],
+                    item["solution"],
+                    item["verified"],
+                    item["verified_by"],
+                    item["source"],
+                    item["created_at"],
+                    item["updated_at"],
+                ),
+            )
+
+    def upsert_diagnosis(self, item: dict[str, Any]) -> None:
+        result = item.get("result") or {
+            key: value
+            for key, value in item.items()
+            if key not in {"trace_contexts", "request_id", "created_at", "result"}
+        }
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO diagnosis_record
+                (diagnosis_id, request_id, device_id, query, fault_type, fault_name, cause,
+                 solutions_json, confidence, router_type, selected_sources_json,
+                 retrieved_documents_json, observability_json, result_json, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json),
+                result_json=VALUES(result_json)""",
+                (
+                    item["diagnosis_id"],
+                    item["request_id"],
+                    item["device_id"],
+                    item["query"],
+                    item["fault_type"],
+                    item["fault_name"],
+                    item["cause"],
+                    json.dumps(item["solutions"], ensure_ascii=False),
+                    item["confidence"],
+                    item["route"]["router"],
+                    json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
+                    json.dumps(
+                        item.get("trace_contexts", item["sources"]),
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(item["observability"], ensure_ascii=False),
+                    json.dumps(result, ensure_ascii=False),
+                    item["created_at"],
+                ),
+            )
+
+    def upsert_diagnoses(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+
+        def result_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+            return item.get("result") or {
+                key: value
+                for key, value in item.items()
+                if key not in {"trace_contexts", "request_id", "created_at", "result"}
+            }
+
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.executemany(
+                """INSERT INTO diagnosis_record
+                (diagnosis_id, request_id, device_id, query, fault_type, fault_name, cause,
+                 solutions_json, confidence, router_type, selected_sources_json,
+                 retrieved_documents_json, observability_json, result_json, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json),
+                result_json=VALUES(result_json)""",
+                [
+                    (
+                        item["diagnosis_id"],
+                        item["request_id"],
+                        item["device_id"],
+                        item["query"],
+                        item["fault_type"],
+                        item["fault_name"],
+                        item["cause"],
+                        json.dumps(item["solutions"], ensure_ascii=False),
+                        item["confidence"],
+                        item["route"]["router"],
+                        json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
+                        json.dumps(item.get("trace_contexts", item["sources"]), ensure_ascii=False),
+                        json.dumps(item["observability"], ensure_ascii=False),
+                        json.dumps(result_snapshot(item), ensure_ascii=False),
+                        item["created_at"],
+                    )
+                    for item in items
+                ],
+            )
+
+    def ping(self) -> bool:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            return cursor.fetchone()[0] == 1
+
+

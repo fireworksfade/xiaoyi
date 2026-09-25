@@ -90,8 +90,9 @@ backend/
 
 ```text
 xiaoyi/
-├── backend/
-├── frontend/
+├── packages/
+│   ├── backend/
+│   └── frontend/
 ├── mcp-services/       # 独立 Git 仓库
 ├── compose.yaml
 └── README.md
@@ -99,7 +100,7 @@ xiaoyi/
 
 首次克隆：
 
-```powershell
+```bash
 git clone https://github.com/fireworksfade/xiaoyi.git
 cd xiaoyi
 git clone https://github.com/fireworksfade/xiaoyi-mcp-services.git mcp-services
@@ -109,21 +110,21 @@ git clone https://github.com/fireworksfade/xiaoyi-mcp-services.git mcp-services
 
 默认使用 Portable 检索和确定性的 Mock Agent Runtime：
 
-```powershell
+```bash
 docker compose up -d --build
 docker compose ps
 ```
 
 首次启动或重建数据卷后，注册并启用两个 MCP 服务：
 
-```powershell
+```bash
 docker compose exec backend python scripts/bootstrap_local_mcp.py
 ```
 
 ### 3. 启动前端
 
-```powershell
-cd frontend
+```bash
+cd packages/frontend
 npm ci
 npm run dev
 ```
@@ -139,7 +140,7 @@ npm run dev
 
 ### 4. 停止服务
 
-```powershell
+```bash
 docker compose down
 ```
 
@@ -191,7 +192,7 @@ IoT Control MCP 按风险策略处理设备动作：
 
 修改 `fleet.json` 后运行以下命令即可重载：
 
-```powershell
+```bash
 docker compose restart iot-simulator-fleet
 ```
 
@@ -201,19 +202,19 @@ docker compose restart iot-simulator-fleet
 
 在 `mcp-services` 目录中摄取 TXT、Markdown 或 PDF：
 
-```powershell
-..\backend\.venv\Scripts\python.exe -m scripts.ingest_documents .\docs\mqtt-guide.pdf --source mqtt_docs --document-id mqtt-guide --title "MQTT Guide"
+```bash
+../packages/backend/.venv/bin/python -m scripts.ingest_documents ./docs/mqtt-guide.pdf --source mqtt_docs --document-id mqtt-guide --title "MQTT Guide"
 ```
 
 相同 `document-id` 会原子替换旧分块。运行确定性 RAG/Router 评测：
 
-```powershell
-..\backend\.venv\Scripts\python.exe -m scripts.evaluate_rag --database .\data\iot_diagnosis_eval.db
+```bash
+../packages/backend/.venv/bin/python -m scripts.evaluate_rag --database ./data/iot_diagnosis_eval.db
 ```
 
 在 GPU Compose 档位中运行真实 Qwen3 检索评测：
 
-```powershell
+```bash
 docker compose -f compose.yaml -f compose.retrieval-gpu.yaml exec iot-diagnosis-mcp python /app/scripts/evaluate_rag.py --profile live-retrieval --database /app/data/iot_diagnosis.db
 ```
 
@@ -229,7 +230,7 @@ OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=your-model
 ```
 
-本地开发以 `backend/.env.example` 为模板。容器部署时应通过安全的环境注入或 Compose override 覆盖配置，不要提交密钥。
+本地开发以 `packages/backend/.env.example` 为模板。容器部署时应通过安全的环境注入或 Compose override 覆盖配置，不要提交密钥。
 
 诊断服务也可通过 `DIAGNOSIS_LLM_API_KEY`、`DIAGNOSIS_LLM_MODEL` 和 `DIAGNOSIS_LLM_BASE_URL` 接入兼容 Chat Completions 的模型；未配置时会明确使用启发式回退。
 
@@ -239,15 +240,15 @@ OPENAI_MODEL=your-model
 
 可在启动前覆盖本地数据库密码：
 
-```powershell
-$env:MYSQL_PASSWORD = "change-this-password"
-$env:MYSQL_ROOT_PASSWORD = "change-this-root-password"
+```bash
+export MYSQL_PASSWORD="change-this-password"
+export MYSQL_ROOT_PASSWORD="change-this-root-password"
 docker compose up -d --build
 ```
 
 生产环境应设置 `DIAGNOSIS_MCP_BEARER_TOKEN` 保护 MCP 端点，并用相同凭据重新注册：
 
-```powershell
+```bash
 docker compose exec backend python scripts/bootstrap_local_mcp.py --credential "replace-with-a-long-random-token"
 ```
 
@@ -260,7 +261,7 @@ docker compose exec backend python scripts/bootstrap_local_mcp.py --credential "
 
 快速查看容器状态与日志：
 
-```powershell
+```bash
 docker compose ps
 docker compose logs -f backend iot-diagnosis-mcp iot-control-mcp
 ```
@@ -269,19 +270,19 @@ docker compose logs -f backend iot-diagnosis-mcp iot-control-mcp
 
 ### 后端
 
-```powershell
-cd backend
+```bash
+cd packages/backend
 python -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
-.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+.venv/bin/python -m pip install -e ".[dev]"
+cp .env.example .env
+.venv/bin/python -m uvicorn app.main:app --reload --port 8000
 ```
 
 ### 前端
 
-```powershell
-cd frontend
-Copy-Item .env.example .env.local
+```bash
+cd packages/frontend
+cp .env.example .env.local
 npm ci
 npm run dev
 ```
@@ -290,25 +291,25 @@ npm run dev
 
 两个服务启动后，可验证登录、会话、消息与 SSE 真实链路：
 
-```powershell
-cd backend
-.venv\Scripts\python scripts/smoke_frontend_backend.py
+```bash
+cd packages/backend
+.venv/bin/python scripts/smoke_frontend_backend.py
 ```
 
 ## 测试
 
 主仓库：
 
-```powershell
+```bash
 # 后端
-cd backend
-.venv\Scripts\python -m ruff check app tests scripts
-.venv\Scripts\python -m ruff format --check app tests scripts
-.venv\Scripts\python -m mypy app
-.venv\Scripts\python -m pytest -q tests
+cd packages/backend
+.venv/bin/python -m ruff check app tests scripts
+.venv/bin/python -m ruff format --check app tests scripts
+.venv/bin/python -m mypy app
+.venv/bin/python -m pytest -q tests
 
 # 前端
-cd ..\frontend
+cd ../frontend
 npm run lint
 npm run format:check
 npm run typecheck
@@ -320,7 +321,7 @@ npm run build
 
 MCP 仓库（不得导入主后端 `app.*`）：
 
-```powershell
+```bash
 cd mcp-services
 python -m pip install -e ".[dev]"
 python -m ruff check common iot_diagnosis iot_control model_service scripts tests
@@ -333,17 +334,17 @@ python -m pytest -q tests
 
 | 路径 | 职责 |
 | --- | --- |
-| `frontend/` | React 对话界面、修复审批与运行记录 |
-| `frontend/app/` | 页面路由、布局、全局样式与同源后端代理 |
-| `frontend/components/` | 会话、知识库、设置、审批等业务组件 |
-| `frontend/components/ui/` | 当前业务使用的 11 个共享基础组件 |
-| `frontend/hooks/` | 会话列表、消息、运行状态与附件草稿逻辑 |
-| `frontend/lib/` | API 客户端、日期格式化和通用工具 |
-| `frontend/e2e/`、`frontend/test/` | 端到端测试、测试初始化与工具模块测试；组件和 Hook 测试随源码放置 |
-| `backend/` | 认证、对话、Agent 运行、MCP 管理、审计与可观测性 |
-| `backend/app/api/` | HTTP 接口、认证依赖与请求校验 |
-| `backend/app/agent/`、`backend/app/services/` | Agent 适配、运行编排、工作流、上下文与数据生命周期 |
-| `backend/migrations/`、`backend/tests/` | 数据库版本迁移与后端测试 |
+| `packages/frontend/` | React 对话界面、修复审批与运行记录 |
+| `packages/frontend/app/` | 页面路由、布局、全局样式与同源后端代理 |
+| `packages/frontend/components/` | 会话、知识库、设置、审批等业务组件 |
+| `packages/frontend/components/ui/` | 当前业务使用的 11 个共享基础组件 |
+| `packages/frontend/hooks/` | 会话列表、消息、运行状态与附件草稿逻辑 |
+| `packages/frontend/lib/` | API 客户端、日期格式化和通用工具 |
+| `packages/frontend/e2e/`、`packages/frontend/test/` | 端到端测试、测试初始化与工具模块测试；组件和 Hook 测试随源码放置 |
+| `packages/backend/` | 认证、对话、Agent 运行、MCP 管理、审计与可观测性 |
+| `packages/backend/app/api/` | HTTP 接口、认证依赖与请求校验 |
+| `packages/backend/app/agent/`、`packages/backend/app/services/` | Agent 适配、运行编排、工作流、上下文与数据生命周期 |
+| `packages/backend/migrations/`、`packages/backend/tests/` | 数据库版本迁移与后端测试 |
 | `mcp-services/` | 独立仓库：Diagnosis MCP、Control MCP、模型服务、MQTT 接入与模拟器 |
 | `deploy/` | 本地基础设施配置 |
 | `specs/` | 智能体运行时升级设计与验收规格 |

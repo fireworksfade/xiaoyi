@@ -5,7 +5,7 @@
 services:
   backend:
     build:
-      context: ./backend
+      context: ./packages/backend
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -13,10 +13,13 @@ services:
       APP_SECRET_KEY: local-compose-change-me
       DATABASE_URL: sqlite+aiosqlite:///./data/xiaoyi.db
       FRONTEND_ORIGINS: http://localhost:3000
-      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,iot-diagnosis-mcp,iot-control-mcp
+      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,iot-mcp
       AGENT_RUNTIME: mock
       SESSION_COOKIE_SECURE: "false"
       SESSION_COOKIE_SAMESITE: lax
+      # OpenTelemetry
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: xiaoyi-backend
       # 容器 CMD 已先执行 python -m app.cli deploy；应用启动只校验版本
       DB_AUTO_UPGRADE: "false"
       WORKFLOW_RUNTIME_ENABLED: "true"
@@ -29,38 +32,45 @@ services:
       RUN_ARTIFACT_RETENTION_HOURS: "168"
     volumes:
       - backend-data:/app/data
-      - ./backend/app:/app/app:ro
-      - ./backend/migrations:/app/migrations:ro
-      - ./backend/alembic.ini:/app/alembic.ini:ro
-      - ./backend/scripts:/app/scripts:ro
+      - ./packages/backend/app:/app/app:ro
+      - ./packages/backend/migrations:/app/migrations:ro
+      - ./packages/backend/alembic.ini:/app/alembic.ini:ro
+      - ./packages/backend/scripts:/app/scripts:ro
+    depends_on:
+      jaeger:
+        condition: service_started
     restart: unless-stopped
 
-  iot-diagnosis-mcp:
+  iot-mcp:
     build:
-      context: ./mcp-services
-    command: sh -c "python -m scripts.migrate upgrade --service diagnosis && python -m iot_diagnosis.server"
+      context: ./packages/mcp-services
+    command: sh -c "python -m scripts.migrate upgrade --service diagnosis && python -m scripts.migrate upgrade --service control && python -m iot_mcp.server"
     ports:
-      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:9000:9000"
     environment:
       PYTHONPATH: /app
-      DIAGNOSIS_HOST: 0.0.0.0
-      DIAGNOSIS_PORT: "9001"
+      IOT_MCP_HOST: 0.0.0.0
+      IOT_MCP_PORT: "9000"
+      # OpenTelemetry
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: xiaoyi-iot-mcp
+      # Diagnosis settings
       DIAGNOSIS_DATABASE_PATH: /app/data/iot_diagnosis.db
       DIAGNOSIS_OFFLINE_AFTER_SECONDS: "30"
       DIAGNOSIS_LLM_BASE_URL: ${DIAGNOSIS_LLM_BASE_URL:-https://api.openai.com/v1}
       DIAGNOSIS_LLM_MODEL: ${DIAGNOSIS_LLM_MODEL:-}
       DIAGNOSIS_LLM_API_KEY: ${DIAGNOSIS_LLM_API_KEY:-}
       DIAGNOSIS_LLM_TIMEOUT_SECONDS: ${DIAGNOSIS_LLM_TIMEOUT_SECONDS:-20}
-      DIAGNOSIS_MYSQL_DSN: mysql://iot_diagnosis:${MYSQL_PASSWORD:-local-diagnosis-password}@mysql:3306/iot_diagnosis
       DIAGNOSIS_QDRANT_URL: http://qdrant:6333
-      # Portable 档位使用独立 384 维集合，避免与 GPU 档位的 1024 维集合混写
       DIAGNOSIS_QDRANT_COLLECTION: ${DIAGNOSIS_QDRANT_COLLECTION:-iot_diagnosis_portable}
       DIAGNOSIS_SYNC_RETRY_SECONDS: "30"
-      # Portable 检索档位：本地确定性 hash embedding + weighted reranker
       DIAGNOSIS_EMBEDDING_PROVIDER: ${DIAGNOSIS_EMBEDDING_PROVIDER:-hash}
       DIAGNOSIS_EMBEDDING_DIMENSIONS: ${DIAGNOSIS_EMBEDDING_DIMENSIONS:-384}
       DIAGNOSIS_RERANKER_PROVIDER: ${DIAGNOSIS_RERANKER_PROVIDER:-weighted}
-      # RAG 检索链路：structure_token 分块 + hybrid（Dense + BM25 + RRF + Reranker）
+      DIAGNOSIS_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
+      DIAGNOSIS_READY_MAX_PENDING_SYNC: ${DIAGNOSIS_READY_MAX_PENDING_SYNC:-1000}
+      DIAGNOSIS_RETENTION_INTERVAL_HOURS: ${DIAGNOSIS_RETENTION_INTERVAL_HOURS:-24}
+      # RAG settings
       RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-512}
       RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-64}
       RAG_RETRIEVAL_STRATEGY: ${RAG_RETRIEVAL_STRATEGY:-hybrid}
@@ -69,67 +79,33 @@ services:
       RAG_ENABLE_RERANKER: ${RAG_ENABLE_RERANKER:-true}
       RAG_RERANKER_RANK_WEIGHT: ${RAG_RERANKER_RANK_WEIGHT:-2.0}
       RAG_RERANKER_RANK_FUSION_K: ${RAG_RERANKER_RANK_FUSION_K:-60}
-      DIAGNOSIS_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
-      DIAGNOSIS_MCP_PUBLIC_URL: ${DIAGNOSIS_MCP_PUBLIC_URL:-http://iot-diagnosis-mcp:9001}
-      DIAGNOSIS_READY_MAX_PENDING_SYNC: ${DIAGNOSIS_READY_MAX_PENDING_SYNC:-1000}
-      MQTT_ENABLED: "true"
-      MQTT_HOST: mqtt
-      MQTT_PORT: "1883"
-    volumes:
-      - diagnosis-data:/app/data
-      - ./mcp-services/common:/app/common:ro
-      - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
-      - ./mcp-services/scripts:/app/scripts:ro
-      - ./mcp-services/evals:/app/evals:ro
-      - ./mcp-services/knowledge:/app/knowledge:ro
-    depends_on:
-      mqtt:
-        condition: service_started
-      mysql:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/ready', timeout=3)"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    restart: unless-stopped
-
-  iot-control-mcp:
-    build:
-      context: ./mcp-services
-    command: sh -c "python -m scripts.migrate upgrade --service control && python -m iot_control.server"
-    ports:
-      - "127.0.0.1:9002:9002"
-    environment:
-      PYTHONPATH: /app
-      CONTROL_HOST: 0.0.0.0
-      CONTROL_PORT: "9002"
+      # Control settings
       CONTROL_DATABASE_PATH: /app/data/iot_control.db
       CONTROL_COMMAND_TIMEOUT_SECONDS: "30"
       CONTROL_VERIFY_WINDOW_SECONDS: "60"
       CONTROL_PROPOSAL_TTL_MINUTES: "30"
-      CONTROL_MCP_BEARER_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
-      CONTROL_MCP_PUBLIC_URL: ${CONTROL_MCP_PUBLIC_URL:-http://iot-control-mcp:9002}
-      CONTROL_DIAGNOSIS_VERIFY_URL: http://iot-diagnosis-mcp:9001/internal/diagnoses/verify
-      CONTROL_DIAGNOSIS_VERIFY_TOKEN: ${DIAGNOSIS_MCP_BEARER_TOKEN:-}
-      CONTROL_DIAGNOSIS_VERIFY_TIMEOUT_SECONDS: "3"
+      # MQTT settings
       MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
     volumes:
-      - control-data:/app/data
-      - ./mcp-services/common:/app/common:ro
-      - ./mcp-services/iot_control:/app/iot_control:ro
+      - iot-mcp-data:/app/data
+      - ./packages/mcp-services/common:/app/common:ro
+      - ./packages/mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
+      - ./packages/mcp-services/iot_control:/app/iot_control:ro
+      - ./packages/mcp-services/iot_mcp:/app/iot_mcp:ro
+      - ./packages/mcp-services/scripts:/app/scripts:ro
+      - ./packages/mcp-services/evals:/app/evals:ro
+      - ./packages/mcp-services/knowledge:/app/knowledge:ro
     depends_on:
       mqtt:
         condition: service_started
-      iot-diagnosis-mcp:
+      qdrant:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9002/ready', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/ready', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -138,18 +114,18 @@ services:
 
   iot-simulator-fleet:
     build:
-      context: ./mcp-services
+      context: ./packages/mcp-services
     command: python -m iot_diagnosis.simulator --host mqtt --fleet /app/iot_diagnosis/fleet.json
     environment:
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
       PYTHONPATH: /app
     volumes:
-      - ./mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
+      - ./packages/mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
     depends_on:
       mqtt:
         condition: service_started
-      iot-diagnosis-mcp:
+      iot-mcp:
         condition: service_healthy
     restart: unless-stopped
 
@@ -160,25 +136,6 @@ services:
     volumes:
       - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mqtt-data:/mosquitto/data
-    restart: unless-stopped
-
-  mysql:
-    image: mysql:8.4.11
-    ports:
-      - "127.0.0.1:3306:3306"
-    environment:
-      MYSQL_DATABASE: iot_diagnosis
-      MYSQL_USER: iot_diagnosis
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-local-diagnosis-password}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local-root-password}
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 20s
     restart: unless-stopped
 
   qdrant:
@@ -195,10 +152,17 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    ports:
+      - "127.0.0.1:16686:16686"  # UI
+      - "127.0.0.1:4318:4318"    # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
 volumes:
   backend-data:
-  control-data:
-  diagnosis-data:
+  iot-mcp-data:
   mqtt-data:
-  mysql-data:
   qdrant-data:

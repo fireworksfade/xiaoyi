@@ -1,0 +1,24 @@
+{
+  "profile": "live-retrieval",
+  "cases": 15,
+  "embedding_provider": "openai_compatible",
+  "reranker": {
+    "provider": "qwen3_remote",
+    "fallback": false
+  },
+  "recall@5": 1.0,
+  "precision@5": 0.2308,
+  "mrr": 0.8013,
+  "hit_rate": 1.0,
+  "router_accuracy": 1.0,
+  "source_selection_accuracy": 1.0,
+  "diagnosis_accuracy": 1.0,
+  "diagnosis_name_accuracy": 1.0,
+  "average_retrieval_latency_ms": 256.1584,
+  "p50_retrieval_latency_ms": 251.2829,
+  "p95_retrieval_latency_ms": 312.7568,
+  "token_usage": {
+    "input": 0,
+    "output": 0
+  }
+}

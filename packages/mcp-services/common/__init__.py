@@ -1,0 +1,1 @@
+"""Shared MCP service contracts."""
