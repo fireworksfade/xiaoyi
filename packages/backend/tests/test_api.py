@@ -68,7 +68,7 @@ def test_attachment_and_tool_selection_reach_agent_runtime(monkeypatch) -> None:
             captured["mcp_servers"] = mcp_servers
             yield RuntimeEvent("answer.final", {"content": "已读取附件"})
 
-    monkeypatch.setattr("app.services.runs.build_runtime", lambda _settings: CaptureRuntime())
+    monkeypatch.setattr("app.services.runs.orchestrator.build_runtime", lambda _settings: CaptureRuntime())
 
     with TestClient(app) as client:
         login = client.post(

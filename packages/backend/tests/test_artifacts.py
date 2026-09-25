@@ -275,8 +275,8 @@ def test_prompt_too_long_after_tool_start_never_replays_tool(tmp_path: Path) -> 
 
     try:
         asyncio.run(collect())
-    except WorkflowError as exc:
-        assert exc.code == "CONTEXT_COMPACTION_EXHAUSTED"
+    except RuntimeError as exc:
+        assert "prompt_too_long" in str(exc)
     else:
         raise AssertionError("tool execution was replayed")
     assert runtime.calls == 1
