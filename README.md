@@ -34,6 +34,50 @@ flowchart LR
 
 两个 MCP 服务只通过 MQTT Topic 契约共享设备事件，不直接耦合。主后端负责认证、对话、Agent 运行、MCP 接入策略和审计边界。
 
+### 代码结构
+
+**前端 (Next.js + TypeScript)**
+```
+frontend/
+├── app/                      # Next.js App Router
+├── features/                 # 功能域组件 (按业务功能组织)
+│   ├── conversation/         # 对话相关组件
+│   ├── knowledge/            # 知识库管理
+│   ├── settings/             # 设置面板
+│   └── remediation/          # 修复卡片
+├── components/               # 共享 UI 组件
+├── lib/
+│   ├── api/                  # API 客户端 (模块化)
+│   │   ├── client.ts         # HTTP 客户端核心
+│   │   ├── auth.ts           # 认证 API
+│   │   ├── conversations.ts  # 对话 API
+│   │   ├── runs.ts           # Agent 运行 API
+│   │   ├── knowledge.ts      # 知识库 API
+│   │   ├── settings.ts       # 配置 API
+│   │   └── remediation.ts    # 修复提案 API
+│   └── datetime.ts           # 工具函数
+└── hooks/                    # React Hooks
+```
+
+**后端 (FastAPI + SQLAlchemy)**
+```
+backend/
+├── app/
+│   ├── api/                  # REST API 路由
+│   ├── agent/                # Agent 运行时
+│   ├── services/
+│   │   ├── runs/             # 运行编排服务 (模块化)
+│   │   │   ├── orchestrator.py      # 主编排逻辑
+│   │   │   ├── event_handler.py     # 事件处理
+│   │   │   └── tool_processor.py    # 工具结果处理
+│   │   ├── workflows/        # 工作流引擎
+│   │   ├── context_builder.py       # 上下文构建
+│   │   └── mcp_catalog.py    # MCP 服务管理
+│   ├── models/               # SQLAlchemy 模型
+│   └── db.py                 # 数据库连接
+└── tests/                    # 测试套件
+```
+
 ## 快速开始
 
 ### 1. 准备环境
