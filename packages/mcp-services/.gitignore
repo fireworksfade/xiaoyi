@@ -1,0 +1,31 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments, caches, and test artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editor and OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+eval_results/

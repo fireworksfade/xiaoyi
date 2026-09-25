@@ -1,0 +1,1 @@
+"""IoT Diagnosis MCP Server."""

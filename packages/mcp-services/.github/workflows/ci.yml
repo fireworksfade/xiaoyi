@@ -1,0 +1,26 @@
+name: mcp-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install mcp-services[dev]
+        run: pip install -e ".[dev]"
+      - name: Ruff lint
+        run: ruff check common iot_diagnosis iot_control model_service scripts tests
+      - name: Ruff format check
+        run: ruff format --check common iot_diagnosis iot_control model_service scripts tests
+      - name: Type check
+        run: mypy common iot_diagnosis iot_control model_service
+      - name: Unit and protocol tests
+        run: pytest tests -q

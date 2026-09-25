@@ -1,0 +1,112 @@
+{
+  "defaults": {
+    "interval": 10.0,
+    "firmware_version": "1.2.0",
+    "info_log_every": 300.0,
+    "temperature_base": 26.0,
+    "rssi_base": -55
+  },
+  "devices": [
+    {
+      "device_id": "ESP32_01",
+      "name": "车间A-环境监测01",
+      "scenario": "normal",
+      "interval": 5.0,
+      "temperature_base": 27.5,
+      "rssi_base": -48,
+      "firmware_version": "1.3.1"
+    },
+    {
+      "device_id": "ESP32_02",
+      "name": "车间A-空压机监测",
+      "scenario": "normal",
+      "interval": 10.0,
+      "temperature_base": 38.0,
+      "rssi_base": -58
+    },
+    {
+      "device_id": "ESP32_03",
+      "name": "车间B-焊接工位终端",
+      "scenario": "normal",
+      "interval": 10.0,
+      "temperature_base": 33.5,
+      "rssi_base": -63,
+      "firmware_version": "1.1.4"
+    },
+    {
+      "device_id": "ESP32_04",
+      "name": "成品仓库-温湿度终端",
+      "scenario": "normal",
+      "interval": 15.0,
+      "temperature_base": 24.0,
+      "rssi_base": -66
+    },
+    {
+      "device_id": "ESP32_05",
+      "name": "机房-边缘网关",
+      "scenario": "mqtt_timeout",
+      "interval": 5.0,
+      "temperature_base": 31.0,
+      "rssi_base": -50
+    },
+    {
+      "device_id": "ESP32_06",
+      "name": "办公区-环境终端",
+      "scenario": "wifi_weak",
+      "interval": 10.0,
+      "temperature_base": 26.0,
+      "rssi_base": -60
+    },
+    {
+      "device_id": "ESP32_07",
+      "name": "冷库-温度监控",
+      "scenario": "normal",
+      "interval": 5.0,
+      "temperature_base": 4.0,
+      "rssi_base": -70,
+      "firmware_version": "1.1.4"
+    },
+    {
+      "device_id": "ESP32_08",
+      "name": "配电房-温度监测",
+      "scenario": "normal",
+      "interval": 15.0,
+      "temperature_base": 41.0,
+      "rssi_base": -55
+    },
+    {
+      "device_id": "ESP32_09",
+      "name": "锅炉房-烟温监测",
+      "scenario": "sensor_error",
+      "interval": 10.0,
+      "temperature_base": 55.0,
+      "rssi_base": -68
+    },
+    {
+      "device_id": "ESP32_10",
+      "name": "温室大棚-环境监测",
+      "scenario": "unstable",
+      "interval": 10.0,
+      "temperature_base": 29.0,
+      "rssi_base": -72
+    },
+    {
+      "device_id": "ESP32_11",
+      "name": "综合楼-能耗采集终端",
+      "scenario": "normal",
+      "interval": 15.0,
+      "temperature_base": 28.0,
+      "rssi_base": -52,
+      "firmware_version": "1.3.1"
+    },
+    {
+      "device_id": "ESP32_12",
+      "name": "泵房-水泵状态监测",
+      "scenario": "normal",
+      "interval": 5.0,
+      "temperature_base": 35.0,
+      "rssi_base": -60,
+      "firmware_version": "1.1.4"
+    }
+  ]
+}

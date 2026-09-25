@@ -1,0 +1,18 @@
+{
+  "name": "xiaoyi-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Xiaoyi IoT Platform - Monorepo",
+  "scripts": {
+    "dev": "pnpm --filter frontend dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "type-check": "pnpm -r type-check"
+  },
+  "keywords": ["iot", "mcp", "diagnosis", "monorepo"],
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}
