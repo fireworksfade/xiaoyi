@@ -212,7 +212,9 @@ async def test_cancel_real_run_flushes_events_and_stops_once(monkeypatch) -> Non
             started.set()
             await asyncio.sleep(60)
 
-    monkeypatch.setattr("app.services.runs.orchestrator.build_runtime", lambda _settings: SlowRuntime())
+    monkeypatch.setattr(
+        "app.services.runs.orchestrator.build_runtime", lambda _settings: SlowRuntime()
+    )
     dispatcher = RunDispatcher(execute_claimed_run, poll_interval_seconds=0.05)
     dispatcher.start()
     try:
