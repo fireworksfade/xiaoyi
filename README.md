@@ -59,7 +59,7 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 - 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。
 - IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/README.md`](packages/backend/README.md)。
-- `compose.retrieval-gpu.yaml` 目前仍引用旧服务名 `iot-diagnosis-mcp` 与旧路径 `./mcp-services`，**不能直接与当前基础 Compose 叠加使用**；`compose.retrieval-offline.yaml` 依赖该 GPU 配置。基础流程请使用上面的 Portable 命令。
+- 当前仓库只维护 Portable 检索档位。GPU/离线检索覆盖配置已移除；如需恢复 GPU 部署，应先为统一的 `iot-mcp` 服务重新设计并验证 Compose 覆盖文件。
 
 ## 测试
 

@@ -1,7 +1,5 @@
 # Portable 档位：无 GPU、无模型下载即可运行。
 # 诊断服务使用本地确定性检索（hash embedding + weighted reranker，384 维集合）。
-# GPU 检索：docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build
-# 离线缓存：GPU 命令再叠加 -f compose.retrieval-offline.yaml
 services:
   backend:
     build:

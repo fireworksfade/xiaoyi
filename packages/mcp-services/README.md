@@ -220,33 +220,9 @@ from iot_diagnosis.external.mysql_mirror import MySQLMirror
 - `RAG_RETRIEVAL_DEBUG=true` 时返回候选的 dense/sparse rank、RRF 和 reranker 调试信息。
 - 实时 RSSI、温度、在线状态、WiFi/MQTT 状态问题由 Rule Router 直接回答，不调用诊断 LLM。
 
-### 检索部署档位
+### 检索部署
 
-| 档位 | Embedding / Reranker | 向量维度 | 要求 |
-| --- | --- | --- | --- |
-| Portable（默认 Compose） | hash / weighted | 384 | 无 GPU、无模型下载 |
-| GPU | Qwen3-Embedding-0.6B / Qwen3-Reranker-0.6B | 1024 | NVIDIA runtime，建议至少 4 GiB 空闲显存 |
-| GPU offline | 已缓存的 Qwen3 模型 | 1024 | 完整模型缓存，禁止联网下载 |
-
-在主项目目录中切换档位：
-
-```powershell
-# GPU
-docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build
-
-# GPU + offline
-docker compose -f compose.yaml -f compose.retrieval-gpu.yaml -f compose.retrieval-offline.yaml up -d --build
-```
-
-Portable 和 GPU 档位应使用不同的 Qdrant collection，主项目默认分别为 `iot_diagnosis_portable` 和 `iot_diagnosis_qwen3`，避免 384/1024 维向量混写。GPU 档位首次下载约 2.5 GiB 模型，典型冷启动时间为 5–20 分钟。
-
-模型缓存模式由 `MODEL_CACHE_MODE=download|offline` 控制。发布离线部署前可检查缓存：
-
-```powershell
-.venv\Scripts\python -m scripts.check_model_cache --models-dir C:\path\to\model-cache
-```
-
-缓存完整时退出码为 0；否则退出码为 1。offline 模式缓存不完整时 `/ready` 返回 503 和 `MODEL_CACHE_INCOMPLETE`，不会联网下载。
+当前主项目 Compose 使用 Portable 检索档位：hash embedding、weighted reranker 和 384 维向量集合，无 GPU 或模型下载要求。GPU/离线 Compose 覆盖配置暂不随主项目发布；如需恢复 GPU 部署，应先适配统一的 `iot-mcp` 服务并重新验证向量集合隔离和模型缓存流程。
 
 ## 诊断与存储
 
@@ -372,12 +348,6 @@ $env:DIAGNOSIS_RETENTION_DELETE_ENABLED = "true"
 
 ```powershell
 .venv\Scripts\python -m scripts.evaluate_chunk_sizes
-```
-
-在主项目 GPU Compose 档位中运行真实 Qwen3 检索评测：
-
-```powershell
-docker compose -f compose.yaml -f compose.retrieval-gpu.yaml exec iot-diagnosis-mcp python /app/scripts/evaluate_rag.py --profile live-retrieval --database /app/data/iot_diagnosis.db
 ```
 
 对已运行的 Diagnosis MCP 做在线协议验收：

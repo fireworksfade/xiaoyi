@@ -1,9 +1,0 @@
-# 离线模型缓存档位（叠加在 GPU 档位之上）：
-#   docker compose -f compose.yaml -f compose.retrieval-gpu.yaml -f compose.retrieval-offline.yaml up -d --build
-#
-# 要求模型缓存已完整；缓存缺失时 /ready 返回 503 与 MODEL_CACHE_INCOMPLETE，
-# 不进行任何网络下载。
-services:
-  retrieval-models:
-    environment:
-      MODEL_CACHE_MODE: offline
