@@ -114,7 +114,15 @@ http://localhost:16686
 1. ✅ Stage 1: MySQL 镜像层移除
 2. ✅ Stage 2: 统一 MCP 服务器
 3. ✅ Stage 3: Monorepo 转换
-4. ⏳ Stage 4.1: OpenTelemetry (1-2 天)
+4. ✅ Stage 4.1: OpenTelemetry (完成于 2026-09-26)
+   - ✅ Jaeger 容器配置 (all-in-one:1.60)
+   - ✅ 后端 telemetry 模块 (app/telemetry.py)
+   - ✅ MCP telemetry 模块 (common/telemetry.py)
+   - ✅ 后端集成 configure_telemetry()
+   - ✅ MCP 服务器集成 configure_telemetry()
+   - ✅ 验证追踪链路和 Jaeger UI
+   - ✅ 验证脚本 (scripts/verify_telemetry.py)
+   - 📄 验证报告: [docs/stage-4.1-verification.md](docs/stage-4.1-verification.md)
 5. ⏳ Stage 4.2: 错误处理 (1 天)
 6. ⏳ Stage 4.3: 状态管理 (1 天)
 7. ⏳ Stage 4.4: 性能监控 (1 天)

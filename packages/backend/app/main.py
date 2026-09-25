@@ -27,6 +27,7 @@ from app.services.retention import retention_loop
 from app.services.run_dispatcher import RunDispatcher
 from app.services.run_recovery import recover_interrupted_runs
 from app.services.runs import execute_claimed_run
+from app.telemetry import setup_telemetry
 
 configure_logging("xiaoyi-backend")
 logger = logging.getLogger("xiaoyi.main")
@@ -119,6 +120,10 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+
+# Setup OpenTelemetry tracing
+setup_telemetry(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.frontend_origins,

@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from common.results import failure, success
+from common.telemetry import setup_telemetry
 
 # Diagnosis imports
 from iot_diagnosis.auth import auth_configuration as diagnosis_auth_configuration
@@ -623,6 +624,9 @@ async def ready_check(_request: Request) -> JSONResponse:
 if __name__ == "__main__":
     host = os.getenv("IOT_MCP_HOST", "0.0.0.0")
     port = int(os.getenv("IOT_MCP_PORT", "9000"))
+
+    # Setup OpenTelemetry tracing
+    setup_telemetry("xiaoyi-iot-mcp")
 
     logger.info(f"Starting unified IoT MCP server on {host}:{port}")
 

@@ -17,6 +17,9 @@ services:
       AGENT_RUNTIME: mock
       SESSION_COOKIE_SECURE: "false"
       SESSION_COOKIE_SAMESITE: lax
+      # OpenTelemetry
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: xiaoyi-backend
       # 容器 CMD 已先执行 python -m app.cli deploy；应用启动只校验版本
       DB_AUTO_UPGRADE: "false"
       WORKFLOW_RUNTIME_ENABLED: "true"
@@ -33,6 +36,9 @@ services:
       - ./packages/backend/migrations:/app/migrations:ro
       - ./packages/backend/alembic.ini:/app/alembic.ini:ro
       - ./packages/backend/scripts:/app/scripts:ro
+    depends_on:
+      jaeger:
+        condition: service_started
     restart: unless-stopped
 
   iot-mcp:
@@ -45,6 +51,9 @@ services:
       PYTHONPATH: /app
       IOT_MCP_HOST: 0.0.0.0
       IOT_MCP_PORT: "9000"
+      # OpenTelemetry
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: xiaoyi-iot-mcp
       # Diagnosis settings
       DIAGNOSIS_DATABASE_PATH: /app/data/iot_diagnosis.db
       DIAGNOSIS_OFFLINE_AFTER_SECONDS: "30"
@@ -93,6 +102,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/ready', timeout=3)"]
       interval: 10s
@@ -139,6 +150,15 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    ports:
+      - "127.0.0.1:16686:16686"  # UI
+      - "127.0.0.1:4318:4318"    # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
     restart: unless-stopped
 
 volumes:
