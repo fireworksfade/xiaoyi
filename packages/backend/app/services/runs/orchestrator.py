@@ -179,7 +179,9 @@ async def _stream_with_context_recovery(
             async with SessionFactory() as db:
                 artifact = await LocalArtifactStore(
                     settings.run_artifact_root, settings.run_artifact_retention_hours
-                ).write(db, run_id=run_id, kind="transcript", content={"messages": runtime_messages})
+                ).write(
+                    db, run_id=run_id, kind="transcript", content={"messages": runtime_messages}
+                )
                 await db.commit()
 
             CONTEXT_COMPACTIONS.labels(layer="L2").inc()
