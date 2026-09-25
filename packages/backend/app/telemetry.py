@@ -51,11 +51,6 @@ def setup_telemetry(app):
 
     excluded = ExcludeList(["/ready", "/health", "/docs", "/openapi.json"])
 
-    app.add_middleware(
-        OpenTelemetryMiddleware,
-        excluded_urls=excluded
-    )
+    app.add_middleware(OpenTelemetryMiddleware, excluded_urls=excluded)
 
-    logger.info(
-        f"OpenTelemetry configured: service={service_name}, endpoint={otlp_endpoint}"
-    )
+    logger.info(f"OpenTelemetry configured: service={service_name}, endpoint={otlp_endpoint}")

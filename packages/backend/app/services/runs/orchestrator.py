@@ -136,10 +136,7 @@ def _gate_final_content(decision: CompletionDecision, model_content: str) -> str
         return model_content or "任务已完成。"
     if decision.action == "pass":
         if decision.reason_code == "PASS_HANDOFF":
-            return (
-                model_content
-                or "已达最大续轮次数。如需继续，请调整问题或在新对话中重试。"
-            )
+            return model_content or "已达最大续轮次数。如需继续，请调整问题或在新对话中重试。"
         return model_content
     if decision.action == "fail":
         return f"运行失败：{decision.message}"
@@ -166,7 +163,9 @@ async def _stream_with_context_recovery(
             extra={"event": "context_recovery", "run_id": run_id},
         )
         try:
-            compacted = compact_retry_messages(runtime_messages, workflow_snapshot=runtime.workflow_snapshot)
+            compacted = compact_retry_messages(
+                runtime_messages, workflow_snapshot=runtime.workflow_snapshot
+            )
             CONTEXT_COMPACTIONS.labels(layer="L2").inc()
             async for event in runtime.stream(compacted, mcp_servers):
                 yield event
