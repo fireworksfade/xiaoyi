@@ -5,11 +5,11 @@ import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ConversationSidebar } from '@/components/conversation-sidebar';
-import { ConversationView } from '@/components/conversation-view';
-import { MessageComposer } from '@/components/message-composer';
-import { SettingsSheet } from '@/components/settings-sheet';
-import { KnowledgeDialog } from '@/components/knowledge-dialog';
+import { ConversationSidebar } from '@/features/conversation/conversation-sidebar';
+import { ConversationView } from '@/features/conversation/conversation-view';
+import { MessageComposer } from '@/features/conversation/message-composer';
+import { SettingsSheet } from '@/features/settings/settings-sheet';
+import { KnowledgeDialog } from '@/features/knowledge/knowledge-dialog';
 import { RunRecordsSheet } from '@/components/run-records-sheet';
 import { useConversationMessages } from '@/hooks/use-conversation-messages';
 import { useAttachmentDraft } from '@/hooks/use-attachment-draft';
