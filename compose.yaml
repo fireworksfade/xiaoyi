@@ -51,7 +51,6 @@ services:
       DIAGNOSIS_LLM_MODEL: ${DIAGNOSIS_LLM_MODEL:-}
       DIAGNOSIS_LLM_API_KEY: ${DIAGNOSIS_LLM_API_KEY:-}
       DIAGNOSIS_LLM_TIMEOUT_SECONDS: ${DIAGNOSIS_LLM_TIMEOUT_SECONDS:-20}
-      DIAGNOSIS_MYSQL_DSN: mysql://iot_diagnosis:${MYSQL_PASSWORD:-local-diagnosis-password}@mysql:3306/iot_diagnosis
       DIAGNOSIS_QDRANT_URL: http://qdrant:6333
       # Portable 档位使用独立 384 维集合，避免与 GPU 档位的 1024 维集合混写
       DIAGNOSIS_QDRANT_COLLECTION: ${DIAGNOSIS_QDRANT_COLLECTION:-iot_diagnosis_portable}
@@ -85,8 +84,6 @@ services:
     depends_on:
       mqtt:
         condition: service_started
-      mysql:
-        condition: service_healthy
       qdrant:
         condition: service_healthy
     healthcheck:
@@ -162,25 +159,6 @@ services:
       - mqtt-data:/mosquitto/data
     restart: unless-stopped
 
-  mysql:
-    image: mysql:8.4.11
-    ports:
-      - "127.0.0.1:3306:3306"
-    environment:
-      MYSQL_DATABASE: iot_diagnosis
-      MYSQL_USER: iot_diagnosis
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-local-diagnosis-password}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local-root-password}
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 20s
-    restart: unless-stopped
-
   qdrant:
     image: qdrant/qdrant:v1.19.1
     ports:
@@ -200,5 +178,4 @@ volumes:
   control-data:
   diagnosis-data:
   mqtt-data:
-  mysql-data:
   qdrant-data:
