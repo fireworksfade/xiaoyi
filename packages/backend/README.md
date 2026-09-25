@@ -18,6 +18,16 @@ python -m venv .venv
 
 开发账号：`admin / admin123`、`operator / operator123`。它们只用于本地演示，生产环境必须关闭自动播种并更换凭据。
 
+## 连接本地 MCP
+
+启动 `docker compose up -d` 后，在仓库根目录运行：
+
+```powershell
+docker compose exec -T backend python scripts/bootstrap_local_mcp.py
+```
+
+脚本向后端注册统一 IoT MCP（`http://iot-mcp:9000/mcp`），测试连接、刷新工具目录，并按风险策略启用工具。重复运行会更新现有配置。需要连接宿主机上的后端时，可用 `--backend` 和 `--mcp-url` 指定地址。
+
 ## 容器部署
 
 镜像使用根目录 `compose.yaml` 或本目录 `Dockerfile` 构建。线上配置以
@@ -60,7 +70,7 @@ python -m venv .venv
 - `GET /ready`：业务就绪探针，检查数据库 `SELECT 1`、schema 迁移版本与 Dispatcher 状态，
   返回 `ready|degraded|not_ready` 与逐组件 `checks`；必需组件失败返回 503。
   容器 HEALTHCHECK 已切换到 `/ready`。
-- 必需 MCP 依赖通过 `MCP_REQUIRED_SERVER_KEYS` 声明（如 `iot-diagnosis-local`）；
+- 必需 MCP 依赖通过 `MCP_REQUIRED_SERVER_KEYS` 声明（如 `iot-mcp-local`）；
   必需 MCP 离线 → 503，未声明的 MCP 不参与就绪判定。
 - `GET /metrics`：Prometheus 指标（HTTP 请求量/延迟、Agent run 状态与耗时、SSE 连接数、
   MCP 调用结果与延迟、上下文预算省略量、保留策略清理量）。

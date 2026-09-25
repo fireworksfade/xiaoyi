@@ -1,306 +1,92 @@
 # Xiaoyi IoT 平台
 
-> 基于智能体和 MCP 协议的 IoT 设备诊断与控制平台
+基于智能体和 MCP 的 IoT 设备诊断与控制平台。前端提供对话、知识文档和管理界面；FastAPI 后端负责认证、对话、Agent 运行与工具策略；统一 IoT MCP 服务提供设备诊断、知识检索和设备控制能力。
 
-## 项目概述
+## 当前架构
 
-Xiaoyi 是一个现代化的 IoT 平台，通过 AI 智能体技术提供设备故障诊断和远程控制能力。平台采用 Monorepo 架构，集成了前端交互界面、智能体后端服务和 MCP（Model Context Protocol）服务。
+| 组件 | 目录或服务 | 职责 |
+| --- | --- | --- |
+| 前端 | `packages/frontend` | React 19 + Vinext，浏览器通过同源 `/api/backend` 代理访问后端 |
+| 后端 | `packages/backend` | FastAPI、SQLite、Agent 运行、SSE、MCP 工具目录与审批策略 |
+| IoT MCP | `packages/mcp-services/iot_mcp` | 单个 Streamable HTTP 服务，整合诊断与控制工具 |
+| 基础设施 | `compose.yaml` | MQTT、Qdrant、Jaeger、设备模拟机群及后端和 MCP 容器 |
 
-### 核心特性
-
-- **智能诊断**：基于 RAG（检索增强生成）的设备故障诊断，支持多种检索策略
-- **远程控制**：通过 MQTT 协议实现设备控制指令的安全下发与验证
-- **会话管理**：支持多轮对话的智能体交互，包含上下文恢复和工具审批机制
-- **知识库**：文档管理、故障案例库，支持 PDF 文档解析与向量检索
-- **可观测性**：集成 OpenTelemetry 和 Jaeger 进行分布式追踪
-- **模块化架构**：前后端分离，MCP 服务独立部署
-
-## 技术栈
-
-### 前端 (packages/frontend)
-- **框架**: React 19 + Vinext (基于 Vite 的 SSR 框架)
-- **UI 组件**: shadcn/ui + Base UI
-- **样式**: Tailwind CSS 4.2
-- **类型检查**: TypeScript 5.9
-- **测试**: Vitest + Playwright
-- **部署**: Cloudflare Workers
-
-### 后端 (packages/backend)
-- **框架**: FastAPI 0.141
-- **AI SDK**: OpenAI Agents 0.22
-- **数据库**: SQLite + SQLAlchemy 2.0 + Alembic
-- **可观测性**: OpenTelemetry + Prometheus
-- **异步运行时**: Uvicorn + asyncio
-
-### MCP 服务 (packages/mcp-services)
-- **协议**: MCP 2.1.1
-- **设备通信**: MQTT (Paho) + Eclipse Mosquitto
-- **向量数据库**: Qdrant 1.19
-- **Embedding**: 支持 Hash/GPU 模式（可配置）
-- **重排序**: Weighted reranker / GPU reranker
+默认 Compose 使用本地 hash embedding 和 weighted reranker，无需 GPU 或模型下载。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
 
 ## 快速开始
 
-### 环境要求
+需要 Docker Compose 和 Node.js 22.13 或更高版本。基础 Compose **不启动前端**，因此按下面两步分别启动。
 
-- **Node.js**: >= 22.13.0
-- **Python**: >= 3.12
-- **pnpm**: >= 8.0.0
-- **Docker**: 20.10+ (用于 Compose 部署)
+### 1. 启动后端与 IoT MCP
 
-### 本地开发
-
-#### 1. 使用 Docker Compose（推荐）
+在仓库根目录运行：
 
 ```bash
-# 启动所有服务（无 GPU 模式）
 docker compose up -d --build
-
-# GPU 检索模式（需要 NVIDIA GPU）
-docker compose -f compose.yaml -f compose.retrieval-gpu.yaml up -d --build
-
-# 离线缓存模式
-docker compose -f compose.yaml -f compose.retrieval-gpu.yaml -f compose.retrieval-offline.yaml up -d --build
+docker compose ps
+docker compose exec -T backend python scripts/bootstrap_local_mcp.py
 ```
 
-服务地址：
-- 前端: http://localhost:3000
-- 后端 API: http://localhost:8000
-- IoT MCP 服务: http://localhost:9000
-- Jaeger UI: http://localhost:16686
-- Qdrant UI: http://localhost:6333/dashboard
+最后一条命令向后端注册 `http://iot-mcp:9000/mcp`，测试连接、刷新工具目录并配置风险策略。重复运行可刷新已有连接。开发环境使用演示账号 `admin / admin123`；该账号只适用于本地开发。
 
-#### 2. 手动开发模式
+### 2. 启动前端
 
-**前端开发**:
+另开一个终端：
+
 ```bash
 cd packages/frontend
-pnpm install
-pnpm dev
+npm ci
+npm run dev -- --hostname 127.0.0.1
 ```
 
-**后端开发**:
-```bash
-cd packages/backend
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-python -m app.cli deploy   # 初始化数据库
-uvicorn app.main:app --reload
-```
+打开 [前端](http://127.0.0.1:3000)。本地前端默认把 `/api/backend` 请求代理到 `http://127.0.0.1:8000`；需要更改后端地址时，在 `packages/frontend/.env.local` 中设置 `BACKEND_BASE_URL`。`--hostname` 是 Vinext 使用的绑定参数。
 
-**MCP 服务**:
-```bash
-cd packages/mcp-services
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-python -m scripts.migrate upgrade --service diagnosis
-python -m scripts.migrate upgrade --service control
-python -m iot_mcp.server
-```
+### 服务地址与检查
 
-### 环境变量配置
+| 地址 | 用途 |
+| --- | --- |
+| [127.0.0.1:3000](http://127.0.0.1:3000) | 前端（单独启动） |
+| [127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) | 后端 API 文档 |
+| [127.0.0.1:8000/ready](http://127.0.0.1:8000/ready) | 后端业务就绪检查 |
+| [127.0.0.1:9000/ready](http://127.0.0.1:9000/ready) | IoT MCP 就绪检查 |
+| [127.0.0.1:16686](http://127.0.0.1:16686) | Jaeger 追踪界面 |
+| [127.0.0.1:6333/dashboard](http://127.0.0.1:6333/dashboard) | Qdrant 管理界面 |
 
-复制 `.env.example` 为 `.env`（如果存在），或参考 `compose.yaml` 中的环境变量配置：
+MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务及工具。注册脚本将查询与诊断工具设为只读策略、可发起的动作设为提案策略、需人工审批的写入与删除工具设为审批策略；未列入策略的工具保持禁用。
 
-**必需配置**:
-- `DIAGNOSIS_LLM_API_KEY`: LLM API 密钥
-- `DIAGNOSIS_LLM_BASE_URL`: LLM API 地址（默认 OpenAI）
-- `DIAGNOSIS_LLM_MODEL`: 使用的模型名称
+## 配置
 
-**可选配置**:
-- `RAG_CHUNK_SIZE`: 文档分块大小（默认 512）
-- `RAG_RETRIEVAL_STRATEGY`: 检索策略 (hybrid/dense/sparse)
-- `DIAGNOSIS_EMBEDDING_PROVIDER`: Embedding 提供商 (hash/gpu)
-
-## 项目结构
-
-```
-.
-├── packages/
-│   ├── backend/              # FastAPI 后端服务
-│   │   ├── app/
-│   │   │   ├── agent/       # 智能体运行时与工具语义
-│   │   │   ├── api/         # REST API 路由
-│   │   │   ├── services/    # 业务逻辑层
-│   │   │   ├── models.py    # SQLAlchemy 模型
-│   │   │   └── main.py      # 应用入口
-│   │   ├── migrations/      # Alembic 数据库迁移
-│   │   └── tests/           # 后端测试
-│   │
-│   ├── frontend/            # React 前端应用
-│   │   ├── app/            # 路由与页面
-│   │   ├── components/     # React 组件
-│   │   ├── lib/            # 工具函数与 API 客户端
-│   │   └── test/           # 前端测试
-│   │
-│   └── mcp-services/       # MCP 协议服务
-│       ├── iot_diagnosis/  # 诊断服务（RAG + 检索）
-│       ├── iot_control/    # 控制服务（MQTT + 指令）
-│       ├── iot_mcp/        # MCP 服务器
-│       ├── common/         # 共享工具
-│       └── evals/          # 评估与测试用例
-│
-├── docs/                   # 项目文档
-├── deploy/                 # 部署配置
-├── scripts/                # 工具脚本
-└── compose.yaml            # Docker Compose 配置
-```
-
-详细架构说明见 [docs/project-structure.md](docs/project-structure.md)
+- 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。
+- IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
+- 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/README.md`](packages/backend/README.md)。
+- `compose.retrieval-gpu.yaml` 目前仍引用旧服务名 `iot-diagnosis-mcp` 与旧路径 `./mcp-services`，**不能直接与当前基础 Compose 叠加使用**；`compose.retrieval-offline.yaml` 依赖该 GPU 配置。基础流程请使用上面的 Portable 命令。
 
 ## 测试
 
-### 前端测试
+前端命令在 `packages/frontend` 中执行：
+
 ```bash
-pnpm test          # 单元测试
-pnpm test:e2e      # E2E 测试
-pnpm typecheck     # 类型检查
-pnpm lint          # 代码检查
+npm run typecheck
+npm run lint
+npm test
+npx playwright install chromium  # 首次运行端到端测试时安装浏览器
+npm run test:e2e
 ```
 
-### 后端测试
+后端与 MCP 服务分别在对应目录安装开发依赖后运行：
+
 ```bash
-cd packages/backend
-pytest                    # 运行所有测试
-pytest tests/api/         # 测试 API 层
-mypy app                  # 类型检查
-ruff check app            # 代码检查
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
-### MCP 服务测试
-```bash
-cd packages/mcp-services
-pytest                    # 运行所有测试
-pytest tests/diagnosis/   # 诊断服务测试
-mypy iot_diagnosis        # 类型检查
-```
+前端测试使用 Vitest 和 Playwright；后端与 MCP 服务测试使用 pytest。Python 需要 3.12 或更高版本。
 
-## API 文档
-
-启动后端服务后访问：
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **OpenAPI JSON**: http://localhost:8000/openapi.json
-
-## 部署
-
-### Docker 部署
-
-生产环境建议使用 Docker Compose：
+## 常用维护命令
 
 ```bash
-# 构建并启动所有服务
-docker compose up -d --build
-
-# 查看日志
-docker compose logs -f
-
-# 停止服务
+docker compose logs -f backend iot-mcp
 docker compose down
-
-# 清理数据卷（谨慎操作）
-docker compose down -v
 ```
 
-### 健康检查
-
-- 后端: `GET http://localhost:8000/health`
-- IoT MCP: `GET http://localhost:9000/ready`
-
-## 开发指南
-
-### 代码风格
-
-- **Python**: 使用 Ruff 进行格式化和检查（最大行长 100）
-- **TypeScript**: 使用 oxlint + oxfmt
-- **提交信息**: 遵循 Conventional Commits 规范
-
-### 添加新功能
-
-1. 在对应的 package 中创建功能分支
-2. 编写测试用例
-3. 实现功能代码
-4. 运行完整的测试套件和类型检查
-5. 提交 PR 并通过 CI 检查
-
-### 数据库迁移
-
-```bash
-# 后端
-cd packages/backend
-alembic revision --autogenerate -m "描述"
-alembic upgrade head
-
-# MCP 服务（诊断）
-cd packages/mcp-services
-python -m scripts.migrate create --service diagnosis --message "描述"
-python -m scripts.migrate upgrade --service diagnosis
-
-# MCP 服务（控制）
-python -m scripts.migrate create --service control --message "描述"
-python -m scripts.migrate upgrade --service control
-```
-
-## 监控与调试
-
-### 分布式追踪
-访问 Jaeger UI (http://localhost:16686) 查看请求追踪：
-- 服务: `xiaoyi-backend`, `xiaoyi-iot-mcp`
-- 支持跨服务调用链分析
-
-### 向量数据库管理
-访问 Qdrant Dashboard (http://localhost:6333/dashboard) 管理向量集合
-
-### 日志查看
-```bash
-# 查看特定服务日志
-docker compose logs -f backend
-docker compose logs -f iot-mcp
-
-# 查看所有日志
-docker compose logs -f
-```
-
-## 常见问题
-
-### 1. 前端无法连接后端
-- 检查 `FRONTEND_ORIGINS` 环境变量是否包含前端地址
-- 确认 CORS 配置正确
-
-### 2. IoT 设备连接失败
-- 检查 MQTT broker 是否正常运行
-- 验证设备配置中的 MQTT 地址和端口
-
-### 3. RAG 检索结果不准确
-- 调整 `RAG_CHUNK_SIZE` 和 `RAG_CHUNK_OVERLAP`
-- 尝试不同的 `RAG_RETRIEVAL_STRATEGY`
-- 检查 Qdrant 中的向量数据是否正确同步
-
-### 4. 数据库迁移失败
-- 检查数据库文件权限
-- 确认所有迁移脚本按顺序执行
-- 查看迁移日志中的详细错误信息
-
-## 贡献指南
-
-欢迎贡献代码、报告问题或提出建议！
-
-1. Fork 本仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'feat: add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 开启 Pull Request
-
-## 许可证
-
-[待定]
-
-## 联系方式
-
-项目维护者: yijia
-
----
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+`docker compose down` 保留命名数据卷。后端迁移与就绪检查、运行事件和数据保留机制详见 [`packages/backend/README.md`](packages/backend/README.md)。

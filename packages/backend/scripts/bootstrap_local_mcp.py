@@ -1,31 +1,19 @@
-"""Register the Docker Compose MCP services in a local backend instance."""
+"""Register the unified Docker Compose IoT MCP service in a local backend."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+from http.cookiejar import CookieJar
+from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
-import httpx
-
-SERVER_DEFINITIONS = (
-    {
-        "server_key": "iot-diagnosis-local",
-        "name": "本地 IoT 智能诊断",
-        "url": "http://iot-diagnosis-mcp:9001/mcp",
-        "purpose": "iot",
-        "service_kind": "diagnosis",
-    },
-    {
-        "server_key": "iot-control-local",
-        "name": "本地 IoT 设备控制",
-        "url": "http://iot-control-mcp:9002/mcp",
-        "purpose": "iot",
-        "service_kind": "control",
-    },
-)
-
-REPLACED_SERVER_KEYS = {"rag-local", "iot-local"}
+SERVER_DEFINITION = {
+    "server_key": "iot-mcp-local",
+    "name": "本地 IoT 诊断与控制",
+    "url": "http://iot-mcp:9000/mcp",
+    "purpose": "iot",
+}
 
 READ_ONLY_TOOLS = {
     "diagnose_fault",
@@ -61,113 +49,114 @@ APPROVAL_REQUIRED_TOOLS = {
 }
 
 
-def data(response: httpx.Response) -> object:
-    response.raise_for_status()
-    return response.json()["data"]
+class APIClient:
+    def __init__(self) -> None:
+        self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+
+    def data(
+        self,
+        method: str,
+        url: str,
+        *,
+        payload: dict[str, object] | None = None,
+        csrf_token: str | None = None,
+    ) -> object:
+        headers = {"Content-Type": "application/json"} if payload is not None else {}
+        if csrf_token:
+            headers["X-CSRF-Token"] = csrf_token
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        request = Request(url, data=body, headers=headers, method=method)
+        with self.opener.open(request, timeout=30) as response:
+            return json.load(response)["data"]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", default="http://127.0.0.1:8000")
+    parser.add_argument("--mcp-url", default=SERVER_DEFINITION["url"])
     parser.add_argument("--credential", default=os.getenv("DIAGNOSIS_MCP_BEARER_TOKEN", ""))
     args = parser.parse_args()
     api = f"{args.backend.rstrip('/')}/api/v1"
 
-    with httpx.Client(timeout=30, trust_env=False) as client:
-        login = data(
-            client.post(
-                f"{api}/auth/login",
-                json={"username": "admin", "password": "admin123"},
+    client = APIClient()
+    login = client.data(
+        "POST",
+        f"{api}/auth/login",
+        payload={"username": "admin", "password": "admin123"},
+    )
+    csrf_token = login["csrf_token"]
+    existing = {
+        item["server_key"]: item
+        for item in client.data("GET", f"{api}/mcp-servers?page_size=100")["items"]
+    }
+    summary: list[dict[str, object]] = []
+
+    for definition in ({**SERVER_DEFINITION, "url": args.mcp_url},):
+        credential_update = {"credential": args.credential} if args.credential else {}
+        current = existing.get(definition["server_key"])
+        if current:
+            server = client.data(
+                "PATCH",
+                f"{api}/mcp-servers/{current['id']}",
+                csrf_token=csrf_token,
+                payload={
+                    "name": definition["name"],
+                    "url": definition["url"],
+                    "purpose": definition["purpose"],
+                    "enabled": True,
+                    **credential_update,
+                },
             )
+        else:
+            server = client.data(
+                "POST",
+                f"{api}/mcp-servers",
+                csrf_token=csrf_token,
+                payload={**definition, **credential_update},
+            )
+            server = client.data(
+                "PATCH",
+                f"{api}/mcp-servers/{server['id']}",
+                csrf_token=csrf_token,
+                payload={"enabled": True},
+            )
+
+        connection = client.data(
+            "POST", f"{api}/mcp-servers/{server['id']}/test", csrf_token=csrf_token
         )
-        headers = {"X-CSRF-Token": login["csrf_token"]}
-        existing = {
-            item["server_key"]: item
-            for item in data(client.get(f"{api}/mcp-servers?page_size=100"))["items"]
-        }
-        for replaced_key in REPLACED_SERVER_KEYS:
-            replaced = existing.get(replaced_key)
-            if replaced:
-                data(
-                    client.delete(
-                        f"{api}/mcp-servers/{replaced['id']}",
-                        headers=headers,
-                    )
-                )
-        summary: list[dict[str, object]] = []
-
-        for definition in SERVER_DEFINITIONS:
-            credential_update = {"credential": args.credential} if args.credential else {}
-            current = existing.get(definition["server_key"])
-            if current:
-                server = data(
-                    client.patch(
-                        f"{api}/mcp-servers/{current['id']}",
-                        headers=headers,
-                        json={
-                            "name": definition["name"],
-                            "url": definition["url"],
-                            "purpose": definition["purpose"],
-                            "enabled": True,
-                            **credential_update,
-                        },
-                    )
-                )
+        catalog = client.data(
+            "POST", f"{api}/mcp-servers/{server['id']}/refresh-tools", csrf_token=csrf_token
+        )
+        enabled: list[str] = []
+        for tool in catalog["items"]:
+            if tool["original_name"] in READ_ONLY_TOOLS:
+                policy = "read_only"
+            elif tool["original_name"] in PROPOSAL_ONLY_TOOLS:
+                policy = "proposal_only"
+            elif tool["original_name"] in APPROVAL_REQUIRED_TOOLS:
+                policy = "approval_required"
             else:
-                server = data(
-                    client.post(
-                        f"{api}/mcp-servers",
-                        headers=headers,
-                        json={**definition, **credential_update},
-                    )
-                )
-                server = data(
-                    client.patch(
-                        f"{api}/mcp-servers/{server['id']}",
-                        headers=headers,
-                        json={"enabled": True},
-                    )
-                )
-
-            connection = data(
-                client.post(f"{api}/mcp-servers/{server['id']}/test", headers=headers)
+                policy = "disabled"
+            is_enabled = policy != "disabled"
+            client.data(
+                "PATCH",
+                f"{api}/mcp-servers/{server['id']}/tools/{tool['id']}",
+                csrf_token=csrf_token,
+                payload={"enabled": is_enabled, "risk_policy": policy},
             )
-            catalog = data(
-                client.post(
-                    f"{api}/mcp-servers/{server['id']}/refresh-tools",
-                    headers=headers,
-                )
-            )
-            enabled: list[str] = []
-            for tool in catalog["items"]:
-                if tool["original_name"] in READ_ONLY_TOOLS:
-                    policy = "read_only"
-                elif tool["original_name"] in PROPOSAL_ONLY_TOOLS:
-                    policy = "proposal_only"
-                elif tool["original_name"] in APPROVAL_REQUIRED_TOOLS:
-                    policy = "approval_required"
-                else:
-                    policy = "disabled"
-                is_enabled = policy != "disabled"
-                data(
-                    client.patch(
-                        f"{api}/mcp-servers/{server['id']}/tools/{tool['id']}",
-                        headers=headers,
-                        json={"enabled": is_enabled, "risk_policy": policy},
-                    )
-                )
-                if is_enabled:
-                    enabled.append(tool["original_name"])
+            if is_enabled:
+                enabled.append(tool["original_name"])
 
-            summary.append(
-                {
-                    "server_key": server["server_key"],
-                    "connected": connection["connected"],
-                    "tool_count": connection["tool_count"],
-                    "enabled_tools": enabled,
-                }
-            )
+        summary.append(
+            {
+                "server_key": server["server_key"],
+                "connected": connection["connected"],
+                "tool_count": connection["tool_count"],
+                "enabled_tools": enabled,
+            }
+        )
 
+    client.data("POST", f"{api}/auth/logout", csrf_token=csrf_token)
     print(json.dumps(summary, ensure_ascii=False))
 
 
