@@ -33,6 +33,7 @@ out/
 coverage/
 playwright-report/
 test-results/
+pnpm-lock.yaml
 
 # Local archives, logs, and editor metadata
 *.tar.gz
@@ -49,3 +50,10 @@ Thumbs.db
 # Local personal working files
 /output/
 /tmp/
+
+# Test scripts and temporary files
+packages/backend/check_mcp_servers.py
+packages/backend/test_mcp_create.py
+packages/backend/test_backend_db.py
+packages/backend/test_direct_insert.py
+packages/backend/test_list_api.py
