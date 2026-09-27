@@ -1,0 +1,78 @@
+# 检索模型档位（叠加在 compose.yaml 之上）：
+#   docker compose -f compose.yaml -f compose.retrieval-models.yaml up -d --build
+#
+# 主档位使用本地 Docker 内的 Qwen3 模型服务，之前的 hash + weighted 方案
+# 自动降级为兜底：模型服务不可用时，检索自动回落到 hash 兜底集合
+# （384 维，独立于主集合），reranker 回落到 weighted，恢复后 outbox
+# 自动补齐主集合向量，无需人工干预。
+#
+# 资源与冷启动预期：
+#   - 显存：两个 Qwen3-0.6B 模型常驻约 2.6 GiB（fp16）；建议预留 4 GiB 以上空闲显存。
+#   - 磁盘：模型缓存首次下载约 2.5 GiB（retrieval-model-cache 卷）。
+#   - 首次冷启动：下载约 2.5 GiB + 加载，通常 5–20 分钟，取决于带宽与磁盘。
+#   - CPU-only 主机删除 gpus: all 即可，模型服务会自动回退 CPU 推理（速度较慢）。
+services:
+  retrieval-models:
+    build:
+      context: ./packages/mcp-services
+      dockerfile: Dockerfile.models
+    ports:
+      - "127.0.0.1:9010:9010"
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      RERANKER_MODEL: ${RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      MODEL_MAX_LENGTH: "2048"
+      EMBEDDING_BATCH_SIZE: "8"
+      RERANKER_BATCH_SIZE: "4"
+      # /ready 上报的默认输出维度；请求仍可显式携带 dimensions 覆盖
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-512}
+      HF_HOME: /models
+      # 国内网络 huggingface.co 直连超时，默认走 hf-mirror.com 镜像；
+      # 可用 HF_ENDPOINT 覆盖（如直连可用时设为 https://huggingface.co）。
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      # download：允许从模型源下载缺失文件；下载完成后写入持久卷。
+      # 离线部署叠加 compose.retrieval-offline.yaml 切换为 offline。
+      MODEL_CACHE_MODE: ${MODEL_CACHE_MODE:-download}
+    volumes:
+      - retrieval-model-cache:/models
+      - ./packages/mcp-services/model_service:/app/model_service:ro
+    gpus: all
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9010/ready', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 30m
+    restart: unless-stopped
+
+  iot-mcp:
+    environment:
+      # 主档位：Qwen3-Embedding-0.6B（512 维 MRL 截断）+ Qwen3-Reranker-0.6B
+      DIAGNOSIS_EMBEDDING_PROVIDER: ${DIAGNOSIS_EMBEDDING_PROVIDER:-openai_compatible}
+      DIAGNOSIS_EMBEDDING_BASE_URL: ${DIAGNOSIS_EMBEDDING_BASE_URL:-http://retrieval-models:9010/v1}
+      DIAGNOSIS_EMBEDDING_MODEL: ${DIAGNOSIS_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      DIAGNOSIS_EMBEDDING_API_KEY: ${DIAGNOSIS_EMBEDDING_API_KEY:-local-model-service}
+      DIAGNOSIS_EMBEDDING_DIMENSIONS: ${DIAGNOSIS_EMBEDDING_DIMENSIONS:-512}
+      DIAGNOSIS_VECTOR_BATCH_SIZE: ${DIAGNOSIS_VECTOR_BATCH_SIZE:-32}
+      DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION: ${DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION:-Given an IoT fault diagnosis query, retrieve relevant technical passages and verified cases}
+      DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL: ${DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL:-http://retrieval-models:9010/ready}
+      DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_TIMEOUT_SECONDS: ${DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_TIMEOUT_SECONDS:-3}
+      DIAGNOSIS_RERANKER_PROVIDER: ${DIAGNOSIS_RERANKER_PROVIDER:-qwen3}
+      DIAGNOSIS_RERANKER_URL: ${DIAGNOSIS_RERANKER_URL:-http://retrieval-models:9010/rerank}
+      DIAGNOSIS_RERANKER_TIMEOUT_SECONDS: ${DIAGNOSIS_RERANKER_TIMEOUT_SECONDS:-30}
+      # 主集合与兜底集合分离，避免两种向量混入同一集合
+      DIAGNOSIS_QDRANT_COLLECTION: ${DIAGNOSIS_QDRANT_COLLECTION:-iot_diagnosis_qwen3_512}
+      DIAGNOSIS_QDRANT_FALLBACK_COLLECTION: ${DIAGNOSIS_QDRANT_FALLBACK_COLLECTION:-iot_diagnosis_portable}
+      # 模型服务不可用时回落 hash 兜底集合；置 false 可关闭兜底
+      DIAGNOSIS_EMBEDDING_FALLBACK: ${DIAGNOSIS_EMBEDDING_FALLBACK:-true}
+      DIAGNOSIS_EMBEDDING_FALLBACK_DIMENSIONS: ${DIAGNOSIS_EMBEDDING_FALLBACK_DIMENSIONS:-384}
+    depends_on:
+      mqtt:
+        condition: service_started
+      qdrant:
+        condition: service_healthy
+      retrieval-models:
+        condition: service_healthy
+
+volumes:
+  retrieval-model-cache:

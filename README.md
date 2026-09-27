@@ -11,7 +11,7 @@
 | IoT MCP | `packages/mcp-services/iot_mcp` | 单个 Streamable HTTP 服务，整合诊断与控制工具 |
 | 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
 
-默认 Compose 使用本地 hash embedding 和 weighted reranker，无需 GPU 或模型下载。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
+默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载；需要真实语义检索时叠加检索模型档位（Qwen3 主档位，见下文「检索模型档位」），此时 hash + weighted 自动降级为兜底。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
 
@@ -61,6 +61,7 @@ npm run dev
 | [127.0.0.1:8000/ready](http://127.0.0.1:8000/ready) | 后端业务就绪检查 |
 | [127.0.0.1:9000/ready](http://127.0.0.1:9000/ready) | IoT MCP 就绪检查 |
 | [127.0.0.1:6333/dashboard](http://127.0.0.1:6333/dashboard) | Qdrant 管理界面 |
+| [127.0.0.1:9010/ready](http://127.0.0.1:9010/ready) | 检索模型服务就绪检查（仅检索模型档位） |
 
 MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务及工具。注册脚本将查询与诊断工具设为只读策略、可发起的动作设为提案策略、需人工审批的写入与删除工具设为审批策略；未列入策略的工具保持禁用。
 
@@ -69,7 +70,21 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 - 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。
 - IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/README.md`](packages/backend/README.md)。
-- 当前仓库只维护 Portable 检索档位。GPU/离线检索覆盖配置已移除；如需恢复 GPU 部署，应先为统一的 `iot-mcp` 服务重新设计并验证 Compose 覆盖文件。
+
+## 检索模型档位
+
+在 Portable 档位之上叠加 `compose.retrieval-models.yaml`，把检索切换到本地 Docker 内的 Qwen3 模型服务：
+
+```bash
+docker compose -f compose.yaml -f compose.retrieval-models.yaml up -d --build
+```
+
+- **主档位**：`retrieval-models` 服务加载 `Qwen/Qwen3-Embedding-0.6B`（MRL 截断到 512 维）与 `Qwen/Qwen3-Reranker-0.6B`，向量写入主集合 `iot_diagnosis_qwen3_512`，检索继续走 hybrid（dense + BM25 + RRF + Qwen3 重排）。
+- **兜底档位**：主集合与兜底集合独立，模型服务不可用时查询向量自动回落 hash（384 维）检索兜底集合 `iot_diagnosis_portable`，reranker 回落 weighted；服务恢复后 outbox 自动补齐主集合向量，无需人工干预。两个档位使用同一套检索代码，通过环境变量切换。
+- **资源预期**：显存约 2.6 GiB（fp16，建议预留 4 GiB 以上），模型缓存约 2.5 GiB，首次冷启动 5–20 分钟。CPU-only 主机删除 `gpus: all` 即可，模型服务会自动回退 CPU 推理。
+- **离线部署**：模型缓存完整后叠加 `compose.retrieval-offline.yaml`，缓存缺失时 `/ready` 返回 503 与 `MODEL_CACHE_INCOMPLETE`，不做网络下载。
+- **切换与重建**：首次启用或主集合为空时，执行一次 `python -m scripts.ingest_recommended_documents` 或调用 `rebuild_vector_index` 工具重建主集合向量；兜底集合与 Portable 档位共用，已有数据直接可用。
+- `DIAGNOSIS_EMBEDDING_FALLBACK=false` 可关闭兜底；`DIAGNOSIS_QDRANT_FALLBACK_COLLECTION`、`DIAGNOSIS_EMBEDDING_FALLBACK_DIMENSIONS` 可调整兜底集合与维度。
 
 ## 测试
 

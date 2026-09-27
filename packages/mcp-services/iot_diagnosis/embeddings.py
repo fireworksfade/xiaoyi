@@ -113,6 +113,36 @@ class OpenAICompatibleEmbeddingProvider:
         return vectors
 
 
+class ResilientEmbeddingProvider:
+    """主 embedding 不可用时回落到本地确定性 provider（兜底档位）。
+
+    仅在运行期请求失败时切换；构造期配置缺失仍然直接报错，避免把
+    配置错误静默降级。两个 provider 维度必须不同，向量存储依赖维度
+    区分向量来源并路由到对应集合。
+    """
+
+    def __init__(self, primary: EmbeddingProvider, fallback: EmbeddingProvider):
+        if primary.dimensions == fallback.dimensions:
+            raise ValueError("EMBEDDING_FALLBACK_DIMENSIONS_CONFLICT")
+        self.primary = primary
+        self.fallback = fallback
+        self.name = primary.name
+        self.dimensions = primary.dimensions
+        self.fallback_dimensions = fallback.dimensions
+
+    def embed(self, text: str, *, is_query: bool = False) -> list[float]:
+        try:
+            return self.primary.embed(text, is_query=is_query)
+        except Exception:
+            return self.fallback.embed(text, is_query=is_query)
+
+    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
+        try:
+            return self.primary.embed_many(texts, is_query=is_query)
+        except Exception:
+            return self.fallback.embed_many(texts, is_query=is_query)
+
+
 def embedding_provider_from_env() -> EmbeddingProvider:
     provider = os.getenv("DIAGNOSIS_EMBEDDING_PROVIDER", "hash").strip().lower()
     dimensions = int(os.getenv("DIAGNOSIS_EMBEDDING_DIMENSIONS", "384"))

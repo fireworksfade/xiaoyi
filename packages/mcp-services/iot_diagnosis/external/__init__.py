@@ -7,8 +7,9 @@
 注意: MySQL 镜像已移除，数据直接从 SQLite → Qdrant 同步
 """
 
-from .qdrant_store import QdrantVectorStore
 from .manager import ExternalStores
+from .qdrant_store import QdrantVectorStore
+from .resilient_store import ResilientVectorStore
 
-__all__ = ["QdrantVectorStore", "ExternalStores"]
+__all__ = ["QdrantVectorStore", "ExternalStores", "ResilientVectorStore"]
 

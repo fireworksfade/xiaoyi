@@ -69,6 +69,13 @@ def semantic_sources(
             }
             cache["dims"] = provider_dims
         query_vector = embedding_provider.embed(query, is_query=True)
+        # 主备 embedding 切换后维度可能变化（如 512 维主档回落 384 维兜底），
+        # 缓存原型与查询向量维度不一致时必须重建，否则余弦计算失真
+        if any(len(vector) != len(query_vector) for vector in cache["vectors"].values()):
+            cache["vectors"] = {
+                source: embedding_provider.embed(text) for source, text in SOURCE_PROTOTYPES.items()
+            }
+            cache["dims"] = len(query_vector)
         scored = sorted(
             (
                 (source, _cosine(query_vector, vector))

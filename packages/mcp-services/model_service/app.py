@@ -39,6 +39,8 @@ RERANKER_INSTRUCTION = os.getenv(
     "RERANKER_INSTRUCTION",
     "Rank passages and verified cases by relevance to an IoT fault diagnosis query",
 )
+# /ready 上报的默认输出维度；实际维度以每次请求的 dimensions 参数为准
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
 
 
 class EmbeddingRequest(BaseModel):
@@ -224,7 +226,7 @@ def _ready_payload() -> dict[str, Any]:
         "reranker_model_cached": (service_state.get("cache") or {}).get("reranker_model_cached"),
         "loading_stage": service_state["loading_stage"],
         "last_error_code": service_state["last_error_code"],
-        "dimensions": 1024,
+        "dimensions": EMBEDDING_DIMENSIONS,
     }
 
 
