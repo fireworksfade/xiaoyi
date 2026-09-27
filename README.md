@@ -9,7 +9,7 @@
 | 前端 | `packages/frontend` | React 19 + Vinext，浏览器通过同源 `/api/backend` 代理访问后端 |
 | 后端 | `packages/backend` | FastAPI、SQLite、Agent 运行、SSE、MCP 工具目录与审批策略 |
 | IoT MCP | `packages/mcp-services/iot_mcp` | 单个 Streamable HTTP 服务，整合诊断与控制工具 |
-| 基础设施 | `compose.yaml` | MQTT、Qdrant、Jaeger、设备模拟机群及后端和 MCP 容器 |
+| 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
 
 默认 Compose 使用本地 hash embedding 和 weighted reranker，无需 GPU 或模型下载。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
 
@@ -29,17 +29,26 @@ docker compose exec -T backend python scripts/bootstrap_local_mcp.py
 
 最后一条命令向后端注册 `http://iot-mcp:9000/mcp`，测试连接、刷新工具目录并配置风险策略。重复运行可刷新已有连接。开发环境使用演示账号 `admin / admin123`；该账号只适用于本地开发。
 
-### 2. 启动前端
-
-另开一个终端：
+首次启动或重建数据卷后，导入随项目提供的真实技术资料：
 
 ```bash
-cd packages/frontend
-npm ci
-npm run dev -- --hostname 127.0.0.1
+docker compose exec -T iot-mcp python -m scripts.ingest_recommended_documents
 ```
 
-打开 [前端](http://127.0.0.1:3000)。本地前端默认把 `/api/backend` 请求代理到 `http://127.0.0.1:8000`；需要更改后端地址时，在 `packages/frontend/.env.local` 中设置 `BACKEND_BASE_URL`。`--hostname` 是 Vinext 使用的绑定参数。
+该命令将 20 份官方文档快照和 12 份整理的诊断指南写入持久化知识库，同时建立全文与 Qdrant 向量索引，覆盖 MQTT、WiFi、传感器和 ESP32 设备。官方快照正文保留来源链接；这些资料属于技术文档，不是现场故障案例。重复执行会按固定文档 ID 替换对应资料，不会重复添加。输出中的 `vector_indexed: true` 和 `sync_status: complete` 表示向量同步完成；`pending` 表示等待后台重试。导入后可在前端“知识库”查看，并通过 `search_knowledge` 检索。
+
+### 2. 启动前端
+
+另开一个终端，在仓库根目录执行（Node.js >= 22.13，npm >= 10）：
+
+```bash
+npm ci
+npm run dev
+```
+
+打开 [前端](http://127.0.0.1:3000)。开发脚本默认监听 `127.0.0.1`；本地前端默认把 `/api/backend` 请求代理到 `http://127.0.0.1:8000`。需要更改后端地址时，在 `packages/frontend/.env.local` 中设置 `BACKEND_BASE_URL`。
+
+项目统一使用 npm workspaces，依赖锁文件为根目录的 `package-lock.json`。安装与 CI 均在根目录运行 `npm ci`；为前端添加依赖使用 `npm install <包名> --workspace=packages/frontend`（开发依赖加 `-D`）。前端目录内也可运行 `npm run dev`。
 
 ### 服务地址与检查
 
@@ -49,7 +58,6 @@ npm run dev -- --hostname 127.0.0.1
 | [127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) | 后端 API 文档 |
 | [127.0.0.1:8000/ready](http://127.0.0.1:8000/ready) | 后端业务就绪检查 |
 | [127.0.0.1:9000/ready](http://127.0.0.1:9000/ready) | IoT MCP 就绪检查 |
-| [127.0.0.1:16686](http://127.0.0.1:16686) | Jaeger 追踪界面 |
 | [127.0.0.1:6333/dashboard](http://127.0.0.1:6333/dashboard) | Qdrant 管理界面 |
 
 MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务及工具。注册脚本将查询与诊断工具设为只读策略、可发起的动作设为提案策略、需人工审批的写入与删除工具设为审批策略；未列入策略的工具保持禁用。
@@ -63,13 +71,13 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 
 ## 测试
 
-前端命令在 `packages/frontend` 中执行：
+前端命令统一在仓库根目录执行：
 
 ```bash
 npm run typecheck
 npm run lint
 npm test
-npx playwright install chromium  # 首次运行端到端测试时安装浏览器
+npm exec --workspace=packages/frontend -- playwright install chromium  # 首次运行端到端测试时安装浏览器
 npm run test:e2e
 ```
 

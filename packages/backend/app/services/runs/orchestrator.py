@@ -24,8 +24,6 @@ from app.models import (
 from app.observability.metrics import (
     AGENT_RUN_DURATION,
     AGENT_RUNS,
-    COMPLETION_GATE_CONTINUATIONS,
-    COMPLETION_GATE_DECISIONS,
     CONTEXT_COMPACTIONS,
     CONTEXT_ESTIMATED_TOKENS,
     CONTEXT_OMITTED_MESSAGES,
@@ -33,7 +31,6 @@ from app.observability.metrics import (
 )
 from app.security import decrypt_secret
 from app.services.artifacts import LocalArtifactStore, extract_critical_fields
-from app.services.completion_gate import CompletionDecision, CompletionGate
 from app.services.context_builder import (
     CONTEXT_INPUT_TOO_LARGE,
     AttachmentDraft,
@@ -58,16 +55,18 @@ from app.services.run_state import (
     claim_queued_run,
     mark_finished,
 )
-from app.services.workflows import (
-    WorkflowError,
-    complete_diagnosis_workflow,
-    get_workflow_for_run,
-)
 
 from .event_handler import append_event
-from .tool_processor import collect_proposal, process_tool_semantic_events
+from .tool_processor import collect_proposal
 
 logger = logging.getLogger("xiaoyi.runs.orchestrator")
+
+
+class ContextCompactionError(RuntimeError):
+    code = CONTEXT_COMPACTION_EXHAUSTED
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 
 async def _record_hook_observations(run_id: str, point: str, context: HookContext) -> None:
@@ -81,66 +80,6 @@ async def _record_hook_observations(run_id: str, point: str, context: HookContex
                 run_id,
                 RuntimeEvent("hook.failed", {"point": point, **dict(observation.data)}),
             )
-
-
-async def _evaluate_gate(run_id: str, settings, continuation_count: int) -> CompletionDecision:
-    """评估 Completion Gate 决策。"""
-    async with SessionFactory() as db:
-        run = await db.get(AgentRun, run_id)
-        if run is None:
-            raise RuntimeError("RUN_NOT_FOUND")
-        workflow, steps = await get_workflow_for_run(db, run_id)
-        decision = CompletionGate(settings.completion_gate_max_continuations).evaluate(
-            workflow, steps, continuation_count=continuation_count
-        )
-        if workflow is not None and decision.reason_code == "GOAL_DIAGNOSIS_COMPLETE":
-            await complete_diagnosis_workflow(db, workflow, steps)
-        state = {**(run.runtime_state or {})}
-        state["completion_gate"] = {
-            "action": decision.action,
-            "reason_code": decision.reason_code,
-            "required_action": decision.required_action,
-            "evidence": decision.evidence,
-            "continuation_count": continuation_count,
-        }
-        run.runtime_state = state
-        await db.commit()
-        COMPLETION_GATE_DECISIONS.labels(
-            action=decision.action, reason_code=decision.reason_code
-        ).inc()
-        await append_event(
-            run_id,
-            RuntimeEvent(
-                "completion_gate.decision",
-                {
-                    "action": decision.action,
-                    "reason_code": decision.reason_code,
-                    "required_action": decision.required_action,
-                    "evidence": decision.evidence,
-                    "continuation_count": continuation_count,
-                },
-            ),
-        )
-        return decision
-
-
-def _gate_final_content(decision: CompletionDecision, model_content: str) -> str:
-    """根据 Gate 决策调整最终内容。"""
-    if decision.action == "complete":
-        if decision.reason_code == "GOAL_DIAGNOSIS_COMPLETE":
-            return model_content or "诊断已完成。"
-        if decision.reason_code == "GOAL_REMEDIATION_COMPLETE":
-            return model_content or "修复已完成并验证。"
-        if decision.reason_code == "APPROVAL_REQUIRED":
-            return model_content or "修复提案已生成，等待审批。"
-        return model_content or "任务已完成。"
-    if decision.action == "pass":
-        if decision.reason_code == "PASS_HANDOFF":
-            return model_content or "已达最大续轮次数。如需继续，请调整问题或在新对话中重试。"
-        return model_content
-    if decision.action == "fail":
-        return f"运行失败：{decision.message}"
-    return model_content
 
 
 async def _stream_with_context_recovery(
@@ -167,13 +106,9 @@ async def _stream_with_context_recovery(
             extra={"event": "context_recovery", "run_id": run_id},
         )
         try:
-            compacted = compact_retry_messages(
-                runtime_messages, workflow_snapshot=runtime.workflow_snapshot
-            )
+            compacted = compact_retry_messages(runtime_messages)
             if compacted == runtime_messages:
-                raise WorkflowError(
-                    CONTEXT_COMPACTION_EXHAUSTED, "model input cannot be compacted further"
-                )
+                raise ContextCompactionError("model input cannot be compacted further")
 
             # 保存压缩前的转录并发出事件
             async with SessionFactory() as db:
@@ -199,8 +134,8 @@ async def _stream_with_context_recovery(
                 yield event
         except Exception as inner_exc:
             if is_prompt_too_long(inner_exc):
-                raise WorkflowError(
-                    CONTEXT_COMPACTION_EXHAUSTED, "model input still exceeds its context window"
+                raise ContextCompactionError(
+                    "model input still exceeds its context window"
                 ) from inner_exc
             raise
 
@@ -211,7 +146,6 @@ async def execute_claimed_run(run_id: str) -> None:
     DEFAULT_HOOKS.set_timeout_ms(settings.hook_timeout_ms)
     final_content = ""
     proposals: list[dict[str, object]] = []
-    gate_decision: CompletionDecision | None = None
     buffer: RunEventBuffer | None = None
 
     try:
@@ -355,7 +289,6 @@ async def execute_claimed_run(run_id: str) -> None:
                     summary = summarize_history(
                         transcript,
                         current_goal=current_message.content,
-                        workflow_snapshot=runtime.workflow_snapshot,
                     )
                     snapshot = await save_context_snapshot(
                         db,
@@ -422,102 +355,42 @@ async def execute_claimed_run(run_id: str) -> None:
             ),
         )
 
-        continuation_count = 0
-        tool_started_any = False
+        async for event in _stream_with_context_recovery(
+            run_id,
+            runtime,
+            runtime_messages,
+            mcp_servers,
+            settings,
+            allow_retry=True,
+        ):
+            if event.event_type == "answer.final":
+                final_content = str(event.data.get("content", ""))
+                continue
 
-        while True:
-            async for event in _stream_with_context_recovery(
-                run_id,
-                runtime,
-                runtime_messages,
-                mcp_servers,
-                settings,
-                allow_retry=not tool_started_any and continuation_count == 0,
-            ):
-                if event.event_type == "tool.started":
-                    tool_started_any = True
-                if event.event_type == "answer.final":
-                    final_content = str(event.data.get("content", ""))
-                    continue
-
-                if event.event_type == "tool.finished":
-                    proposal = collect_proposal(event.data, proposals)
-                    if proposal is not None:
-                        buffer.append(
-                            RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
-                        )
-                    try:
-                        await process_tool_semantic_events(
-                            run_id, event.data, runtime, settings.workflow_runtime_enabled
-                        )
-                    except WorkflowError as exc:
-                        buffer.append(event)
-                        buffer.append(
-                            RuntimeEvent(
-                                "semantic.invalid",
-                                {"tool_name": event.data.get("tool_name"), "error": str(exc)},
-                            )
-                        )
-                        raise
-
-                    await _record_hook_observations(
-                        run_id,
-                        "after_tool",
-                        HookContext(
-                            run_id=run_id,
-                            event_type="tool.finished",
-                            tool_name=str(event.data.get("tool_name") or ""),
-                            server_name=event.data.get("server_name"),
-                            call_id=event.data.get("call_id"),
-                            sanitized_output_summary=MappingProxyType(
-                                extract_critical_fields(event.data.get("output"))
-                            ),
-                        ),
+            if event.event_type == "tool.finished":
+                proposal = collect_proposal(event.data, proposals)
+                if proposal is not None:
+                    buffer.append(
+                        RuntimeEvent("remediation.proposal_created", {"proposal": proposal}),
                     )
-                buffer.append(event)
-                await buffer.flush_due()
-
-            await buffer.flush()
-
-            if not settings.completion_gate_enabled:
-                break
-            gate_decision = await _evaluate_gate(run_id, settings, continuation_count)
-            if gate_decision.action != "continue":
-                break
-
-            continuation_count += 1
-            COMPLETION_GATE_CONTINUATIONS.inc()
-            await append_event(
-                run_id,
-                RuntimeEvent(
-                    "completion_gate.continuation",
-                    {
-                        "continuation_count": continuation_count,
-                        "reason_code": gate_decision.reason_code,
-                        "required_action": gate_decision.required_action,
-                    },
-                ),
-            )
-            runtime_messages = [
-                *runtime_messages,
-                {
-                    "role": "system",
-                    "content": (
-                        "Completion Gate requires additional structured evidence. "
-                        f"Reason: {gate_decision.reason_code}. "
-                        f"Required action: {gate_decision.required_action}. "
-                        f"Workflow snapshot: {gate_decision.evidence}. "
-                        "Use only the allowed next tool and do not claim success without verification."
+                await _record_hook_observations(
+                    run_id,
+                    "after_tool",
+                    HookContext(
+                        run_id=run_id,
+                        event_type="tool.finished",
+                        tool_name=str(event.data.get("tool_name") or ""),
+                        server_name=event.data.get("server_name"),
+                        call_id=event.data.get("call_id"),
+                        sanitized_output_summary=MappingProxyType(
+                            extract_critical_fields(event.data.get("output"))
+                        ),
                     ),
-                },
-            ]
+                )
+            buffer.append(event)
+            await buffer.flush_due()
 
         await buffer.flush()
-
-        if gate_decision is not None:
-            final_content = _gate_final_content(gate_decision, final_content)
-            if gate_decision.action == "fail":
-                raise WorkflowError(gate_decision.reason_code, gate_decision.message)
 
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
@@ -607,7 +480,7 @@ async def execute_claimed_run(run_id: str) -> None:
             },
         )
         AGENT_RUNS.labels(status="failed").inc()
-        error_code = exc.code if isinstance(exc, WorkflowError) else AGENT_RUN_FAILED
+        error_code = exc.code if isinstance(exc, ContextCompactionError) else AGENT_RUN_FAILED
         async with SessionFactory() as db:
             run = await db.get(AgentRun, run_id)
             if run:

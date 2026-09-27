@@ -12,50 +12,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import {
-  deleteAgentRun,
-  getAgentRunWorkflow,
-  listAgentRuns,
-  type AgentRunSummary,
-  type OperationWorkflow,
-} from '@/lib/api';
+import { deleteAgentRun, listAgentRuns, type AgentRunSummary } from '@/lib/api';
 import { formatApiDateTime } from '@/lib/datetime';
-
-const STEP_LABELS: Record<string, string> = {
-  diagnose: '诊断',
-  select_action: '选择动作',
-  approve: '审批',
-  remediate: '执行修复',
-  verify: '恢复验证',
-  archive_case: '案例归档',
-};
-
-const WORKFLOW_STATUS_LABELS: Record<string, string> = {
-  active: '进行中',
-  waiting_approval: '等待审批',
-  waiting_verification: '等待恢复验证',
-  completed: '已完成',
-  failed: '修复失败',
-  cancelled: '已取消',
-};
-
-const WORKFLOW_OUTCOME_LABELS: Record<string, string> = {
-  diagnosed: '诊断完成',
-  awaiting_approval: '等待审批',
-  remediated_verified: '恢复已验证',
-  remediated_verified_archive_pending: '恢复已验证，案例归档中',
-  remediation_failed: '修复或验证失败',
-  cancelled: '未执行修复',
-};
-
-const STEP_STATUS_LABELS: Record<string, string> = {
-  pending: '待开始',
-  running: '执行中',
-  waiting: '等待中',
-  completed: '已完成',
-  skipped: '已跳过',
-  failed: '失败',
-};
 
 const STATUS_VARIANTS: Record<
   AgentRunSummary['status'],
@@ -79,10 +37,6 @@ export function RunRecordsSheet(props: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
-  const [workflows, setWorkflows] = useState<
-    Record<string, OperationWorkflow | null>
-  >({});
-
   useEffect(() => {
     if (!props.open) return;
     let cancelled = false;
@@ -91,14 +45,8 @@ export function RunRecordsSheet(props: {
       setError(null);
       try {
         const page = await listAgentRuns({ pageSize: 50 });
-        const workflowEntries = await Promise.all(
-          page.items.map(
-            async (run) => [run.id, await getAgentRunWorkflow(run.id)] as const,
-          ),
-        );
         if (!cancelled) {
           setRuns(page.items);
-          setWorkflows(Object.fromEntries(workflowEntries));
         }
       } catch (cause) {
         if (!cancelled) {
@@ -121,11 +69,6 @@ export function RunRecordsSheet(props: {
     try {
       await deleteAgentRun(run.id);
       setRuns((current) => current.filter((item) => item.id !== run.id));
-      setWorkflows((current) => {
-        const next = { ...current };
-        delete next[run.id];
-        return next;
-      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '运行记录删除失败');
     } finally {
@@ -155,7 +98,6 @@ export function RunRecordsSheet(props: {
           ) : (
             <ul className="space-y-2">
               {runs.map((run) => {
-                const workflow = workflows[run.id];
                 const terminal = [
                   'completed',
                   'failed',
@@ -209,40 +151,6 @@ export function RunRecordsSheet(props: {
                       >
                         {run.error.code}: {run.error.message}
                       </p>
-                    ) : null}
-                    {workflow ? (
-                      <div className="mt-2 border-t border-slate-100 pt-2">
-                        <p className="text-xs text-slate-500">
-                          {workflow.device_id ?? 'IoT'} ·{' '}
-                          {WORKFLOW_STATUS_LABELS[workflow.status] ??
-                            workflow.status}
-                          {workflow.outcome
-                            ? ` · ${WORKFLOW_OUTCOME_LABELS[workflow.outcome] ?? workflow.outcome}`
-                            : ''}
-                        </p>
-                        <ol className="mt-1 grid grid-cols-3 gap-1">
-                          {workflow.steps.map((step) => (
-                            <li
-                              key={step.step_key}
-                              className={`rounded px-1.5 py-1 text-[10px] ${
-                                step.status === 'failed'
-                                  ? 'bg-red-50 text-red-700'
-                                  : step.status === 'completed'
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : step.status === 'waiting' ||
-                                        step.status === 'running'
-                                      ? 'bg-amber-50 text-amber-700'
-                                      : 'bg-slate-50 text-slate-400'
-                              }`}
-                            >
-                              {STEP_LABELS[step.step_key] ?? step.step_key}
-                              <span className="block">
-                                {STEP_STATUS_LABELS[step.status] ?? step.status}
-                              </span>
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
                     ) : null}
                   </li>
                 );

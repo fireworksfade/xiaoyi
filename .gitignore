@@ -33,7 +33,6 @@ out/
 coverage/
 playwright-report/
 test-results/
-pnpm-lock.yaml
 
 # Local archives, logs, and editor metadata
 *.tar.gz

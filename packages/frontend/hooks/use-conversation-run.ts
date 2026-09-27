@@ -45,12 +45,6 @@ class RunFailure extends Error {
   }
 }
 
-const RUN_ERROR_MESSAGES: Record<string, string> = {
-  REQUIRED_EVIDENCE_MISSING: '缺少当前工作流所需的诊断证据',
-  WORKFLOW_STATE_CONFLICT: '诊断与修复证据不一致',
-  WORKFLOW_MULTI_DEVICE_UNSUPPORTED: '一次运行只能处理一台设备',
-};
-
 export function useConversationRun({
   conversationId: initialConversationId,
   attachments,
@@ -212,19 +206,6 @@ export function useConversationRun({
             }));
           }
         }
-        if (event.type.startsWith('workflow.')) {
-          const step = displayValue(event.data.current_step, 'diagnose');
-          const status = displayValue(event.data.status, event.type.slice(9));
-          updateAssistant((message) => ({
-            ...message,
-            tools: [
-              ...(message.tools ?? []).filter(
-                (tool) => tool.name !== '运维工作流',
-              ),
-              { name: '运维工作流', result: `${step} · ${status}` },
-            ],
-          }));
-        }
         if (event.type === 'run.failed') {
           const error = event.data.error as
             | { code?: string; message?: string }
@@ -247,8 +228,7 @@ export function useConversationRun({
           }));
           return true;
         }
-        const message =
-          (error.code && RUN_ERROR_MESSAGES[error.code]) || error.message;
+        const message = error.message;
         updateAssistant((current) => ({
           ...current,
           text: `小yi运行失败：${message}${error.code ? `（${error.code}）` : ''}`,

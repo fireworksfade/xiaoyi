@@ -127,7 +127,7 @@ describe('useConversationRun', () => {
     ]);
   });
 
-  it('shows a workflow evidence failure as a run failure', async () => {
+  it('shows a backend failure as a run failure', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string) => {
@@ -138,7 +138,7 @@ describe('useConversationRun', () => {
           return Response.json({ data: { run_id: 'run-3' }, request_id: 'r' });
         }
         return sse(
-          'event: run.failed\ndata: {"id":4,"data":{"error":{"code":"REQUIRED_EVIDENCE_MISSING","message":"小yi运行失败"}}}\n\n',
+          'event: run.failed\ndata: {"id":4,"data":{"error":{"code":"AGENT_RUN_FAILED","message":"小yi运行失败"}}}\n\n',
         );
       }),
     );
@@ -146,12 +146,8 @@ describe('useConversationRun', () => {
     await act(async () => {
       await result.current.submit('检查命令');
     });
-    expect(result.current.messages.at(-1)?.text).toContain(
-      '缺少当前工作流所需的诊断证据',
-    );
-    expect(result.current.messages.at(-1)?.text).toContain(
-      'REQUIRED_EVIDENCE_MISSING',
-    );
+    expect(result.current.messages.at(-1)?.text).toContain('小yi运行失败');
+    expect(result.current.messages.at(-1)?.text).toContain('AGENT_RUN_FAILED');
   });
 
   it('stops the active run and keeps text already streamed', async () => {

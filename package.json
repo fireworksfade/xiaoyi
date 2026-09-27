@@ -3,16 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "description": "Xiaoyi IoT Platform - Monorepo",
+  "workspaces": ["packages/frontend"],
   "scripts": {
-    "dev": "pnpm --filter frontend dev",
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "lint": "pnpm -r lint",
-    "type-check": "pnpm -r type-check"
+    "dev": "npm run dev --workspace=packages/frontend --",
+    "build": "npm run build --workspace=packages/frontend --",
+    "start": "npm run start --workspace=packages/frontend --",
+    "test": "npm run test --workspace=packages/frontend --",
+    "test:e2e": "npm run test:e2e --workspace=packages/frontend --",
+    "lint": "npm run lint --workspace=packages/frontend --",
+    "format": "npm run format --workspace=packages/frontend --",
+    "format:check": "npm run format:check --workspace=packages/frontend --",
+    "typecheck": "npm run typecheck --workspace=packages/frontend --",
+    "type-check": "npm run typecheck --"
   },
   "keywords": ["iot", "mcp", "diagnosis", "monorepo"],
   "engines": {
-    "node": ">=18.0.0",
-    "pnpm": ">=8.0.0"
+    "node": ">=22.13.0",
+    "npm": ">=10.0.0"
   }
 }

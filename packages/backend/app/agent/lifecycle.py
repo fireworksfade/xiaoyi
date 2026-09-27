@@ -11,7 +11,6 @@ from typing import Any, Awaitable, Callable, Mapping
 @dataclass(frozen=True, slots=True)
 class HookContext:
     run_id: str
-    workflow_id: str | None = None
     user_id: str | None = None
     conversation_id: str | None = None
     request_id: str | None = None

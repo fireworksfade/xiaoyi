@@ -18,9 +18,6 @@ from app.models import (
     MCPServer,
     MCPTool,
     Message,
-    OperationWorkflow,
-    OperationWorkflowEvent,
-    OperationWorkflowStep,
     RunArtifact,
     RunEvent,
 )
@@ -35,9 +32,6 @@ async def _migrated_clean_db():
     async with SessionFactory() as db:
         await db.execute(delete(ConversationContextSnapshot))
         await db.execute(delete(RunArtifact))
-        await db.execute(delete(OperationWorkflowEvent))
-        await db.execute(delete(OperationWorkflowStep))
-        await db.execute(delete(OperationWorkflow))
         await db.execute(delete(RunEvent))
         await db.execute(delete(AgentRun))
         await db.execute(delete(Message))

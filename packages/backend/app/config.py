@@ -46,11 +46,7 @@ class Settings(BaseSettings):
     run_delta_merge_chars: int = 256
     run_delta_merge_ms: int = 200
     run_tool_output_max_bytes: int = 65_536
-    # IoT workflow, deterministic completion gate and lifecycle observations.
-    workflow_runtime_enabled: bool = True
-    workflow_version: int = 1
-    completion_gate_enabled: bool = True
-    completion_gate_max_continuations: int = 2
+    # Lifecycle observations.
     hook_timeout_ms: int = 500
     # Agent-side MCP client read timeout; covers slow external model backends behind MCP tools.
     mcp_agent_timeout_seconds: int = 15

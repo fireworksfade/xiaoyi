@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY common ./common
 COPY iot_diagnosis ./iot_diagnosis
 COPY iot_control ./iot_control

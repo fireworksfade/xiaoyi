@@ -33,7 +33,6 @@ class RuntimeMCPServer:
 
 class AgentRuntime(Protocol):
     run_id: str | None
-    workflow_snapshot: dict[str, Any] | None
 
     def stream(
         self,
@@ -46,7 +45,6 @@ class MockAgentRuntime:
     """确定性联调 Runtime，不调用外部模型。"""
 
     run_id: str | None = None
-    workflow_snapshot: dict[str, Any] | None = None
 
     async def stream(
         self,
@@ -77,7 +75,6 @@ class OpenAIAgentsRuntime:
             raise RuntimeError("OPENAI_API_KEY is required for the OpenAI runtime")
         self.settings = settings
         self.run_id: str | None = None
-        self.workflow_snapshot: dict[str, Any] | None = None
 
     async def stream(
         self,
@@ -100,7 +97,6 @@ class OpenAIAgentsRuntime:
         def filter_model_input(data: Any) -> ModelInputData:
             compacted = compact_model_input(
                 data.model_data.input,
-                workflow_snapshot=self.workflow_snapshot,
                 keep_recent_tool_results=self.settings.context_keep_recent_tool_results,
                 max_tool_output_chars=max(256, self.settings.run_tool_output_inline_bytes),
             )
@@ -260,7 +256,6 @@ class OpenAIAgentsRuntime:
                     run_config=RunConfig(
                         tracing_disabled=True,
                         trace_include_sensitive_data=False,
-                        workflow_name="xiaoyi-chat",
                         call_model_input_filter=filter_model_input,
                     ),
                 )

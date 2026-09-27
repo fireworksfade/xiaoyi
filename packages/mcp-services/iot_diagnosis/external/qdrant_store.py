@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -130,5 +131,3 @@ class QdrantVectorStore:
     def ping(self) -> bool:
         response = self._request("GET", f"/collections/{self.collection}")
         return response.get("status") == "ok"
-
-

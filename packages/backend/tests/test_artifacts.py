@@ -7,7 +7,6 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from app.agent.runtime import RuntimeEvent
-from app.agent.tool_semantics import ToolSemanticAdapter
 from app.config import get_settings
 from app.db import SessionFactory
 from app.models import (
@@ -67,7 +66,7 @@ def test_sanitizer_redacts_nested_credentials() -> None:
     assert sanitize_artifact("Cookie: session=abc") == "Cookie: [REDACTED]"
 
 
-def test_archived_summary_retains_workflow_evidence() -> None:
+def test_archived_summary_retains_remediation_evidence() -> None:
     output = {
         "ok": True,
         "data": {
@@ -79,16 +78,8 @@ def test_archived_summary_retains_workflow_evidence() -> None:
         },
     }
     critical = extract_critical_fields(output)
-    events = ToolSemanticAdapter.adapt_tool_result(
-        "run",
-        {
-            "tool_name": "diagnose_fault",
-            "call_id": "call",
-            "output": {"ok": True, "data": critical, "truncated": True},
-        },
-    )
-    assert events[0].payload["diagnosis_id"] == "DIA_TEST"
-    assert events[0].payload["confidence"] == 0.91
+    assert critical["diagnosis_id"] == "DIA_TEST"
+    assert critical["confidence"] == 0.91
 
 
 def test_archived_action_result_keeps_command_status_distinct_from_proposal() -> None:
@@ -109,15 +100,7 @@ def test_archived_action_result_keeps_command_status_distinct_from_proposal() ->
     }
     critical = extract_critical_fields(output)
     assert critical["command_status"] == "failed"
-    events = ToolSemanticAdapter.adapt_tool_result(
-        "run",
-        {
-            "tool_name": "get_action_result",
-            "call_id": "call",
-            "output": {"ok": True, "data": critical, "truncated": True},
-        },
-    )
-    assert events[0].payload["command_status"] == "failed"
+    assert critical["command_status"] == "failed"
 
 
 def test_large_output_is_archived_before_summary(tmp_path: Path) -> None:
@@ -188,16 +171,14 @@ def test_model_input_compaction_preserves_call_pairs_and_artifact_reference() ->
     ]
     compacted = compact_model_input(
         items,
-        workflow_snapshot={"diagnosis_id": "DIA_TEST", "current_step": "verify"},
         keep_recent_tool_results=1,
         max_tool_output_chars=256,
     )
     assert compacted.compacted_outputs == 1
     assert items[2]["output"] == old_output
-    assert compacted.items[0]["role"] == "system"
-    assert compacted.items[1] == items[0]
-    assert compacted.items[2] == items[1]
-    summary = json.loads(compacted.items[3]["output"])
+    assert compacted.items[0] == items[0]
+    assert compacted.items[1] == items[1]
+    summary = json.loads(compacted.items[2]["output"])
     assert summary["artifact_id"] == "artifact-1"
     assert summary["critical_fields"]["diagnosis_id"] == "DIA_TEST"
     assert compacted.items[-1] == items[-1]
@@ -208,7 +189,6 @@ def test_prompt_too_long_retries_once_after_archiving_transcript(tmp_path: Path)
     settings = get_settings().model_copy(update={"run_artifact_root": str(tmp_path)})
 
     class OversizedRuntime:
-        workflow_snapshot = None
         calls = 0
 
         async def stream(self, messages, _servers):
@@ -255,7 +235,6 @@ def test_prompt_too_long_after_tool_start_never_replays_tool(tmp_path: Path) -> 
     settings = get_settings().model_copy(update={"run_artifact_root": str(tmp_path)})
 
     class ToolStartedRuntime:
-        workflow_snapshot = None
         calls = 0
 
         async def stream(self, _messages, _servers):
@@ -288,11 +267,9 @@ def test_history_snapshot_is_monotonic_and_keeps_important_ids(tmp_path: Path) -
         {"role": "user", "content": "检查 DIA_20260923_AABBCCDD"},
         {"role": "assistant", "content": "命令 CMD_20260923_AABBCCDD 已执行"},
     ]
-    summary = summarize_history(
-        transcript, current_goal="继续检查", workflow_snapshot={"command_id": "CMD_1"}
-    )
+    summary = summarize_history(transcript, current_goal="继续检查")
     assert "DIA_20260923_AABBCCDD" in summary["important_ids"]
-    assert "CMD_1" in summary["important_ids"]
+    assert "CMD_20260923_AABBCCDD" in summary["important_ids"]
 
     async def persist_twice() -> tuple[str, str]:
         async with SessionFactory() as db:

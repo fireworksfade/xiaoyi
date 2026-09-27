@@ -74,13 +74,14 @@ def test_empty_db_upgrades_to_head(isolated_migrations) -> None:
         "mcp_tools",
         "audit_logs",
         "model_configurations",
-        "operation_workflows",
-        "operation_workflow_steps",
-        "operation_workflow_events",
         "run_artifacts",
         "conversation_context_snapshots",
         "alembic_version",
     } <= tables
+    assert (
+        not {"operation_workflows", "operation_workflow_steps", "operation_workflow_events"}
+        & tables
+    )
     columns = {item["name"] for item in inspect(engine).get_columns("agent_runs")}
     assert {
         "queued_at",

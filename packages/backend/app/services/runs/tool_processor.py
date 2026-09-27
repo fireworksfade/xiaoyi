@@ -1,18 +1,4 @@
-"""工具调用结果处理、提案收集和语义事件适配逻辑。"""
-
-import logging
-
-from app.agent.tool_semantics import SemanticEventError, ToolSemanticAdapter
-from app.db import SessionFactory
-from app.models import AgentRun
-from app.services.workflows import (
-    WorkflowError,
-    apply_semantic_event,
-    get_workflow_for_run,
-    workflow_view,
-)
-
-logger = logging.getLogger("xiaoyi.runs.tool_processor")
+"""Collect remediation proposals from tool results."""
 
 
 def collect_proposal(event_data: dict, proposals: list[dict[str, object]]) -> dict | None:
@@ -45,30 +31,3 @@ def collect_proposal(event_data: dict, proposals: list[dict[str, object]]) -> di
     }
     proposals.append(proposal)
     return proposal
-
-
-async def process_tool_semantic_events(
-    run_id: str,
-    event_data: dict,
-    runtime,
-    workflow_enabled: bool,
-) -> None:
-    """处理工具调用的语义事件，更新工作流状态。"""
-    if not workflow_enabled:
-        return
-
-    try:
-        semantic_events = ToolSemanticAdapter.adapt_tool_result(run_id, event_data)
-    except SemanticEventError as exc:
-        raise WorkflowError("SEMANTIC_EVENT_INVALID", str(exc)) from exc
-
-    for semantic_event in semantic_events:
-        async with SessionFactory() as workflow_db:
-            workflow_run = await workflow_db.get(AgentRun, run_id)
-            if workflow_run is None:
-                raise RuntimeError("RUN_NOT_FOUND")
-            await apply_semantic_event(workflow_db, workflow_run, semantic_event)
-            workflow, workflow_steps = await get_workflow_for_run(workflow_db, run_id)
-            if workflow is not None:
-                runtime.workflow_snapshot = workflow_view(workflow, workflow_steps)
-            await workflow_db.commit()

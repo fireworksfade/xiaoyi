@@ -24,48 +24,6 @@ export type AgentRunSummary = {
   updated_at: string;
 };
 
-export type WorkflowStep = {
-  step_key:
-    | 'diagnose'
-    | 'select_action'
-    | 'approve'
-    | 'remediate'
-    | 'verify'
-    | 'archive_case';
-  sequence: number;
-  status:
-    | 'pending'
-    | 'running'
-    | 'waiting'
-    | 'completed'
-    | 'skipped'
-    | 'failed';
-  evidence: Record<string, unknown>;
-  error_code: string | null;
-  error_message: string | null;
-};
-
-export type OperationWorkflow = {
-  id: string;
-  agent_run_id: string;
-  goal: 'diagnosis' | 'remediation';
-  status:
-    | 'active'
-    | 'waiting_approval'
-    | 'waiting_verification'
-    | 'completed'
-    | 'failed'
-    | 'cancelled';
-  outcome: string | null;
-  current_step: WorkflowStep['step_key'];
-  device_id: string | null;
-  diagnosis_id: string | null;
-  proposal_id: string | null;
-  command_id: string | null;
-  case_id: string | null;
-  steps: WorkflowStep[];
-};
-
 export type ToolSource = {
   id: string;
   server_key: string;
@@ -75,12 +33,6 @@ export type ToolSource = {
 
 export async function listAgentToolSources() {
   return request<{ items: ToolSource[] }>('/agent-tools');
-}
-
-export async function getAgentRunWorkflow(runId: string) {
-  return request<OperationWorkflow | null>(
-    `/agent-runs/${encodeURIComponent(runId)}/workflow`,
-  );
 }
 
 export async function listAgentRuns(

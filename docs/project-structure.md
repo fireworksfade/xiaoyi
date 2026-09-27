@@ -45,7 +45,7 @@ frontend/
 
 ### 2. 后端先明确运行模块边界，再考虑目录分组
 
-`app/services/runs.py` 同时协调事件、上下文恢复、工具提案和 Completion Gate。建议逐步抽出有独立职责的代码，保持 `execute_claimed_run` 为清晰的编排入口。现有 dispatcher、recovery、state、event_buffer 已经分离，应优先复用这些边界，避免新建重复服务。
+`app/services/runs.py` 同时协调事件、上下文恢复、工具提案。建议逐步抽出有独立职责的代码，保持 `execute_claimed_run` 为清晰的编排入口。现有 dispatcher、recovery、state、event_buffer 已经分离，应优先复用这些边界，避免新建重复服务。
 
 运行相关模块较多，可在后续独立重构中归入 `services/runs/` 包；迁移时保留现有导入接口，重点验证取消、恢复、SSE、审批与事务边界。`models.py` 和 `schemas.py` 暂时仍可管理，无须为了目录对称立即拆分。历史数据库迁移必须保留。
 
