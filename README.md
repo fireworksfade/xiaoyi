@@ -101,4 +101,3 @@ docker compose logs -f backend iot-mcp
 docker compose down
 ```
 
-`docker compose down` 保留命名数据卷。后端迁移与就绪检查、运行事件和数据保留机制详见 [`packages/backend/README.md`](packages/backend/README.md)。
