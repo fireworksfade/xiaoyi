@@ -7,7 +7,6 @@ import json
 import pytest
 
 from iot_diagnosis.simulator import (
-    UNSTABLE_GRACE_SECONDS,
     DeviceProfile,
     DeviceState,
     build_cycle,
@@ -15,6 +14,7 @@ from iot_diagnosis.simulator import (
     handle_command,
     load_fleet,
 )
+from iot_diagnosis.simulator.telemetry import UNSTABLE_GRACE_SECONDS
 
 FLEET_PATH = "iot_diagnosis/fleet.json"
 
