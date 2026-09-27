@@ -13,6 +13,8 @@
 
 默认 Compose 使用本地 hash embedding 和 weighted reranker，无需 GPU 或模型下载。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
 
+运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
+
 ## 快速开始
 
 需要 Docker Compose 和 Node.js 22.13 或更高版本。基础 Compose **不启动前端**，因此按下面两步分别启动。
@@ -89,6 +91,8 @@ python -m pytest
 ```
 
 前端测试使用 Vitest 和 Playwright；后端与 MCP 服务测试使用 pytest。Python 需要 3.12 或更高版本。
+
+数据库迁移会在后端启动流程中按 Alembic 版本执行。升级旧数据库时，迁移会清理已废弃的 workflow 表；历史迁移文件仍保留，用于保证已有数据库能够连续升级。
 
 ## 常用维护命令
 
