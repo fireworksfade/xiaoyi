@@ -58,10 +58,9 @@ class WeightedReranker:
             retrieval_score = min(max(float(candidate.get("retrieval_score") or 0.0), 0.0), 1.0)
             lexical_score = lexical_similarity(query, str(candidate.get("content") or ""))
             source_bonus = 0.05 if candidate.get("source") == expected_source else 0.0
-            verified_case_bonus = 0.03 if candidate.get("source") == "fault_cases" else 0.0
             score = min(
                 1.0,
-                0.72 * retrieval_score + 0.20 * lexical_score + source_bonus + verified_case_bonus,
+                0.72 * retrieval_score + 0.20 * lexical_score + source_bonus,
             )
             item = {**candidate, "score": round(score, 4)}
             item.pop("retrieval_score", None)

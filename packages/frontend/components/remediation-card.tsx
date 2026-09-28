@@ -38,16 +38,13 @@ export function RemediationCard({
 }) {
   const [proposal, setProposal] = useState(initialProposal);
   const [lastInitial, setLastInitial] = useState(initialProposal);
-  const [caseId, setCaseId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const postVerifyRefreshedRef = useRef(false);
 
   const refresh = useCallback(async (proposalId: string) => {
     const detail = await getRemediationProposal(proposalId);
     setProposal(detail.proposal);
-    setCaseId(detail.command?.case_id ?? null);
     return detail.proposal;
   }, []);
 
@@ -81,10 +78,6 @@ export function RemediationCard({
           next.task_status === 'running' || next.task_status === 'verifying';
         if (!cancelled && stillRunning) {
           pollRef.current = setTimeout(tick, 3000);
-        } else if (!cancelled && !postVerifyRefreshedRef.current) {
-          // 任务结束后案例归档最多延迟一个后台周期才回写 case_id，补拉一次
-          postVerifyRefreshedRef.current = true;
-          pollRef.current = setTimeout(tick, 25000);
         }
       } catch {
         if (!cancelled) pollRef.current = setTimeout(tick, 5000);
@@ -196,12 +189,6 @@ export function RemediationCard({
       {succeeded ? (
         <p className="mt-2 flex items-center gap-1 text-xs text-emerald-600">
           <CheckCircle2 className="size-3.5" /> 设备已恢复，验证通过
-        </p>
-      ) : null}
-      {succeeded && caseId ? (
-        <p className="mt-1 text-xs text-slate-500">
-          本次修复已自动沉淀为故障案例{' '}
-          <span className="font-mono">{caseId}</span>
         </p>
       ) : null}
       {failed ? (

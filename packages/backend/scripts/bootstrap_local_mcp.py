@@ -23,9 +23,7 @@ READ_ONLY_TOOLS = {
     "get_diagnosis_trace",
     "list_diagnoses",
     "list_knowledge_documents",
-    "list_fault_cases",
     "search_knowledge",
-    "search_fault_cases",
     # IoT Control MCP：查询类工具
     "list_device_actions",
     "get_action_result",
@@ -39,12 +37,10 @@ PROPOSAL_ONLY_TOOLS = {
     "create_remediation_proposal",
 }
 
-# 仅后端审批 REST 直调（对 Agent 不可见），复用 add_verified_fault_case 模式。
+# 仅后端审批 REST 直调（对 Agent 不可见）。
 APPROVAL_REQUIRED_TOOLS = {
-    "add_verified_fault_case",
     "ingest_knowledge_text",
     "delete_knowledge_document",
-    "delete_fault_case",
     "decide_remediation_proposal",
 }
 

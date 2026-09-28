@@ -19,20 +19,6 @@ export type IngestedKnowledgeDocument = {
   sync_status: string;
 };
 
-export type FaultCaseSummary = {
-  fault_id: string;
-  device_id: string;
-  device_type: string;
-  fault_type: string;
-  fault_name: string;
-  symptoms: string[];
-  cause: string;
-  solution: string;
-  verified_by: string;
-  source: string;
-  created_at: string;
-};
-
 export async function listKnowledgeDocuments() {
   return request<{
     items: KnowledgeDocumentSummary[];
@@ -81,33 +67,4 @@ export async function deleteKnowledgeDocument(
     { method: 'DELETE' },
     true,
   );
-}
-
-export async function listFaultCases(params?: {
-  deviceType?: string;
-  limit?: number;
-  offset?: number;
-}) {
-  const search = new URLSearchParams();
-  if (params?.deviceType) search.set('device_type', params.deviceType);
-  if (params?.limit != null) search.set('limit', String(params.limit));
-  if (params?.offset != null) search.set('offset', String(params.offset));
-  const query = search.toString();
-  return request<{
-    items: FaultCaseSummary[];
-    total: number;
-    limit: number;
-    offset: number;
-  }>(`/fault-cases${query ? `?${query}` : ''}`);
-}
-
-export async function deleteFaultCase(faultId: string) {
-  return request<{
-    fault_id: string;
-    deleted: boolean;
-    mysql_saved: boolean;
-    vector_deleted: boolean;
-    sync_status: string;
-    trace_id: string | null;
-  }>(`/fault-cases/${encodeURIComponent(faultId)}`, { method: 'DELETE' }, true);
 }

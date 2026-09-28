@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-# 候选上允许参与 RRF 的排名通道；lexical_rank 用于 fault_cases /
-# realtime_db 等非分块候选，与 Spec §24 的 dense/sparse 公式一致地求和。
+# 候选上允许参与 RRF 的排名通道；lexical_rank 用于 realtime_db 等
+# 非分块候选，与 Spec §24 的 dense/sparse 公式一致地求和。
 RANK_CHANNELS = ("dense_rank", "sparse_rank", "lexical_rank")
 
 

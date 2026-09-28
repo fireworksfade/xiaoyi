@@ -1,8 +1,6 @@
-import json
 import logging
 import re
 import time
-import uuid
 from typing import Any
 
 from iot_diagnosis.repository_common import iso
@@ -242,7 +240,7 @@ class KnowledgeCaseMixin:
 
     def bm25_search(self, query: str, sources: list[str], top_k: int) -> list[dict[str, Any]]:
         """BM25 检索知识分块，回表补齐真实 title/content 后返回。"""
-        selected = [item for item in sources if item not in {"fault_cases", "realtime_db"}]
+        selected = [item for item in sources if item != "realtime_db"]
         if not selected:
             return []
         with self._connect() as db:
@@ -266,7 +264,6 @@ class KnowledgeCaseMixin:
 
     def rebuild_vector_index(self, sources: list[str] | None = None) -> dict[str, Any]:
         allowed_sources = {
-            "fault_cases",
             "mqtt_docs",
             "wifi_docs",
             "sensor_docs",
@@ -276,17 +273,11 @@ class KnowledgeCaseMixin:
         if set(selected) - allowed_sources:
             raise ValueError("INVALID_REQUEST")
         started = time.perf_counter()
-        document_sources = [source for source in selected if source != "fault_cases"]
         documents = [
             self._knowledge_vector_document(item)
-            for item in self.knowledge_documents(document_sources)
+            for item in self.knowledge_documents(selected)
         ]
-        cases = (
-            [self._case_document(item) for item in self.fault_cases()]
-            if "fault_cases" in selected
-            else []
-        )
-        items = documents + cases
+        items = documents
         indexed = self._qdrant_write_many(items)
         pending = self.external_sync_status()["by_component"].get("qdrant", 0)
         target = self.external.qdrant
@@ -307,145 +298,4 @@ class KnowledgeCaseMixin:
                 if pending
                 else "local_only"
             ),
-        }
-
-    def fault_cases(
-        self, device_type: str | None = None, fault_type: str | None = None
-    ) -> list[dict[str, Any]]:
-        query = "SELECT * FROM fault_case WHERE verified = 1"
-        params: list[Any] = []
-        if device_type:
-            query += " AND device_type = ?"
-            params.append(device_type)
-        if fault_type:
-            query += " AND fault_type LIKE ?"
-            params.append(f"%{fault_type}%")
-        with self._connect() as db:
-            rows = db.execute(query, params).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["symptoms"] = json.loads(item.pop("symptoms_json"))
-            item["logs"] = json.loads(item.pop("logs_json"))
-            item["verified"] = bool(item["verified"])
-            result.append(item)
-        return result
-
-    def list_fault_cases(
-        self,
-        device_type: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """分页列出已验证案例（不含逐条日志正文），供案例库浏览。"""
-        query = "SELECT * FROM fault_case WHERE verified = 1"
-        params: list[Any] = []
-        if device_type:
-            query += " AND device_type = ?"
-            params.append(device_type)
-        count_query = f"SELECT COUNT(*) FROM ({query})"
-        query += " ORDER BY created_at DESC, fault_id DESC LIMIT ? OFFSET ?"
-        with self._connect() as db:
-            total = int(db.execute(count_query, params).fetchone()[0])
-            rows = db.execute(query, [*params, limit, offset]).fetchall()
-        return {
-            "items": [
-                {
-                    "fault_id": row["fault_id"],
-                    "device_id": row["device_id"],
-                    "device_type": row["device_type"],
-                    "fault_type": row["fault_type"],
-                    "fault_name": row["fault_name"],
-                    "symptoms": json.loads(row["symptoms_json"]),
-                    "cause": row["cause"],
-                    "solution": row["solution"],
-                    "verified_by": row["verified_by"],
-                    "source": row["source"],
-                    "created_at": row["created_at"],
-                }
-                for row in rows
-            ],
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
-
-    def add_verified_fault_case(self, payload: dict[str, Any]) -> dict[str, Any]:
-        fault_id = f"F{uuid.uuid4().hex[:8].upper()}"
-        now = iso()
-        with self._lock, self._connect() as db:
-            status = self.get_device_status(str(payload["device_id"]))
-            db.execute(
-                """INSERT INTO fault_case
-                (fault_id, device_id, device_type, fault_type, fault_name,
-                 symptoms_json, logs_json, cause, solution, verified,
-                 verified_by, source, created_at, updated_at) VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    fault_id,
-                    payload["device_id"],
-                    status["device_type"] if status else "ESP32",
-                    payload["fault_type"],
-                    payload["fault_name"],
-                    json.dumps(payload["symptoms"], ensure_ascii=False),
-                    json.dumps(payload["logs"], ensure_ascii=False),
-                    payload["cause"],
-                    payload["solution"],
-                    1,
-                    payload["verified_by"],
-                    "human_verified",
-                    now,
-                    now,
-                ),
-            )
-        item = {
-            "fault_id": fault_id,
-            "device_id": payload["device_id"],
-            "device_type": status["device_type"] if status else "ESP32",
-            "fault_type": payload["fault_type"],
-            "fault_name": payload["fault_name"],
-            "symptoms": payload["symptoms"],
-            "logs": payload["logs"],
-            "cause": payload["cause"],
-            "solution": payload["solution"],
-            "verified": True,
-            "verified_by": payload["verified_by"],
-            "source": "human_verified",
-            "created_at": now,
-            "updated_at": now,
-        }
-        vector_indexed = self._external_write("qdrant", "upsert", self._case_document(item))
-        sync_status = (
-            "complete"
-            if vector_indexed
-            else ("pending" if self.external_sync_status()["pending"] else "local_only")
-        )
-        return {
-            "fault_id": fault_id,
-            "verified": True,
-            "indexed": vector_indexed,
-            "vector_indexed": vector_indexed,
-            "sync_status": sync_status,
-            "created_at": now,
-        }
-
-    def delete_fault_case(self, fault_id: str) -> dict[str, Any]:
-        """删除一条已验证案例，并同步清理 Qdrant 向量。"""
-        if not re.fullmatch(r"F[A-Za-z0-9]{1,31}", fault_id or ""):
-            raise ValueError("FAULT_ID_INVALID")
-        with self._lock, self._connect() as db:
-            cursor = db.execute("DELETE FROM fault_case WHERE fault_id = ?", (fault_id,))
-            deleted = cursor.rowcount
-        vector_payload = {"source": "fault_cases", "document_id": fault_id}
-        vector_deleted = self._external_write("qdrant", "delete_document", vector_payload)
-        sync_status = (
-            "complete"
-            if vector_deleted
-            else ("pending" if self.external_sync_status()["pending"] else "local_only")
-        )
-        return {
-            "fault_id": fault_id,
-            "deleted": bool(deleted),
-            "vector_deleted": vector_deleted,
-            "sync_status": sync_status,
         }

@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from app.api.common import conversation_view, envelope, owned_conversation
 from app.api.deps import CsrfProtected, CurrentUser, Db
+from app.memory.models import MemorySource, WorkingMemory
+from app.memory.service import forget_source
 from app.models import Conversation, MCPServer, MCPTool, ToolRiskPolicy
 from app.schemas import ConversationCreate, ConversationUpdate
 
@@ -123,8 +126,14 @@ async def delete_conversation(
     db: Db,
     user: CurrentUser,
     _: CsrfProtected,
+    memory_policy: Literal["keep", "forget"] = "keep",
 ) -> dict[str, object]:
     conversation = await owned_conversation(db, conversation_id, user)
+    if memory_policy == "forget":
+        await forget_source(db, user.id, conversation_id)
+    else:
+        await db.execute(update(MemorySource).where(MemorySource.owner_user_id == user.id, MemorySource.conversation_id == conversation_id).values(access_state="conversation_deleted"))
+    await db.execute(delete(WorkingMemory).where(WorkingMemory.owner_user_id == user.id, WorkingMemory.conversation_id == conversation_id))
     conversation.deleted_at = datetime.now(timezone.utc)
     conversation.updated_at = conversation.deleted_at
     await db.commit()

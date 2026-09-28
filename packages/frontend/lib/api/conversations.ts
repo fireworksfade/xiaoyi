@@ -63,9 +63,15 @@ export async function updateConversation(
   );
 }
 
-export async function deleteConversation(conversationId: string) {
+export async function deleteConversation(
+  conversationId: string,
+  options: { memoryPolicy?: 'keep' | 'forget' } = {},
+) {
+  // memory_policy=forget 时同事务清除由该聊天产生的记忆（D08，默认保留）
+  const policy = options.memoryPolicy ?? 'keep';
+  const query = policy === 'forget' ? '?memory_policy=forget' : '';
   return request<{ deleted: boolean }>(
-    `/conversations/${conversationId}`,
+    `/conversations/${conversationId}${query}`,
     { method: 'DELETE' },
     true,
   );

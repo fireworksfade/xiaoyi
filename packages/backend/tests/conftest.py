@@ -5,6 +5,10 @@ from pathlib import Path
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="xiaoyi-backend-tests-"))
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{(TEST_DATA_DIR / 'test.db').as_posix()}"
 os.environ["AGENT_RUNTIME"] = "mock"
+# 测试库为单文件 SQLite：后台 memory worker 与测试事务并发写入会互相阻塞
+# （database is locked），服务测试期间不启动 worker；memory 单测在
+# fixture 内按需打开设置（tests/test_memory.py）
+os.environ["MEMORY_ENABLED"] = "false"
 
 import pytest
 from sqlalchemy import delete

@@ -13,6 +13,7 @@ from sqlalchemy import update
 from sqlalchemy.engine import CursorResult
 
 from app.db import SessionFactory
+from app.memory.service import run_finished
 from app.models import AgentRun, RunEvent, RunStatus, utc_now
 
 # 允许用户重试的错误码（其余失败不自动/不建议重试）
@@ -110,6 +111,9 @@ async def mark_finished(
                 interruption_reason=interruption_reason,
             )
         )
+        run = await db.get(AgentRun, run_id)
+        if run:
+            await run_finished(db, run)
         await db.commit()
 
 

@@ -49,6 +49,8 @@ Thumbs.db
 # Local personal working files
 /output/
 /tmp/
+/gui-test-screenshots/
+
 
 # Test scripts and temporary files
 packages/backend/check_mcp_servers.py

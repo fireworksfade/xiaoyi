@@ -10,6 +10,7 @@ import { ConversationView } from '@/features/conversation/conversation-view';
 import { MessageComposer } from '@/features/conversation/message-composer';
 import { SettingsSheet } from '@/features/settings/settings-sheet';
 import { KnowledgeDialog } from '@/features/knowledge/knowledge-dialog';
+import { MemoryDialog } from '@/features/memory/memory-dialog';
 import { RunRecordsSheet } from '@/components/run-records-sheet';
 import { useConversationMessages } from '@/hooks/use-conversation-messages';
 import { useAttachmentDraft } from '@/hooks/use-attachment-draft';
@@ -26,8 +27,10 @@ import {
 import {
   deleteConversation,
   ensureDemoSession,
+  getForgetImpact,
   listAgentToolSources,
   type Conversation,
+  type ForgetImpact,
   type ToolSource,
   updateConversation,
 } from '@/lib/api';
@@ -47,8 +50,12 @@ export default function Home() {
   const [conversationActionError, setConversationActionError] = useState<
     string | null
   >(null);
+  // D08：删除聊天默认保留长期记忆；勾选后才同时清除由该聊天产生的记忆
+  const [forgetMemory, setForgetMemory] = useState(false);
+  const [forgetImpact, setForgetImpact] = useState<ForgetImpact | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [runRecordsOpen, setRunRecordsOpen] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState<
     string | null
@@ -183,11 +190,14 @@ export default function Home() {
   async function removeConversation() {
     if (!deletingConversation || conversationActionBusy) return;
     const target = deletingConversation;
+    const policy = forgetMemory ? 'forget' : 'keep';
     setConversationActionBusy(true);
     setConversationActionError(null);
     try {
       await ensureDemoSession();
-      await deleteConversation(target.id);
+      await deleteConversation(target.id, { memoryPolicy: policy });
+      setForgetMemory(false);
+      setForgetImpact(null);
       const remaining = conversations.filter(
         (conversation) => conversation.id !== target.id,
       );
@@ -206,6 +216,19 @@ export default function Home() {
       );
     } finally {
       setConversationActionBusy(false);
+    }
+  }
+
+  async function toggleForgetMemory(checked: boolean) {
+    setForgetMemory(checked);
+    setForgetImpact(null);
+    if (!checked || !deletingConversation) return;
+    try {
+      await ensureDemoSession();
+      const impact = await getForgetImpact(deletingConversation.id);
+      setForgetImpact(impact);
+    } catch {
+      // 预览失败不阻塞删除；仅不显示数量
     }
   }
 
@@ -318,6 +341,8 @@ export default function Home() {
         onRename={beginRename}
         onDelete={(conversation) => {
           setConversationActionError(null);
+          setForgetMemory(false);
+          setForgetImpact(null);
           setDeletingConversation(conversation);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -340,6 +365,7 @@ export default function Home() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenRunRecords={() => setRunRecordsOpen(true)}
         onOpenKnowledge={() => setKnowledgeOpen(true)}
+        onOpenMemory={() => setMemoryOpen(true)}
         onRetryConversation={() => {
           if (selectedConversationItem)
             void openConversation(selectedConversationItem);
@@ -447,6 +473,26 @@ export default function Home() {
               “{deletingConversation?.title}”将从对话历史中移除。
             </DialogDescription>
           </DialogHeader>
+          <label className="flex items-start gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              className="mt-1 size-4"
+              checked={forgetMemory}
+              disabled={conversationActionBusy}
+              onChange={(event) =>
+                void toggleForgetMemory(event.target.checked)
+              }
+            />
+            <span>
+              同时清除由该聊天产生的记忆（默认保留）
+              {forgetMemory && forgetImpact ? (
+                <span className="mt-1 block text-xs text-amber-600">
+                  将清除 {forgetImpact.episodic} 条情景、{forgetImpact.experience}{' '}
+                  条经验；多来源经验将重新审核。
+                </span>
+              ) : null}
+            </span>
+          </label>
           {conversationActionError ? (
             <p className="text-sm text-red-600">{conversationActionError}</p>
           ) : null}
@@ -475,6 +521,8 @@ export default function Home() {
       </Dialog>
 
       <KnowledgeDialog open={knowledgeOpen} onOpenChange={setKnowledgeOpen} />
+
+      <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
 
       <RunRecordsSheet open={runRecordsOpen} onOpenChange={setRunRecordsOpen} />
 

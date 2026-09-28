@@ -25,8 +25,7 @@ export type RemediationProposalDetail = {
     status: 'pending' | 'acked' | 'applied' | 'failed' | 'timeout';
     verify_status: 'succeeded' | 'failed' | null;
     ack: Record<string, unknown> | null;
-    case_status: 'pending' | 'archived' | 'skipped' | null;
-    case_id: string | null;
+    delivery_status?: string | null;
   } | null;
   delivered?: boolean;
 };

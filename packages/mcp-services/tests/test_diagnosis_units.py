@@ -423,7 +423,15 @@ def test_external_write_outbox_recovers_without_false_index_success(tmp_path) ->
         def __init__(self):
             self.available = False
 
+        def delete_document(self, _item):
+            return True
+
         def upsert(self, _item):
+            if not self.available:
+                raise ConnectionError("qdrant unavailable")
+            return True
+
+        def upsert_many(self, _items):
             if not self.available:
                 raise ConnectionError("qdrant unavailable")
             return True
@@ -431,20 +439,16 @@ def test_external_write_outbox_recovers_without_false_index_success(tmp_path) ->
     qdrant = FlakyStore()
     repository.external.qdrant = qdrant
 
-    result = repository.add_verified_fault_case(
-        {
-            "device_id": "ESP32_05",
-            "fault_type": "wifi",
-            "fault_name": "Temporary external failure",
-            "symptoms": ["disconnect"],
-            "logs": ["RSSI -90"],
-            "cause": "weak signal",
-            "solution": "move access point",
-            "verified_by": "operator",
-        }
+    result = ingest_text(
+        repository,
+        source="mqtt_docs",
+        document_id="outbox-recovery",
+        title="Outbox recovery",
+        content="MQTT keep alive guidance. " * 30,
+        chunk_size=4000,
     )
 
-    assert result["indexed"] is False
+    assert result["vector_indexed"] is False
     assert result["sync_status"] == "pending"
     assert repository.external_sync_status()["pending"] == 1
 
@@ -497,7 +501,7 @@ def test_text_ingestion_chunks_and_replaces_document(tmp_path) -> None:
     assert all("Updated" in item["content"] for item in stored)
 
 
-def test_rebuild_vector_index_batches_sqlite_documents_and_cases(tmp_path) -> None:
+def test_rebuild_vector_index_batches_sqlite_documents(tmp_path) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
 
     class FakeProvider:
@@ -517,7 +521,7 @@ def test_rebuild_vector_index_batches_sqlite_documents_and_cases(tmp_path) -> No
 
     target = FakeQdrant()
     repository.external.qdrant = target
-    result = repository.rebuild_vector_index(["mqtt_docs", "fault_cases"])
+    result = repository.rebuild_vector_index(["mqtt_docs"])
 
     assert result["attempted"] == result["indexed"] == len(target.items)
     assert result["attempted"] > 0
@@ -552,66 +556,14 @@ def test_failed_batch_vector_write_queues_each_chunk_for_recovery(tmp_path) -> N
     assert repository.external_sync_status()["by_component"]["qdrant"] == 2
 
 
-def test_list_and_delete_fault_cases(tmp_path) -> None:
-    """案例库分页列表与删除：删除需同步清理镜像与向量（本地降级 local_only）。"""
+def test_rejects_case_sources_after_retirement(tmp_path) -> None:
+    """案例库退役后，旧来源与案例 CRUD 不再存在（spec §11.1）。"""
     repository = DiagnosisRepository(str(tmp_path / "cases.db"))
-    base = {
-        "device_id": "ESP32_05",
-        "fault_type": "mqtt_connection",
-        "fault_name": "MQTT keep alive 超时",
-        "symptoms": ["心跳超时"],
-        "logs": ["ERROR mqtt keep alive timeout"],
-        "cause": "网络抖动导致心跳丢失",
-        "solution": "重连 Broker 并放宽超时",
-    }
-    first = repository.add_verified_fault_case({**base, "verified_by": "auto-remediation:C1"})
-    second = repository.add_verified_fault_case(
-        {
-            **base,
-            "fault_name": "传感器读数卡死",
-            "fault_type": "sensor_anomaly",
-            "verified_by": "admin",
-        }
-    )
-
-    listed = repository.list_fault_cases()
-    assert listed["total"] == 2
-    by_id = {item["fault_id"]: item for item in listed["items"]}
-    assert {first["fault_id"], second["fault_id"]} <= set(by_id)
-    assert by_id[second["fault_id"]]["verified_by"] == "admin"
-    assert by_id[second["fault_id"]]["symptoms"] == ["心跳超时"]
-    assert by_id[first["fault_id"]]["verified_by"] == "auto-remediation:C1"
-
-    filtered = repository.list_fault_cases(limit=1)
-    assert filtered["total"] == 2 and len(filtered["items"]) == 1
-
-    removed = repository.delete_fault_case(first["fault_id"])
-    assert removed["deleted"] is True
-    assert removed["sync_status"] in ("complete", "local_only")
-    remaining = {item["fault_id"] for item in repository.list_fault_cases()["items"]}
-    assert remaining == {second["fault_id"]}
-
-    missing = repository.delete_fault_case("F00000000")
-    assert missing["deleted"] is False
-
     with pytest.raises(ValueError):
-        repository.delete_fault_case("not-a-case-id")
-
-
-def test_case_vector_document_carries_document_id() -> None:
-    """Qdrant 删除按 document_id 过滤，案例向量 payload 必须携带该字段。"""
-    document = DiagnosisRepository._case_document(
-        {
-            "fault_id": "FTEST0001",
-            "fault_name": "MQTT keep alive 超时",
-            "symptoms": ["心跳超时"],
-            "logs": ["ERROR timeout"],
-            "cause": "网络抖动",
-            "solution": "重连",
-            "device_type": "ESP32",
-        }
-    )
-    assert document["source"] == "fault_cases"
-    assert document["document_id"] == "FTEST0001"
+        repository.rebuild_vector_index(["fault_cases"])
+    assert not hasattr(repository, "add_verified_fault_case")
+    assert not hasattr(repository, "list_fault_cases")
+    assert not hasattr(repository, "delete_fault_case")
+    assert not hasattr(repository, "fault_cases")
 
 

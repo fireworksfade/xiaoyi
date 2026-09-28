@@ -54,8 +54,6 @@ async def run(url: str, timeout: float, token: str) -> None:
             "get_device_status",
             "get_device_logs",
             "search_knowledge",
-            "search_fault_cases",
-            "add_verified_fault_case",
         }
         assert names >= expected | {
             "get_diagnosis_trace",
@@ -78,12 +76,6 @@ async def run(url: str, timeout: float, token: str) -> None:
                 {"query": "MQTT keep alive timeout", "sources": [], "top_k": 5},
             )
         )
-        cases = structured(
-            await server.call_tool(
-                "search_fault_cases",
-                {"query": "MQTT 频繁断开", "device_type": "ESP32", "fault_type": "mqtt"},
-            )
-        )
         diagnosis = structured(
             await server.call_tool(
                 "diagnose_fault",
@@ -98,22 +90,6 @@ async def run(url: str, timeout: float, token: str) -> None:
             await server.call_tool(
                 "diagnose_fault",
                 {"device_id": "ESP32_05", "query": "当前 MQTT 连接状态是什么？"},
-            )
-        )
-        rejected = structured(
-            await server.call_tool(
-                "add_verified_fault_case",
-                {
-                    "device_id": "ESP32_05",
-                    "fault_type": "mqtt",
-                    "fault_name": "未确认案例",
-                    "symptoms": ["断开"],
-                    "logs": ["timeout"],
-                    "cause": "待确认",
-                    "solution": "待确认",
-                    "verified": False,
-                    "verified_by": "operator",
-                },
             )
         )
         trace = structured(
@@ -137,13 +113,11 @@ async def run(url: str, timeout: float, token: str) -> None:
     assert status["ok"] is True and status["data"]["device_id"] == "ESP32_05"
     assert logs["ok"] is True and logs["data"]["logs"]
     assert knowledge["ok"] is True and knowledge["data"]["results"]
-    assert cases["ok"] is True and cases["data"]["results"]
     assert diagnosis["ok"] is True and diagnosis["data"]["sources"]
     assert trace["ok"] is True and trace["data"]["contexts"]
     assert realtime["ok"] is True and realtime["data"]["fault_type"] == "realtime_state"
     assert realtime["data"]["answer"].startswith("设备当前 MQTT 状态为")
     assert realtime_trace["data"]["result"]["answer"] == realtime["data"]["answer"]
-    assert rejected["error"]["code"] == "CASE_NOT_VERIFIED"
     assert diagnoses["ok"] is True and diagnoses["data"]["items"]
     assert documents["ok"] is True and documents["data"]["items"]
     print(
@@ -157,7 +131,6 @@ async def run(url: str, timeout: float, token: str) -> None:
                 "sources": diagnosis["data"]["route"]["selected_sources"],
                 "fault_type": diagnosis["data"]["fault_type"],
                 "realtime_answer": realtime["data"]["answer"],
-                "verified_case_gate": "ok",
             },
             ensure_ascii=False,
         )

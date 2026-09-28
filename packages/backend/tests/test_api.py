@@ -13,12 +13,8 @@ from app.main import app
 from app.models import (
     Attachment,
     Conversation,
-    MCPPurpose,
-    MCPServer,
-    MCPTool,
     Message,
     ModelConfiguration,
-    ToolRiskPolicy,
 )
 from app.security import decrypt_secret
 
@@ -298,78 +294,29 @@ def test_user_can_store_private_model_configuration() -> None:
         )
 
 
-def test_admin_can_add_only_verified_fault_case(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def test_retired_fault_case_api_is_gone() -> None:
+    """旧案例 REST 接口随案例库退役返回 404（spec §11.2 / AC21）。"""
+    from fastapi.routing import APIRoute
 
-    async def fake_invoke(_server, _settings, tool_name, arguments, **_kwargs):
-        captured.update(arguments)
-        assert tool_name == "add_verified_fault_case"
-        return {
-            "ok": True,
-            "data": {"fault_id": "FTEST001", "verified": True, "indexed": True},
-            "error": None,
-        }
-
-    monkeypatch.setattr("app.api.diagnosis.invoke_remote_tool", fake_invoke)
-
-    async def seed_server() -> str:
-        async with SessionFactory() as db:
-            server = MCPServer(
-                server_key=f"diagnosis-{uuid.uuid4().hex[:8]}",
-                name="诊断测试服务",
-                url="http://127.0.0.1:9001/mcp",
-                purpose=MCPPurpose.IOT,
-                enabled=True,
-                connection_status="connected",
-            )
-            db.add(server)
-            await db.flush()
-            db.add(
-                MCPTool(
-                    server_id=server.id,
-                    original_name="add_verified_fault_case",
-                    model_alias=f"{server.server_key}__add_verified_fault_case",
-                    enabled=True,
-                    risk_policy=ToolRiskPolicy.APPROVAL_REQUIRED,
-                )
-            )
-            await db.commit()
-            return server.id
-
-    server_id = asyncio.run(seed_server())
-    payload = {
-        "device_id": "ESP32_05",
-        "fault_type": "mqtt_timeout",
-        "fault_name": "MQTT 心跳超时",
-        "symptoms": ["频繁掉线"],
-        "logs": ["MQTT keep alive timeout"],
-        "cause": "心跳配置异常",
-        "solution": "检查 Keep Alive 与 Broker 超时",
-        "verified": True,
+    paths = {
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute)
     }
-
+    assert not any("fault-cases" in path for path in paths)
     with TestClient(app) as client:
         login = client.post(
             "/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
         )
         csrf = login.json()["data"]["csrf_token"]
-        rejected = client.post(
-            f"/api/v1/diagnosis-services/{server_id}/fault-cases",
-            json={**payload, "verified": False},
-            headers={"X-CSRF-Token": csrf},
-        )
-        assert rejected.status_code == 422
-
         response = client.post(
-            f"/api/v1/diagnosis-services/{server_id}/fault-cases",
-            json=payload,
+            "/api/v1/diagnosis-services/any/fault-cases",
+            json={"device_id": "ESP32_05", "verified": True},
             headers={"X-CSRF-Token": csrf},
         )
-        assert response.status_code == 201
-        assert response.json()["data"]["fault_id"] == "FTEST001"
-        assert captured["verified"] is True
-        assert captured["verified_by"] == "admin"
-
+        assert response.status_code == 404
+        listing = client.get("/api/v1/fault-cases")
+        assert listing.status_code == 404
 
 def test_unbound_attachment_can_be_deleted_then_is_gone() -> None:
     """WP-11 §9.3：上传成功但发送失败时，前端可显式删除未绑定附件。"""

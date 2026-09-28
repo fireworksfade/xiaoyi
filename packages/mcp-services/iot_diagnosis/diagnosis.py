@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -180,7 +181,13 @@ def diagnose(
     query: str,
     supplied_logs: list[str] | None,
     use_realtime_state: bool,
+    memory_context: list[dict[str, Any]] | None = None,
+    repair_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if len(json.dumps(memory_context or [], ensure_ascii=False)) > 12000 or len(memory_context or []) > 6:
+        raise ValueError("MEMORY_CONTEXT_TOO_LARGE")
+    if len(json.dumps(repair_context or {}, ensure_ascii=False)) > 24000:
+        raise ValueError("REPAIR_CONTEXT_TOO_LARGE")
     started = time.perf_counter()
     llm_client = DiagnosisLLMClient.from_env()
     state = repository.get_device_status(device_id)
@@ -247,7 +254,7 @@ def diagnose(
     llm_fallback_reason = None if direct_answer or llm_client.available else "LLM_NOT_CONFIGURED"
     if route.need_retrieval and llm_client.available:
         try:
-            llm_response = llm_client.diagnose(query, state, logs, retrieval["results"])
+            llm_response = llm_client.diagnose(query, state, logs, retrieval["results"], memory_context=memory_context, repair_context=repair_context) if memory_context or repair_context else llm_client.diagnose(query, state, logs, retrieval["results"])
             candidate = llm_response.data
             solutions = candidate.get("solutions")
             required = ("fault_type", "fault_name", "cause")
@@ -256,6 +263,7 @@ def diagnose(
             if not isinstance(solutions, list) or not solutions:
                 raise LLMClientError("LLM_RESPONSE_INVALID")
             profile = {
+                "new_evidence": candidate.get("new_evidence", []),
                 "fault_type": candidate["fault_type"],
                 "fault_name": candidate["fault_name"],
                 "cause": candidate["cause"],
@@ -286,10 +294,6 @@ def diagnose(
     retrieval_results = cast(list[dict[str, Any]], retrieval["results"])
     scores = [float(item["score"]) for item in retrieval_results]
     retrieval_score = max(scores, default=0.8 if not route.need_retrieval else 0.0)
-    case_similarity = max(
-        (float(item["score"]) for item in retrieval_results if item["source"] == "fault_cases"),
-        default=0.0,
-    )
     evidence_score = min(1.0, len(evidence) / 5)
     llm_score = min(max(float(cast(Any, profile.get("confidence", 0.82))), 0.0), 1.0)
     if not llm_client.available and profile["fault_type"] == "device_runtime":
@@ -299,8 +303,7 @@ def diagnose(
         if direct_answer
         else round(
             0.35 * retrieval_score
-            + 0.25 * evidence_score
-            + 0.20 * case_similarity
+            + 0.45 * evidence_score
             + 0.20 * llm_score,
             4,
         )
@@ -333,6 +336,8 @@ def diagnose(
             "selected_sources": route.sources,
         },
         "sources": sources,
+        "memory_refs": [{"memory_id": m.get("memory_id"), "revision": m.get("revision")} for m in memory_context or []],
+        "new_evidence": profile.get("new_evidence", []),
         "observability": {
             "request_id": request_id,
             "retrieval_count": int(retrieval["candidate_count"]),

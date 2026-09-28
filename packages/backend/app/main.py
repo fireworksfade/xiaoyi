@@ -106,8 +106,25 @@ async def lifespan(app: FastAPI):
         name="retention-loop",
     )
 
+    # Memory worker：先完成种子数据再启动；禁用时完全不启动任务
+    memory_stop: asyncio.Event | None = None
+    memory_task: asyncio.Task | None = None
+    if settings.memory_enabled:
+        from app.memory.worker import worker_loop
+        memory_stop = asyncio.Event()
+        memory_task = asyncio.create_task(worker_loop(memory_stop), name="memory-worker")
     await seed_users()
     yield
+    if memory_task is not None and memory_stop is not None:
+        memory_stop.set()
+        try:
+            await asyncio.wait_for(memory_task, timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            memory_task.cancel()
+            try:
+                await memory_task
+            except asyncio.CancelledError:
+                pass
     retention_task.cancel()
     try:
         await retention_task

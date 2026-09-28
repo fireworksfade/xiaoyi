@@ -20,7 +20,7 @@
 `settings-sheet.tsx` 和 `knowledge-dialog.tsx` 各有数百行，包含多个功能；`lib/api.ts` 集中了不同业务的请求与类型。下一步建议：
 
 - 将设置中的模型配置、MCP 服务管理拆成独立组件，保留一个薄的面板入口。
-- 将知识库的文档管理、检索、故障案例分别组织为组件及对应 Hook。
+- 知识库只保留官方文档管理；故障经验与情景已迁入独立「记忆」模块。
 - 将 API 客户端拆成共用请求层及 auth、conversations、runs、knowledge、mcp 模块；共用层统一处理 Cookie、CSRF、错误解析。
 - 业务组件和 Hook 放在同一个 feature 中，测试随模块放置；`components/ui/` 只保留跨业务复用的基础组件。
 
@@ -31,9 +31,9 @@ frontend/
 ├── app/                       # 路由、布局、后端代理
 ├── features/
 │   ├── conversation/          # 会话界面、消息与运行 Hook、测试
-│   ├── knowledge/             # 文档、检索、案例
+│   ├── knowledge/             # 官方技术文档管理
 │   ├── settings/              # 模型与 MCP 配置
-│   └── remediation/           # 审批卡片与测试
+│   └── memory/                # 记忆管理（情景/经验、候选确认）
 ├── components/ui/             # 共享基础组件
 ├── lib/
 │   ├── api/                   # 请求基础设施与各业务 API

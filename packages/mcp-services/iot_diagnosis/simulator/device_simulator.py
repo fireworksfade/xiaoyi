@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
-from .models import DeviceProfile, DeviceState
 from .command_handler import handle_command
+from .models import DeviceProfile, DeviceState
 from .telemetry import build_cycle, current_status
 
 logger = logging.getLogger(__name__)

@@ -15,6 +15,7 @@ from common.migrations import (
     MigrationError,
     MySQLMigrationRunner,
     SQLiteMigrationRunner,
+    load_migration_module,
     load_migrations_from_dir,
 )
 from iot_control.repository import ControlRepository
@@ -37,8 +38,8 @@ def test_empty_db_upgrade_creates_schema(tmp_path: Path, service: str) -> None:
     runner = _runner(service)
     result = runner.upgrade(db_path)
     expected = {
-        "diagnosis": [1, 2, 3, 4, 5],
-        "control": [1, 2],
+        "diagnosis": [1, 2, 3, 4, 5, 6],
+        "control": [1, 2, 3, 4],
     }[service]
     assert result["applied"] == expected
     assert result["head"] == result["applied"][-1]
@@ -50,6 +51,13 @@ def test_empty_db_upgrade_creates_schema(tmp_path: Path, service: str) -> None:
     assert "schema_migrations" in tables
     expected = {"device", "knowledge_document"} if service == "diagnosis" else {"device_command"}
     assert expected <= tables
+    if service == "diagnosis":
+        # 案例库退役：新库升级完成后不再存在案例表（spec §11.4）
+        assert "fault_case" not in tables
+        assert "fault_case_feedback" not in tables
+    else:
+        columns = {row[1] for row in sqlite3.connect(db_path).execute("PRAGMA table_info(device_command)")}
+        assert not {"case_id", "case_status", "case_attempts", "case_error"} & columns
     # 重复升级幂等
     result = runner.upgrade(db_path)
     assert result["applied"] == []
@@ -67,6 +75,36 @@ def test_control_rejects_new_rows_without_diagnosis_id(tmp_path: Path) -> None:
                 VALUES ('CMD_1', 'ESP32_05', 'reconnect_mqtt', '{}', '', 'agent',
                         'low', 'pending', 'now', 'now')"""
             )
+
+
+def test_populated_legacy_cases_are_deleted_by_cleanup_migration(tmp_path: Path) -> None:
+    path = str(tmp_path / "legacy.db")
+    runner = _runner("diagnosis")
+    first_five = SQLiteMigrationRunner(runner.migrations[:5], service="diagnosis")
+    first_five.upgrade(path)
+    with sqlite3.connect(path) as db:
+        db.execute("""INSERT INTO fault_case
+            (fault_id, device_type, fault_type, fault_name, symptoms_json, logs_json,
+             cause, solution, verified, verified_by, source, created_at, updated_at)
+            VALUES ('F1', 'ESP32', 'mqtt', 'Timeout', '[]', '[]', 'unknown',
+                    'reconnect', 1, 'admin', 'human_verified', 'now', 'now')""")
+        db.commit()
+    assert runner.upgrade(path)["applied"] == [6]
+    with sqlite3.connect(path) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "fault_case" not in tables
+        assert "fault_case_feedback" not in tables
+
+
+def test_mysql_cleanup_drops_case_tables() -> None:
+    migration = load_migration_module(
+        _ROOT / "iot_diagnosis" / "mysql_migrations" / "0003_drop_fault_cases.py"
+    )
+    cursor = MagicMock()
+    migration.upgrade(cursor)
+    assert [call.args[0] for call in cursor.execute.call_args_list] == [
+        "DROP TABLE IF EXISTS fault_case_feedback", "DROP TABLE IF EXISTS fault_case"
+    ]
 
 
 @pytest.mark.parametrize("service", ["diagnosis", "control"])
@@ -219,7 +257,7 @@ def test_migrate_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     try:
         assert migrate_cli.main(["--service", "diagnosis", "status"]) == 0
         first = capsys.readouterr().out
-        assert '"pending": [1, 2, 3, 4, 5]' in first
+        assert '"pending": [1, 2, 3, 4, 5, 6]' in first
 
         assert migrate_cli.main(["--service", "diagnosis", "upgrade", "--dry-run"]) == 0
         capsys.readouterr()

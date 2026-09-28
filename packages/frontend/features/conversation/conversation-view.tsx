@@ -3,6 +3,7 @@
 import type { ReactNode, RefObject } from 'react';
 import {
   BookOpen,
+  Brain,
   Bot,
   ChevronDown,
   FileSearch,
@@ -53,6 +54,7 @@ type ConversationViewProps = {
   onOpenSettings: () => void;
   onOpenRunRecords: () => void;
   onOpenKnowledge: () => void;
+  onOpenMemory?: () => void;
   onRetryConversation: () => void;
   onLoadEarlier: () => void;
   onSuggestion: (prompt: string) => void;
@@ -76,6 +78,7 @@ export function ConversationView({
   onOpenSettings,
   onOpenRunRecords,
   onOpenKnowledge,
+  onOpenMemory,
   onRetryConversation,
   onLoadEarlier,
   onSuggestion,
@@ -138,6 +141,17 @@ export function ConversationView({
             <BookOpen />
             <span className="hidden sm:inline">知识文档</span>
           </Button>
+          {onOpenMemory ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-slate-200 text-slate-600 shadow-none"
+              onClick={onOpenMemory}
+            >
+              <Brain />
+              <span className="hidden sm:inline">记忆</span>
+            </Button>
+          ) : null}
         </div>
       </header>
 

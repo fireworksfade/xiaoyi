@@ -4,5 +4,6 @@ export * from './auth';
 export * from './conversations';
 export * from './runs';
 export * from './knowledge';
+export * from './memory';
 export * from './settings';
 export * from './remediation';

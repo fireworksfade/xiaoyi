@@ -25,6 +25,9 @@ BASELINE_REVISION = "0001_current_schema"
 
 @lru_cache
 def _sync_engine_for_url(url_string: str):
+    # SQLite 迁移与在线写入并发时（启动升级、测试 fixture）等待锁而非立即失败
+    if url_string.startswith("sqlite"):
+        return create_engine(url_string, connect_args={"timeout": 30})
     return create_engine(url_string)
 
 

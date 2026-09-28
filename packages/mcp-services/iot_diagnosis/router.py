@@ -7,7 +7,6 @@ from typing import Any
 from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
 
 ALLOWED_SOURCES = {
-    "fault_cases",
     "mqtt_docs",
     "wifi_docs",
     "sensor_docs",
@@ -34,9 +33,6 @@ SOURCE_PROTOTYPES = {
         "固件 firmware OTA 升级 upgrade 重启 reboot 复位 reset 内存 heap 内存泄漏 碎片 "
         "看门狗 watchdog core dump backtrace 崩溃 crash panic 栈 存储 NVS 分区 "
         "电源管理 power management 睡眠 sleep 唤醒 wake 事件 event 日志 log GPIO"
-    ),
-    "fault_cases": (
-        "已验证的故障案例 历史维修记录 根因分析 解决方案 verified case 类似故障 曾经发生"
     ),
 }
 
@@ -84,17 +80,15 @@ def semantic_sources(
             key=lambda item: item[1],
             reverse=True,
         )
-        topic_sources = [source for source, _ in scored if source != "fault_cases"]
-        if not topic_sources:
+        if not scored:
             return []
-        # fault_cases 恒定入选，主题源必须从其余来源中挑选，
-        # 否则案例原型得分最高时会导致主题文档源全部丢失
-        top_source = topic_sources[0]
-        top_score = dict(scored)[top_source]
-        selected = ["fault_cases", top_source]
-        second = dict(scored).get(topic_sources[1]) if len(topic_sources) > 1 else 0.0
+        # 主题文档源按相似度挑选；历史案例来源已随案例库退役
+        top_source = scored[0][0]
+        top_score = scored[0][1]
+        selected = [top_source]
+        second = scored[1][1] if len(scored) > 1 else 0.0
         if second and second >= 0.9 * top_score:
-            selected.append(topic_sources[1])
+            selected.append(scored[1][0])
         return selected
     except Exception:
         return []
@@ -240,15 +234,15 @@ def route_query(
             pass
 
     source_map = {
-        "mqtt": ["fault_cases", "mqtt_docs", "realtime_db"],
-        "wifi": ["fault_cases", "wifi_docs", "realtime_db"],
-        "sensor": ["fault_cases", "sensor_docs", "realtime_db"],
-        "device": ["fault_cases", "device_docs", "realtime_db"],
-        "unknown": ["fault_cases", "device_docs", "realtime_db"],
+        "mqtt": ["mqtt_docs", "realtime_db"],
+        "wifi": ["wifi_docs", "realtime_db"],
+        "sensor": ["sensor_docs", "realtime_db"],
+        "device": ["device_docs", "realtime_db"],
+        "unknown": ["device_docs", "realtime_db"],
     }
     sources = source_map[fault_type]
     if state and state.get("mqtt_status") == "disconnected" and "mqtt_docs" not in sources:
-        sources = ["fault_cases", "mqtt_docs", *sources[1:]]
+        sources = ["mqtt_docs", *sources]
     return RouteDecision(
         fault_type=fault_type,
         need_retrieval=True,

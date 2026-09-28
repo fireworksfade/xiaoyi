@@ -214,24 +214,7 @@ class DeviceStateMixin:
                     payload_hash,
                 ),
             )
-        device = {
-            "device_id": device_id,
-            "device_type": str(payload.get("device_type") or "ESP32"),
-            "name": str(payload.get("name") or device_id),
-            "firmware_version": str(payload.get("firmware_version") or "unknown"),
-            "created_at": received_at,
-        }
-        status = {
-            "device_id": device_id,
-            "online": online,
-            "wifi_status": wifi_status or "unknown",
-            "rssi": rssi,
-            "mqtt_status": mqtt_status or "unknown",
-            "temperature": temperature,
-            "uptime": uptime,
-            "timestamp": device_timestamp or received_at,
-        }
-        # MySQL 镜像已移除 - 设备状态仅存储在 SQLite
+        # 设备状态仅存储在 SQLite。
 
     def append_telemetry(
         self, device_id: str, payload: dict[str, Any], received_at: str | None = None

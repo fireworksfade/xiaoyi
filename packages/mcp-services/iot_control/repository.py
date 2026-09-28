@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -86,6 +87,7 @@ class ControlRepository:
         reason: str = "",
         issued_by: str = "",
         proposal_id: str | None = None,
+        correlation_key: str | None = None,
     ) -> dict[str, Any]:
         now = iso()
         command = {
@@ -101,14 +103,20 @@ class ControlRepository:
             "status": "pending",
             "verify_status": None,
             "ack": None,
-            "case_status": None,
-            "case_id": None,
-            "case_attempts": 0,
             "created_at": now,
             "updated_at": now,
             "acked_at": None,
         }
+        fingerprint = hashlib.sha256(json.dumps([device_id, action, diagnosis_id, parameters or {}, reason, issued_by, proposal_id], sort_keys=True).encode()).hexdigest()
         with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if correlation_key:
+                prior = db.execute("SELECT * FROM action_correlation WHERE correlation_key = ?", (correlation_key,)).fetchone()
+                if prior:
+                    if prior["parameters_hash"] != fingerprint:
+                        raise ValueError("ACTION_CORRELATION_CONFLICT")
+                    row = db.execute("SELECT * FROM device_command WHERE command_id = ?", (prior["command_id"],)).fetchone()
+                    return {**self._command_from_row(row), "replayed": True, "delivery_status": prior["delivery_status"]}
             db.execute(
                 """INSERT INTO device_command
                 (command_id, device_id, action, parameters_json, reason, issued_by,
@@ -128,6 +136,8 @@ class ControlRepository:
                     now,
                 ),
             )
+            if correlation_key:
+                db.execute("INSERT INTO action_correlation(correlation_key, parameters_hash, command_id) VALUES (?, ?, ?)", (correlation_key, fingerprint, command["command_id"]))
         return command
 
     def get_command(self, command_id: str) -> dict[str, Any] | None:
@@ -244,30 +254,18 @@ class ControlRepository:
                 WHERE command_id = ? AND status = 'approved'""",
                 (verify_status, now, command_id),
             )
-            # 成功的命令等待诊断服务回发案例确认（case_status: pending -> archived）
-            if verify_status == "succeeded":
-                db.execute(
-                    """UPDATE device_command SET case_status = 'pending'
-                    WHERE command_id = ? AND case_status IS NULL""",
-                    (command_id,),
-                )
 
-    def mark_case_archived(self, command_id: str, case_id: str) -> None:
-        """收到诊断服务的案例确认事件后，把 case_id 关联回命令。"""
-        now = iso()
+    def set_correlation_delivery(self, correlation_key: str, delivered: bool) -> None:
+        """记录关联键对应的 MQTT 投递结果；unknown 表示结果未知，不是失败。"""
+        status = "delivered" if delivered else "unknown"
         with self._lock, self._connect() as db:
             db.execute(
-                """UPDATE device_command
-                SET case_status = 'archived', case_id = ?, updated_at = ?
-                WHERE command_id = ?""",
-                (case_id, now, command_id),
+                "UPDATE action_correlation SET delivery_status = ? WHERE correlation_key = ?",
+                (status, correlation_key),
             )
 
     def process_timeouts(self) -> list[dict[str, Any]]:
-        """由 server lifespan 周期调用：命令超时与验证窗口收敛。
-
-        返回本轮收敛出最终结论的命令，供上层发布修复完成事件。
-        """
+        """由 server lifespan 周期调用：命令超时与验证窗口收敛。"""
         self.mark_timed_out_commands()
         return self.finalize_watches()
 
@@ -281,6 +279,7 @@ class ControlRepository:
         parameters: dict[str, Any] | None = None,
         reason: str = "",
         impact: str = "",
+        correlation_key: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         proposal = {
@@ -301,7 +300,16 @@ class ControlRepository:
             "created_at": iso(now),
             "updated_at": iso(now),
         }
+        fingerprint = hashlib.sha256(json.dumps([device_id, action, diagnosis_id, parameters or {}, reason, impact], sort_keys=True).encode()).hexdigest()
         with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if correlation_key:
+                prior = db.execute("SELECT * FROM action_correlation WHERE correlation_key = ?", (correlation_key,)).fetchone()
+                if prior:
+                    if prior["parameters_hash"] != fingerprint:
+                        raise ValueError("ACTION_CORRELATION_CONFLICT")
+                    row = db.execute("SELECT * FROM remediation_proposal WHERE proposal_id = ?", (prior["proposal_id"],)).fetchone()
+                    return {**self._proposal_from_row(row), "replayed": True, "delivery_status": prior["delivery_status"]}
             db.execute(
                 """INSERT INTO remediation_proposal
                 (proposal_id, device_id, action, parameters_json, reason, impact,
@@ -320,6 +328,8 @@ class ControlRepository:
                     proposal["updated_at"],
                 ),
             )
+            if correlation_key:
+                db.execute("INSERT INTO action_correlation(correlation_key, parameters_hash, proposal_id) VALUES (?, ?, ?)", (correlation_key, fingerprint, proposal["proposal_id"]))
         return proposal
 
     def _expire_stale(self, db: sqlite3.Connection) -> None:
@@ -392,9 +402,6 @@ class ControlRepository:
                     "status": "pending",
                     "verify_status": None,
                     "ack": None,
-                    "case_status": None,
-                    "case_id": None,
-                    "case_attempts": 0,
                     "created_at": now,
                     "updated_at": now,
                     "acked_at": None,
@@ -458,10 +465,6 @@ class ControlRepository:
             "status": row["status"],
             "verify_status": row["verify_status"],
             "ack": json.loads(row["ack_json"]) if row["ack_json"] else None,
-            "case_status": row["case_status"] if "case_status" in keys else None,
-            "case_id": row["case_id"] if "case_id" in keys else None,
-            "case_attempts": row["case_attempts"] if "case_attempts" in keys else 0,
-            "case_error": row["case_error"] if "case_error" in keys else None,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "acked_at": row["acked_at"],
@@ -487,3 +490,12 @@ class ControlRepository:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    def get_action_by_correlation(self, correlation_key):
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT * FROM action_correlation WHERE correlation_key = ?", (correlation_key,)).fetchone()
+        if not row:
+            return None
+        proposal = self.get_proposal(row["proposal_id"]) if row["proposal_id"] else None
+        command_id = row["command_id"] or (proposal or {}).get("command_id")
+        return {"proposal": proposal, "command": self.get_command(command_id) if command_id else None, "delivery_status": row["delivery_status"]}

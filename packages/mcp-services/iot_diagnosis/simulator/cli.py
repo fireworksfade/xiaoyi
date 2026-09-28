@@ -8,10 +8,10 @@ import signal
 import threading
 import time
 
+from .command_handler import SCENARIOS
 from .device_simulator import DeviceSimulator
 from .fleet_loader import load_fleet
 from .models import DeviceProfile
-from .command_handler import SCENARIOS
 
 logger = logging.getLogger(__name__)
 

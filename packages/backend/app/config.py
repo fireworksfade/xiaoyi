@@ -24,6 +24,31 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.4-mini"
     openai_api_mode: str = "responses"
     agent_runtime: str = "mock"
+    memory_enabled: bool = True
+    memory_auto_capture: bool = True
+    memory_auto_propose_experience: bool = True
+    memory_working_ttl_hours: int = 24
+    memory_context_max_tokens: int = 2000
+    memory_recall_top_k: int = 6
+    memory_recall_timeout_ms: int = 1500
+    memory_job_poll_seconds: float = 2
+    memory_job_max_attempts: int = 8
+    memory_action_poll_seconds: float = 5
+    memory_deleted_content_retention_days: int = 30
+    memory_qdrant_url: str | None = None
+    memory_embedding_url: str | None = None
+    memory_embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    memory_embedding_fingerprint: str = "qwen3-0-6b"
+    memory_embedding_dimensions: int = 512
+    memory_collection_prefix: str = "xiaoyi_memory"
+    agent_repair_max_attempts: int = 3
+
+    @field_validator("agent_repair_max_attempts")
+    @classmethod
+    def validate_repair_limit(cls, value: int) -> int:
+        if not 1 <= value <= 3:
+            raise ValueError("AGENT_REPAIR_MAX_ATTEMPTS must be between 1 and 3")
+        return value
     seed_demo_users: bool = True
     # 开发/测试默认在启动时执行 alembic upgrade head；生产部署应先跑
     # `python -m app.cli deploy` 并设置 DB_AUTO_UPGRADE=false

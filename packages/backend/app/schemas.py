@@ -86,17 +86,6 @@ class MCPToolUpdate(BaseModel):
     risk_policy: ToolRiskPolicy
 
 
-class VerifiedFaultCaseCreate(BaseModel):
-    device_id: str = Field(min_length=1, max_length=120)
-    fault_type: str = Field(min_length=1, max_length=120)
-    fault_name: str = Field(min_length=1, max_length=200)
-    symptoms: list[str] = Field(min_length=1, max_length=20)
-    logs: list[str] = Field(min_length=1, max_length=50)
-    cause: str = Field(min_length=1, max_length=4000)
-    solution: str = Field(min_length=1, max_length=4000)
-    verified: bool
-
-
 class RemediationDecisionCreate(BaseModel):
     decision: str = Field(pattern=r"^(approved|rejected)$")
     expected_version: int = Field(ge=1)

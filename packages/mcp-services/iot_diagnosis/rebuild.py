@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.rebuild")
 
-ENTITIES = ("device_status", "device_log", "knowledge_document", "fault_case", "diagnosis_record")
+ENTITIES = ("device_status", "device_log", "knowledge_document", "diagnosis_record")
 
 
 def iso(value=None):
@@ -120,15 +120,6 @@ class RebuildService:
                     ).fetchall()
                 ]
                 return rows, lambda row: _join_cursor(row["source"], row["source_id"])
-            if entity == "fault_case":
-                rows = [
-                    dict(row)
-                    for row in db.execute(
-                        "SELECT * FROM fault_case WHERE fault_id > ? ORDER BY fault_id LIMIT ?",
-                        (cursor or "", batch),
-                    ).fetchall()
-                ]
-                return rows, lambda row: row["fault_id"]
             if entity == "diagnosis_record":
                 rows = [
                     dict(row)

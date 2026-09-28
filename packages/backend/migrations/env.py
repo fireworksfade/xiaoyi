@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, pool
 from app import models  # noqa: F401  确保所有模型注册到 Base.metadata
 from app.config import get_settings
 from app.db import Base
+from app.memory import models as memory_models  # noqa: F401
 
 config = context.config
 
@@ -45,8 +46,11 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    url = _sync_url(config.get_main_option("sqlalchemy.url"))
     engine = create_engine(
-        _sync_url(config.get_main_option("sqlalchemy.url")), poolclass=pool.NullPool
+        url,
+        poolclass=pool.NullPool,
+        connect_args={"timeout": 30} if url.startswith("sqlite") else {},
     )
     with engine.connect() as connection:
         # SQLite 缺少部分 ALTER 能力，batch 模式通过重建表实现列变更

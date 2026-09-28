@@ -11,15 +11,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.db import SessionFactory
-from app.main import app
 from app.models import MCPServer, MCPTool, ToolRiskPolicy
 from app.services.mcp_capabilities import resolve_mcp_server
 
 DIAGNOSIS_TOOLS = {
-    "list_fault_cases": ToolRiskPolicy.READ_ONLY,
-    "delete_fault_case": ToolRiskPolicy.APPROVAL_REQUIRED,
-    "add_verified_fault_case": ToolRiskPolicy.APPROVAL_REQUIRED,
     "list_knowledge_documents": ToolRiskPolicy.READ_ONLY,
+    "delete_knowledge_document": ToolRiskPolicy.APPROVAL_REQUIRED,
+    "search_knowledge": ToolRiskPolicy.READ_ONLY,
 }
 CONTROL_TOOLS = {
     "decide_remediation_proposal": ToolRiskPolicy.APPROVAL_REQUIRED,
@@ -77,11 +75,11 @@ def test_registration_order_does_not_change_routing() -> None:
             diagnosis = await _seed_server(
                 "iot-diagnosis-second", DIAGNOSIS_TOOLS, service_kind="diagnosis"
             )
-            chosen = await resolve_mcp_server(db, required_tools={"list_fault_cases"})
+            chosen = await resolve_mcp_server(db, required_tools={"list_knowledge_documents"})
             assert chosen.id == diagnosis.id
 
             # 重复解析（等价于删除重建后的语义）：路由结果不变
-            chosen_again = await resolve_mcp_server(db, required_tools={"list_fault_cases"})
+            chosen_again = await resolve_mcp_server(db, required_tools={"list_knowledge_documents"})
             assert chosen_again.server_key == chosen.server_key
 
             # 控制审批能力仍路由到 Control
@@ -102,7 +100,7 @@ def test_capability_mismatch_on_explicit_server() -> None:
             try:
                 await resolve_mcp_server(
                     db,
-                    required_tools={"list_fault_cases"},
+                    required_tools={"list_knowledge_documents"},
                     explicit_server_id=control.id,
                 )
             except HTTPException as exc:
@@ -120,13 +118,13 @@ def test_capability_ambiguous_without_default() -> None:
     async def run():
         async with SessionFactory() as db:
             tools = {
-                "list_fault_cases": ToolRiskPolicy.READ_ONLY,
-                "delete_fault_case": ToolRiskPolicy.APPROVAL_REQUIRED,
+                "list_knowledge_documents": ToolRiskPolicy.READ_ONLY,
+                "delete_knowledge_document": ToolRiskPolicy.APPROVAL_REQUIRED,
             }
             await _seed_server("diag-a", tools, service_kind="diagnosis")
             await _seed_server("diag-b", tools, service_kind="diagnosis")
             try:
-                await resolve_mcp_server(db, required_tools={"list_fault_cases"})
+                await resolve_mcp_server(db, required_tools={"list_knowledge_documents"})
             except HTTPException as exc:
                 assert exc.status_code == 409
                 assert exc.detail == "MCP_CAPABILITY_AMBIGUOUS"
@@ -141,7 +139,7 @@ def test_capability_ambiguous_without_default() -> None:
                 default_for_kind=True,
             )
             chosen = await resolve_mcp_server(
-                db, required_tools={"list_fault_cases"}, default_kind="diagnosis"
+                db, required_tools={"list_knowledge_documents"}, default_kind="diagnosis"
             )
             assert chosen.server_key == "diag-default"
 
@@ -152,13 +150,13 @@ def test_capability_unavailable_and_disabled_tools() -> None:
     async def run():
         async with SessionFactory() as db:
             await _seed_server(
-                "diag-off", {"list_fault_cases": ToolRiskPolicy.READ_ONLY}, enabled=False
+                "diag-off", {"list_knowledge_documents": ToolRiskPolicy.READ_ONLY}, enabled=False
             )
             await _seed_server(
-                "diag-disc", {"list_fault_cases": ToolRiskPolicy.READ_ONLY}, connected=False
+                "diag-disc", {"list_knowledge_documents": ToolRiskPolicy.READ_ONLY}, connected=False
             )
             try:
-                await resolve_mcp_server(db, required_tools={"list_fault_cases"})
+                await resolve_mcp_server(db, required_tools={"list_knowledge_documents"})
             except HTTPException as exc:
                 assert exc.status_code == 503
                 assert exc.detail == "MCP_CAPABILITY_UNAVAILABLE"
@@ -168,7 +166,7 @@ def test_capability_unavailable_and_disabled_tools() -> None:
             # 工具存在但 disabled：等于能力缺失
             await _seed_server("diag-empty", {}, service_kind="diagnosis")
             try:
-                await resolve_mcp_server(db, required_tools={"list_fault_cases"})
+                await resolve_mcp_server(db, required_tools={"list_knowledge_documents"})
             except HTTPException as exc:
                 assert exc.status_code == 503
             else:
@@ -177,27 +175,38 @@ def test_capability_unavailable_and_disabled_tools() -> None:
     asyncio.run(run())
 
 
-def test_policy_mismatch_detected_via_api() -> None:
-    """工具存在但策略不符：显式 service_id 请求返回 MISMATCH（不发起调用）。"""
+def test_policy_mismatch_detected_without_remote_call() -> None:
+    """工具存在但策略不符：显式 service_id 解析返回 MISMATCH（不发起调用）。"""
 
-    async def seed():
-        return await _seed_server(
+    async def run():
+        server = await _seed_server(
             f"diag-readonly-{uuid.uuid4().hex[:6]}",
-            {"list_fault_cases": ToolRiskPolicy.READ_ONLY},
+            {"delete_knowledge_document": ToolRiskPolicy.READ_ONLY},
             service_kind="diagnosis",
         )
+        try:
+            from app.db import SessionFactory as _SF
 
-    server_id = asyncio.run(seed()).id
+            async with _SF() as db:
+                try:
+                    await resolve_mcp_server(
+                        db,
+                        required_tools={"delete_knowledge_document"},
+                        explicit_server_id=server.id,
+                        require_policy={"delete_knowledge_document": ToolRiskPolicy.APPROVAL_REQUIRED},
+                    )
+                except HTTPException as exc:
+                    assert exc.status_code == 422
+                    assert exc.detail == "MCP_CAPABILITY_MISMATCH"
+                else:
+                    raise AssertionError("expected MCP_CAPABILITY_MISMATCH")
+        finally:
+            from app.db import SessionFactory as _SF2
 
-    def fail_invoke(*_args, **_kwargs):  # pragma: no cover - 不应被调用
-        raise AssertionError("should not invoke remote tool")
+            async with _SF2() as db:
+                stored = await db.get(MCPServer, server.id)
+                if stored:
+                    await db.delete(stored)
+                    await db.commit()
 
-    with TestClient(app) as client:
-        csrf = _login(client)
-        response = client.delete(
-            "/api/v1/fault-cases/FD663EB01",
-            params={"service_id": server_id},
-            headers={"X-CSRF-Token": csrf},
-        )
-        assert response.status_code == 422
-        assert response.json()["error"]["code"] == "MCP_CAPABILITY_MISMATCH"
+    asyncio.run(run())

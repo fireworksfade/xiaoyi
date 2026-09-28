@@ -68,28 +68,8 @@ def _lexical_candidates(
     state: dict[str, Any] | None,
     doc_sources: list[str],
 ) -> list[dict[str, Any]]:
-    """fault_cases / realtime_db 及 FTS 不可用时的文档 lexical 兜底候选。"""
+    """realtime_db 及 FTS 不可用时的文档 lexical 兜底候选。"""
     items: list[dict[str, Any]] = []
-    if "fault_cases" in selected:
-        for case in repository.fault_cases():
-            content = "；".join(
-                [
-                    case["fault_name"],
-                    *case["symptoms"],
-                    *case["logs"],
-                    case["cause"],
-                    case["solution"],
-                ]
-            )
-            items.append(
-                {
-                    "source": "fault_cases",
-                    "id": case["fault_id"],
-                    "title": case["fault_name"],
-                    "content": content,
-                    "score": lexical_similarity(query, content),
-                }
-            )
     if "realtime_db" in selected and state:
         content = (
             f"设备在线={state.get('online')}；WiFi={state.get('wifi_status')}；"
@@ -155,7 +135,7 @@ def search_knowledge(
 
     use_dense = config.strategy in ("dense", "hybrid")
     use_sparse = config.strategy in ("sparse", "hybrid") and config.enable_sparse
-    doc_sources = [item for item in selected if item not in {"fault_cases", "realtime_db"}]
+    doc_sources = [item for item in selected if item != "realtime_db"]
 
     if use_dense:
         query_vector, latency["embedding"] = embed_query(repository, rewritten)
@@ -180,13 +160,13 @@ def search_knowledge(
             candidate["sparse_rank"] = rank
             candidate["sparse_score"] = float(item.get("score") or 0.0)
 
-    # fault_cases / realtime_db 没有 FTS 分块，继续走 lexical 通道。知识文档
-    # 仅在 FTS5 结构性不可用时才使用 legacy lexical 兜底；正常 hybrid 不得
-    # 引入第三条 lexical 通道（Spec G6 / AC10）。关闭 sparse 时则只保留
-    # dense 通道，实现 AC12 要求的 Dense fallback。
+    # realtime_db 没有 FTS 分块，继续走 lexical 通道。知识文档仅在 FTS5
+    # 结构性不可用时才使用 legacy lexical 兜底；正常 hybrid 不得引入第三条
+    # lexical 通道（Spec G6 / AC10）。关闭 sparse 时则只保留 dense 通道，
+    # 实现 AC12 要求的 Dense fallback。
     lexical_fallback = use_sparse and not sparse_available
     include_doc_lexical = lexical_fallback
-    if "fault_cases" in selected or "realtime_db" in selected or include_doc_lexical:
+    if "realtime_db" in selected or include_doc_lexical:
         started = time.perf_counter()
         lexical_items = _lexical_candidates(
             repository,
@@ -292,29 +272,3 @@ def search_knowledge(
         },
         "results": results,
     }
-
-
-def search_fault_cases(
-    repository: Any,
-    query: str,
-    device_type: str | None,
-    fault_type: str | None,
-    top_k: int,
-) -> list[dict[str, Any]]:
-    results = []
-    for case in repository.fault_cases(device_type, fault_type):
-        content = "；".join(
-            [case["fault_name"], *case["symptoms"], *case["logs"], case["cause"], case["solution"]]
-        )
-        results.append(
-            {
-                "fault_id": case["fault_id"],
-                "fault_name": case["fault_name"],
-                "symptoms": case["symptoms"],
-                "cause": case["cause"],
-                "solution": case["solution"],
-                "verified": True,
-                "similarity": round(lexical_similarity(query, content), 4),
-            }
-        )
-    return sorted(results, key=lambda item: item["similarity"], reverse=True)[:top_k]

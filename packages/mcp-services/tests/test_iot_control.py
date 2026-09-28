@@ -218,20 +218,7 @@ def test_simulator_ack_payload_is_json_serializable() -> None:
     assert json.loads(json.dumps(ack, ensure_ascii=False))["status"] == "applied"
 
 
-# ---------------------------------------------------------- 修复完成事件与案例关联
-
-from iot_control import remediation_events  # noqa: E402
-
-
-class FakeChannel:
-    """捕获 publish 调用的假 MQTT 通道。"""
-
-    def __init__(self):
-        self.published: list[tuple[str, str]] = []
-
-    def publish(self, topic: str, payload_json: str) -> bool:
-        self.published.append((topic, payload_json))
-        return True
+# ---------------------------------------------------------- 修复结果与关联键
 
 
 def _finalize_command(repo: ControlRepository, **kwargs) -> dict:
@@ -249,13 +236,15 @@ def _finalize_command(repo: ControlRepository, **kwargs) -> dict:
     return repo.get_command(command["command_id"])
 
 
-def test_verify_success_queues_case_link(repo: ControlRepository) -> None:
+def test_verify_success_keeps_no_case_state(repo: ControlRepository) -> None:
+    """案例归档链路已退役：成功验证不再产生 case_status/case_id。"""
     command = _finalize_command(repo)
     assert command["verify_status"] == "succeeded"
-    assert command["case_status"] == "pending"
+    assert "case_status" not in command
+    assert "case_id" not in command
 
 
-def test_failed_recovery_stays_unlinked(repo: ControlRepository) -> None:
+def test_failed_recovery_reports_verify_failure(repo: ControlRepository) -> None:
     command = repo.create_command(
         device_id="ESP32_06",
         action="restart_device",
@@ -267,48 +256,54 @@ def test_failed_recovery_stays_unlinked(repo: ControlRepository) -> None:
     repo.finalize_watches(utc_now() + timedelta(seconds=120))
     stored = repo.get_command(command["command_id"])
     assert stored["verify_status"] == "failed"
-    assert stored["case_status"] is None
 
 
-def test_case_link_confirmation_updates_command(repo: ControlRepository) -> None:
-    command = _finalize_command(repo, diagnosis_id="DIA_20260912_DEADBEEF")
-    repo.mark_case_archived(command["command_id"], "FAUTO0001")
-    stored = repo.get_command(command["command_id"])
-    assert stored["case_status"] == "archived"
-    assert stored["case_id"] == "FAUTO0001"
-
-
-def test_completed_event_payload_shape(repo: ControlRepository) -> None:
-    command = _finalize_command(repo, diagnosis_id="DIA_20260912_DEADBEEF")
-    event = remediation_events.completed_event(command)
-    assert event["event"] == "completed"
-    assert event["command_id"] == command["command_id"]
-    assert event["device_id"] == "ESP32_06"
-    assert event["action"] == "restart_device"
-    assert event["verify_status"] == "succeeded"
-    assert event["diagnosis_id"] == "DIA_20260912_DEADBEEF"
-    assert event["ack"] == {"detail": "设备已重启"}
-
-
-def test_publish_completed_events_uses_device_topic(
-    repo: ControlRepository,
-) -> None:
+def test_correlation_key_delivery_status_roundtrip(repo: ControlRepository) -> None:
+    """关联键记录投递结果；unknown 表达结果未知而非失败。"""
     command = repo.create_command(
         device_id="ESP32_07",
         action="reconnect_mqtt",
         risk_level=actions.LOW_RISK,
         diagnosis_id=DIAGNOSIS_ID,
+        correlation_key="CORR-1",
     )
-    repo.mark_command_ack(command["command_id"], "applied", {})
-    repo.record_status_sample("ESP32_07", True)
-    finalized = repo.finalize_watches(utc_now() + timedelta(seconds=120))
-    channel = FakeChannel()
-    published = remediation_events.publish_completed_events(channel, repo, finalized)
-    assert published == [command["command_id"]]
-    assert len(channel.published) == 1
-    topic, payload = channel.published[0]
-    assert topic == "iot/ESP32_07/remediation"
-    assert '"event": "completed"' in payload
+    assert command.get("replayed") is None
+    repo.set_correlation_delivery("CORR-1", False)
+    found = repo.get_action_by_correlation("CORR-1")
+    assert found["command"]["command_id"] == command["command_id"]
+    assert found["delivery_status"] == "unknown"
+    repo.set_correlation_delivery("CORR-1", True)
+    assert repo.get_action_by_correlation("CORR-1")["delivery_status"] == "delivered"
+
+
+def test_correlation_replay_returns_original_command(repo: ControlRepository) -> None:
+    """相同键+相同参数返回原命令；相同键+不同参数冲突。"""
+    first = repo.create_command(
+        device_id="ESP32_07",
+        action="reconnect_mqtt",
+        risk_level=actions.LOW_RISK,
+        diagnosis_id=DIAGNOSIS_ID,
+        correlation_key="CORR-2",
+    )
+    replay = repo.create_command(
+        device_id="ESP32_07",
+        action="reconnect_mqtt",
+        risk_level=actions.LOW_RISK,
+        diagnosis_id=DIAGNOSIS_ID,
+        correlation_key="CORR-2",
+    )
+    assert replay["command_id"] == first["command_id"]
+    assert replay["replayed"] is True
+    import pytest
+
+    with pytest.raises(ValueError, match="ACTION_CORRELATION_CONFLICT"):
+        repo.create_command(
+            device_id="ESP32_07",
+            action="calibrate_sensor",
+            risk_level=actions.LOW_RISK,
+            diagnosis_id=DIAGNOSIS_ID,
+            correlation_key="CORR-2",
+        )
 
 
 def test_proposal_diagnosis_id_flows_to_command_on_approval(

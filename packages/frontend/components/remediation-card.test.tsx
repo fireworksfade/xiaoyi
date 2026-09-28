@@ -30,7 +30,7 @@ function proposal(
 describe('RemediationCard refresh recovery', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('refreshes a historical proposal snapshot and restores the archived result', async () => {
+  it('refreshes a historical proposal snapshot and shows the verify result', async () => {
     const completed = proposal({
       status: 'approved',
       version: 2,
@@ -48,8 +48,7 @@ describe('RemediationCard refresh recovery', () => {
               status: 'applied',
               verify_status: 'succeeded',
               ack: {},
-              case_status: 'archived',
-              case_id: 'CASE-1',
+              delivery_status: 'delivered',
             },
           },
           request_id: 'r',
@@ -62,7 +61,8 @@ describe('RemediationCard refresh recovery', () => {
     await waitFor(() =>
       expect(screen.getByText('设备已恢复，验证通过')).toBeInTheDocument(),
     );
-    expect(screen.getByText('CASE-1')).toBeInTheDocument();
+    // 案例归档链路已退役：不再展示 case_id，也不再声称自动沉淀
+    expect(screen.queryByText(/故障案例/)).not.toBeInTheDocument();
     expect(screen.queryByText('批准执行')).not.toBeInTheDocument();
   });
 });

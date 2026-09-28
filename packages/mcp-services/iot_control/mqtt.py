@@ -17,7 +17,8 @@ ACK_TOPIC = "iot/+/cmd_ack"
 STATUS_TOPIC = "iot/+/status"
 LOGS_TOPIC = "iot/+/logs"
 FAULT_TOPIC = "iot/+/fault"
-CASE_LINK_TOPIC = "iot/+/remediation_case"
+# 旧案例确认事件的主题；升级后显式退订，避免持久会话残留历史订阅
+LEGACY_TOPICS = ("iot/+/remediation", "iot/+/remediation_case")
 
 
 class ControlMQTT:
@@ -43,8 +44,10 @@ class ControlMQTT:
         if reason_code != 0:
             logger.error("MQTT connection failed: %s", reason_code)
             return
-        for topic in (ACK_TOPIC, STATUS_TOPIC, LOGS_TOPIC, FAULT_TOPIC, CASE_LINK_TOPIC):
+        for topic in (ACK_TOPIC, STATUS_TOPIC, LOGS_TOPIC, FAULT_TOPIC):
             client.subscribe(topic, qos=1)
+        for legacy in LEGACY_TOPICS:
+            client.unsubscribe(legacy)
         logger.info("Subscribed to IoT control topics")
 
     def _on_message(self, _client, _userdata, message) -> None:
@@ -60,12 +63,6 @@ class ControlMQTT:
                     self.repository.mark_command_ack(
                         command_id, str(payload.get("status", "failed")), payload
                     )
-            elif kind == "remediation_case":
-                # 诊断服务写入案例后的确认：把 case_id 关联回命令，供前端展示
-                command_id = payload.get("command_id")
-                case_id = payload.get("case_id")
-                if command_id and case_id:
-                    self.repository.mark_case_archived(str(command_id), str(case_id))
             elif kind == "status":
                 self.repository.record_status_sample(device_id, payload.get("online"))
             elif kind in ("logs", "fault"):

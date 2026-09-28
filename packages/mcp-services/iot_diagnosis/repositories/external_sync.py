@@ -157,27 +157,6 @@ class ExternalSyncMixin:
         }
 
     @staticmethod
-    def _case_document(item: dict[str, Any]) -> dict[str, Any]:
-        content = "；".join(
-            [
-                item["fault_name"],
-                *item["symptoms"],
-                *item["logs"],
-                item["cause"],
-                item["solution"],
-            ]
-        )
-        return {
-            "source": "fault_cases",
-            "id": item["fault_id"],
-            # Qdrant 删除按 payload 的 document_id 过滤，案例删除链路依赖该字段
-            "document_id": item["fault_id"],
-            "title": item["fault_name"],
-            "content": content,
-            "device_type": item["device_type"],
-        }
-
-    @staticmethod
     def _knowledge_vector_document(item: dict[str, Any]) -> dict[str, Any]:
         metadata: dict[str, Any] = {}
         raw = item.get("metadata_json")

@@ -7,7 +7,6 @@ simplifying deployment from 2 containers to 1.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -21,22 +20,19 @@ from starlette.responses import JSONResponse
 
 from common.results import failure, success
 
+# Control imports
+from iot_control import actions
+from iot_control.mqtt import ControlMQTT
+from iot_control.repository import ControlRepository
+
 # Diagnosis imports
 from iot_diagnosis.auth import auth_configuration as diagnosis_auth_configuration
 from iot_diagnosis.diagnosis import diagnose
-from iot_diagnosis.embeddings import retrieval_model_status
 from iot_diagnosis.ingestion import ingest_text
 from iot_diagnosis.mqtt import MQTTIngestor
 from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retention import RetentionService
-from iot_diagnosis.retrieval import search_fault_cases as retrieve_fault_cases
 from iot_diagnosis.retrieval import search_knowledge as retrieve_knowledge
-
-# Control imports
-from iot_control import actions, remediation_events
-from iot_control.auth import auth_configuration as control_auth_configuration
-from iot_control.mqtt import ControlMQTT
-from iot_control.repository import ControlRepository
 
 logger = logging.getLogger("xiaoyi.iot_mcp.server")
 
@@ -52,6 +48,7 @@ control_repository = ControlRepository(
     verify_window_seconds=int(os.getenv("CONTROL_VERIFY_WINDOW_SECONDS", "60")),
     proposal_ttl_minutes=int(os.getenv("CONTROL_PROPOSAL_TTL_MINUTES", "30")),
 )
+control_mqtt: ControlMQTT | None = None
 
 # Use diagnosis auth as primary (control can share the same token)
 auth_settings, token_verifier = diagnosis_auth_configuration()
@@ -60,6 +57,7 @@ auth_settings, token_verifier = diagnosis_auth_configuration()
 @asynccontextmanager
 async def service_lifespan(_server):
     """Lifecycle manager for both diagnosis and control services."""
+    global control_mqtt
     diagnosis_ingestor = None
     diagnosis_sync_task = None
     diagnosis_retention_task = None
@@ -129,6 +127,7 @@ async def service_lifespan(_server):
         diagnosis_ingestor.stop()
     if control_mqtt:
         control_mqtt.stop()
+        control_mqtt = None
 
     logger.info("Unified IoT MCP server shutdown complete")
 
@@ -154,10 +153,12 @@ def diagnose_fault(
     query: Annotated[str, Field(min_length=1, max_length=2000)],
     logs: Annotated[list[str] | None, Field(max_length=100)] = None,
     use_realtime_state: bool = True,
+    memory_context: list[dict[str, Any]] | None = None,
+    repair_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行设备状态、日志、自适应多源检索、重排和结构化故障诊断。"""
     try:
-        return success(diagnose(diagnosis_repository, device_id, query, logs, use_realtime_state))
+        return success(diagnose(diagnosis_repository, device_id, query, logs, use_realtime_state, memory_context=memory_context, repair_context=repair_context))
     except LookupError:
         message = f"Device {device_id} does not exist"
         return failure("DEVICE_NOT_FOUND", message)
@@ -238,32 +239,6 @@ def list_knowledge_documents(
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
-def list_fault_cases(
-    device_type: Annotated[str | None, Field(max_length=120)] = None,
-    limit: Annotated[int, Field(ge=1, le=200)] = 50,
-    offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
-) -> dict[str, Any]:
-    """分页列出已验证故障案例（含沉淀来源与根因摘要，不含逐条日志）。"""
-    return success(diagnosis_repository.list_fault_cases(device_type, limit, offset))
-
-
-@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
-def search_fault_cases(
-    query: Annotated[str, Field(min_length=1, max_length=2000)],
-    device_type: Annotated[str | None, Field(max_length=120)] = "ESP32",
-    fault_type: Annotated[str | None, Field(max_length=120)] = None,
-    top_k: Annotated[int, Field(ge=1, le=20)] = 5,
-) -> dict[str, Any]:
-    """检索已由人工确认的历史故障案例。"""
-    try:
-        results = retrieve_fault_cases(diagnosis_repository, query, device_type, fault_type, top_k)
-        return success({"results": results})
-    except Exception:
-        logger.exception("故障案例检索失败")
-        return failure("RETRIEVAL_FAILED", "故障案例检索失败", retryable=True)
-
-
-@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
 def list_diagnoses(
     device_id: Annotated[str | None, Field(max_length=120)] = None,
     fault_type: Annotated[str | None, Field(max_length=120)] = None,
@@ -280,48 +255,6 @@ def list_diagnoses(
         read_only_hint=False,
         destructive_hint=False,
         idempotent_hint=False,
-        open_world_hint=False,
-    )
-)
-def add_verified_fault_case(
-    device_id: Annotated[str, Field(min_length=1, max_length=120)],
-    fault_type: Annotated[str, Field(min_length=1, max_length=120)],
-    fault_name: Annotated[str, Field(min_length=1, max_length=300)],
-    symptoms: Annotated[list[str], Field(min_length=1, max_length=20)],
-    logs: Annotated[list[str], Field(min_length=1, max_length=50)],
-    cause: Annotated[str, Field(min_length=1, max_length=4000)],
-    solution: Annotated[str, Field(min_length=1, max_length=4000)],
-    verified: bool,
-    verified_by: Annotated[str | None, Field(max_length=160)] = None,
-) -> dict[str, Any]:
-    """仅在人工确认信息完整时写入故障案例并加入检索索引。"""
-    if not verified or not verified_by or not verified_by.strip():
-        return failure("CASE_NOT_VERIFIED", "故障案例必须经过人工确认")
-    try:
-        return success(
-            diagnosis_repository.add_verified_fault_case(
-                {
-                    "device_id": device_id,
-                    "fault_type": fault_type,
-                    "fault_name": fault_name,
-                    "symptoms": symptoms,
-                    "logs": logs,
-                    "cause": cause,
-                    "solution": solution,
-                    "verified_by": verified_by.strip(),
-                }
-            )
-        )
-    except Exception:
-        logger.exception("故障案例写入失败")
-        return failure("DATABASE_ERROR", "故障案例写入失败", retryable=True)
-
-
-@mcp.tool(
-    annotations=ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=False,
-        idempotent_hint=True,
         open_world_hint=False,
     )
 )
@@ -380,29 +313,8 @@ def delete_knowledge_document(
 @mcp.tool(
     annotations=ToolAnnotations(
         read_only_hint=False,
-        destructive_hint=True,
-        idempotent_hint=True,
-        open_world_hint=False,
-    )
-)
-def delete_fault_case(
-    fault_id: Annotated[str, Field(min_length=2, max_length=32)],
-) -> dict[str, Any]:
-    """删除一条已验证故障案例，并同步清理 Qdrant 向量。"""
-    try:
-        return success(diagnosis_repository.delete_fault_case(fault_id))
-    except ValueError:
-        return failure("FAULT_ID_INVALID", "案例编号无效")
-    except Exception:
-        logger.exception("故障案例删除失败")
-        return failure("DATABASE_ERROR", "故障案例删除失败", retryable=True)
-
-
-@mcp.tool(
-    annotations=ToolAnnotations(
-        read_only_hint=False,
         destructive_hint=False,
-        idempotent_hint=True,
+        idempotent_hint=False,
         open_world_hint=False,
     )
 )
@@ -447,6 +359,7 @@ def execute_device_action(
     diagnosis_id: Annotated[str, Field(min_length=21, max_length=21, pattern=r"^DIA_\d{8}_[A-F0-9]{8}$")],
     parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
     issued_by: Annotated[str, Field(max_length=160)] = "agent",
+    correlation_key: Annotated[str | None, Field(max_length=120)] = None,
 ) -> dict[str, Any]:
     """下发低风险修复动作（重启/改配置等高风险动作会被拒绝并要求走提案审批）。"""
     item = actions.get_action(action)
@@ -476,14 +389,20 @@ def execute_device_action(
         reason=reason,
         issued_by=issued_by,
         diagnosis_id=diagnosis_id,
+        correlation_key=correlation_key,
     )
+
+    if command.get("replayed"):
+        return success(command)
 
     # Send via MQTT if available
     if control_mqtt:
         delivered = control_mqtt.send_command(device_id, command)
+        if correlation_key:
+            control_repository.set_correlation_delivery(correlation_key, delivered)
         return success({**command, "delivered": delivered})
     else:
-        return failure("MQTT_UNAVAILABLE", "设备控制通道未启用", retryable=True)
+        return success({**command, "delivered": False, "delivery_status": "unknown"})
 
 
 @mcp.tool(
@@ -501,6 +420,7 @@ def create_remediation_proposal(
     impact: Annotated[str, Field(min_length=1, max_length=4000)],
     diagnosis_id: Annotated[str, Field(min_length=21, max_length=21, pattern=r"^DIA_\d{8}_[A-F0-9]{8}$")],
     parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
+    correlation_key: Annotated[str | None, Field(max_length=120)] = None,
 ) -> dict[str, Any]:
     """为高风险动作创建修复提案，等待人工批准后才会执行。"""
     item = actions.get_action(action)
@@ -529,6 +449,7 @@ def create_remediation_proposal(
         reason=reason,
         impact=impact,
         diagnosis_id=diagnosis_id,
+        correlation_key=correlation_key,
     )
     return success(proposal)
 
@@ -552,6 +473,13 @@ def get_action_result(
         return failure("PROPOSAL_NOT_FOUND", f"Proposal {proposal_id} does not exist")
     command = control_repository.get_command(proposal["command_id"]) if proposal["command_id"] else None
     return success({"proposal": proposal, "command": command})
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
+def get_action_by_correlation(correlation_key: str) -> dict[str, Any]:
+    """Backend recovery only; excluded from the Agent tool catalog."""
+    result = control_repository.get_action_by_correlation(correlation_key)
+    return success(result) if result else failure("ACTION_CORRELATION_NOT_FOUND", "No action found")
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))

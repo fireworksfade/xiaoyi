@@ -41,6 +41,20 @@ def stable_alias(server_key: str, tool_name: str) -> str:
     return f"{normalized[:69]}_{suffix}"
 
 
+# 旧故障案例工具已随案例库整体退役（spec §11）；历史目录条目保持不可调用，
+# 且不再出现在 Agent 可见工具列表中。
+RETIRED_TOOLS = frozenset(
+    {
+        "list_fault_cases",
+        "search_fault_cases",
+        "add_verified_fault_case",
+        "delete_fault_case",
+        # 仅限后端内部恢复查询的关联键工具，永不进入 Agent 目录
+        "get_action_by_correlation",
+    }
+)
+
+
 async def fetch_remote_tools(server: MCPServer, settings: Settings):
     credential = decrypt_secret(server.credential_ciphertext, settings.app_secret_key)
     headers = {"Authorization": f"Bearer {credential}"} if credential else None
@@ -112,6 +126,8 @@ async def refresh_tool_catalog(
     seen: set[str] = set()
     for remote in remote_tools:
         seen.add(remote.name)
+        if remote.name in RETIRED_TOOLS:
+            continue
         item = existing.get(remote.name)
         if item is None:
             item = MCPTool(
@@ -180,6 +196,7 @@ async def load_agent_mcp_servers(
                 )
             ).all()
         )
+        tool_names = [name for name in tool_names if name not in RETIRED_TOOLS]
         if not tool_names:
             continue
         credential = decrypt_secret(server.credential_ciphertext, settings.app_secret_key)
