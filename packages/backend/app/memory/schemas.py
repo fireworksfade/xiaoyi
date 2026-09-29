@@ -50,6 +50,7 @@ class MemorySearch(BaseModel):
     mcp_server_id: str | None = None
     device_id: str | None = None
     device_type: str | None = None
+    run_id: str | None = None
     top_k: int = Field(default=6, ge=1, le=6)
 
 

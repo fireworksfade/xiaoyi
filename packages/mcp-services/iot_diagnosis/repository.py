@@ -14,7 +14,7 @@ from iot_diagnosis.repositories import (
     DeviceStateMixin,
     DiagnosisRecordMixin,
     ExternalSyncMixin,
-    KnowledgeCaseMixin,
+    KnowledgeDocumentMixin,
     LogRepositoryMixin,
 )
 from iot_diagnosis.repository_common import iso
@@ -24,7 +24,7 @@ from iot_diagnosis.retrieval.bm25 import fts_ready, insert_fts_rows
 class DiagnosisRepository(
     DeviceStateMixin,
     LogRepositoryMixin,
-    KnowledgeCaseMixin,
+    KnowledgeDocumentMixin,
     DiagnosisRecordMixin,
     ExternalSyncMixin,
 ):

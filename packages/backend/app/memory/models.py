@@ -139,6 +139,7 @@ class MemoryActionLink(Owned, Base):
     proposal_id: Mapped[str | None] = mapped_column(String(120), index=True)
     command_id: Mapped[str | None] = mapped_column(String(120), index=True)
     diagnosis_id: Mapped[str | None] = mapped_column(String(120))
+    applied_memory_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
     reservation: Mapped[str] = mapped_column(String(20), default="reserved")
     result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     result_hash: Mapped[str | None] = mapped_column(String(64))

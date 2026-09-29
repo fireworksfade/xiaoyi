@@ -5,6 +5,7 @@ from sqlalchemy import and_, func, or_, select
 
 from app.api.common import SettingsDep, envelope, message_view, owned_conversation
 from app.api.deps import CsrfProtected, CurrentUser, Db
+from app.memory.actions import pinned_budget
 from app.models import AgentRun, Attachment, Message, RunStatus
 from app.pagination import decode_cursor, encode_cursor
 from app.schemas import MessageCreate
@@ -168,6 +169,7 @@ async def submit_message(
         user_message_id=message.id,
         status=RunStatus.QUEUED,
         queued_at=datetime.now(timezone.utc),
+        runtime_state={"repair_budget": pinned_budget()},
     )
     db.add(run)
     if conversation.title == "新对话":

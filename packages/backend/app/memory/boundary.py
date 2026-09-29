@@ -1,5 +1,7 @@
 """Backend-owned context at the MCP call boundary; no model-controlled identity."""
 
+from datetime import timedelta
+
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -10,7 +12,7 @@ from app.memory.models import MemoryActionLink
 from app.memory.retrieval import search
 from app.memory.schemas import MemorySearch
 from app.memory.service import digest
-from app.models import AgentRun, RunEvent, RunStatus
+from app.models import AgentRun, RunEvent, RunStatus, utc_now
 
 
 async def prepare(run_id, server_id, tool, arguments):
@@ -23,7 +25,9 @@ async def prepare(run_id, server_id, tool, arguments):
             await check_trace(db, run.user_id, server_id, arguments.get("diagnosis_id"))
         if tool == "diagnose_fault" and get_settings().memory_enabled:
             arguments["memory_context"] = await search(db, run.user_id, MemorySearch(
-                query=arguments.get("query", "诊断"), mcp_server_id=server_id, device_id=arguments.get("device_id")))
+                query=arguments.get("query", "诊断"), mcp_server_id=server_id, device_id=arguments.get("device_id"),
+                run_id=run_id))
+            await db.commit()  # search 内的 usage 记录需要落库
     link = await reserve(run_id, server_id, tool, arguments) if tool in ACTION_TOOLS else None
     if link:
         arguments["correlation_key"] = link.correlation_key
@@ -57,6 +61,12 @@ async def rediagnose(run_id, server_id, link_id, call):
         link = await db.get(MemoryActionLink, link_id)
         if not run or run.status != RunStatus.RUNNING or link.outcome != "failed":
             return None
+        # 运行期限：超限后不再自动再诊断，结果留给后台跟踪（spec 7.2/7.3）
+        if run.started_at and (utc_now() - run.started_at.replace(tzinfo=utc_now().tzinfo)) > timedelta(minutes=get_settings().agent_run_max_runtime_minutes):
+            from app.memory.actions import loop_stopped_event
+            db.add(loop_stopped_event(run, [link], "run_deadline", command_id=link.command_id))
+            await db.commit()
+            return None
         if link.rediagnosis.get("result_hash") == link.result_hash and link.rediagnosis.get("diagnosis_id"):
             return link.rediagnosis
         db.add(RunEvent(run_id=run_id, event_type="remediation.rediagnosis_started", data={"command_id": link.command_id}))
@@ -88,7 +98,8 @@ async def rediagnose(run_id, server_id, link_id, call):
         link = await db.get(MemoryActionLink, link_id)
         run = await db.get(AgentRun, run_id)
         link.rediagnosis = {"result_hash": link.result_hash, "diagnosis_id": data["diagnosis_id"],
-            "evidence_hash": digest(evidence), "new_evidence": bool(data.get("new_evidence")), "diagnosis": data}
+            "evidence_hash": digest(evidence), "new_evidence": bool(data.get("new_evidence")), "diagnosis": data,
+            "memories": [{"memory_id": m["memory_id"], "revision": m["revision"]} for m in memories]}
         await record_tool(db, run, server_id, "diagnose_fault", {"device_id": device}, response.structured_content)
         db.add(RunEvent(run_id=run_id, event_type="remediation.rediagnosis_completed", data={
             "diagnosis_id": data["diagnosis_id"], "command_id": link.command_id, "used_attempts": count}))

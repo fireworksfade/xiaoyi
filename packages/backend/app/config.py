@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     memory_embedding_dimensions: int = 512
     memory_collection_prefix: str = "xiaoyi_memory"
     agent_repair_max_attempts: int = 3
+    # Run 运行期限：超过后自动再诊断与结果补查停止，转后台跟踪（spec 7.3）
+    agent_run_max_runtime_minutes: int = 60
 
     @field_validator("agent_repair_max_attempts")
     @classmethod

@@ -22,6 +22,50 @@ export type ForgetImpact = {
   total: number;
 };
 
+export type MemorySourceSummary = {
+  id: string;
+  source_type: string;
+  run_id: string | null;
+  conversation_id: string | null;
+  diagnosis_id: string | null;
+  command_id: string | null;
+  mcp_server_id: string | null;
+  access_state: string;
+  excerpt: Record<string, unknown>;
+  content_hash: string;
+};
+
+export type MemoryDetail = MemorySummary & {
+  content: Record<string, unknown>;
+  applicability: Record<string, unknown>;
+  review_state: string;
+  sources: MemorySourceSummary[];
+};
+
+export type MemoryUpdate = {
+  title: string;
+  summary: string;
+  content: Record<string, unknown>;
+  applicability: Record<string, unknown>;
+  expected_revision: number;
+  change_reason?: string;
+};
+
+export async function getMemory(memoryId: string) {
+  return request<MemoryDetail>(`/memories/${encodeURIComponent(memoryId)}`);
+}
+
+/** 编辑生成待确认新版本；expected_revision 不符时后端返回 409 版本冲突。 */
+export async function updateMemory(
+  memoryId: string,
+  payload: MemoryUpdate,
+) {
+  return request<MemoryDetail>(`/memories/${encodeURIComponent(memoryId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, true);
+}
+
 export async function listMemories(params: {
   kind?: MemoryKind;
   status?: string;

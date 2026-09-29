@@ -92,6 +92,9 @@ async def sync(job):
             row = MemoryIndexState(memory_id=outbox.memory_id, revision=outbox.revision, model_fingerprint=outbox.model_fingerprint)
             db.add(row)
         row.status = state
+        if state == "indexed":
+            from app.observability.metrics import MEMORY_EVENTS
+            MEMORY_EVENTS.labels(event="index_updated").inc()
         entry = await db.get(MemoryVectorOutbox, outbox.id)
         entry.status = "done"
         await db.commit()

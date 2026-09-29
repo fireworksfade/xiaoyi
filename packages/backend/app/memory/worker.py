@@ -56,6 +56,9 @@ async def process_one():
         elif job.kind == "track_action":
             from app.memory.actions import track
             await track(job)
+        elif job.kind == "reconcile_experience":
+            from app.memory.reconcile import reconcile
+            await reconcile(job)
         else:
             async with SessionFactory() as db:
                 if job.kind == "capture_episode":
@@ -67,6 +70,10 @@ async def process_one():
     except Exception as exc:
         error = str(exc) if str(exc).startswith("MEMORY_") else type(exc).__name__
         logger.warning("memory job failed kind=%s code=%s", job.kind, error)
+    from app.observability.metrics import MEMORY_EVENTS, MEMORY_JOBS
+    MEMORY_JOBS.labels(kind=job.kind, result="failed" if error else "done").inc()
+    if error:
+        MEMORY_EVENTS.labels(event="job_failed").inc()
     async with SessionFactory() as db:
         await db.execute(update(MemoryJob).where(MemoryJob.id == job.id, MemoryJob.lease_token == job.lease_token).values(
             status="done" if error is None else "failed" if job.attempts >= get_settings().memory_job_max_attempts else "pending",

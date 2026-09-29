@@ -169,24 +169,6 @@ def evaluate_chunk_size(
     index.add(
         repository.knowledge_documents(["mqtt_docs", "wifi_docs", "sensor_docs", "device_docs"])
     )
-    index.add(
-        [
-            {
-                "source": "fault_cases",
-                "source_id": case["fault_id"],
-                "content": "；".join(
-                    [
-                        case["fault_name"],
-                        *case["symptoms"],
-                        *case["logs"],
-                        case["cause"],
-                        case["solution"],
-                    ]
-                ),
-            }
-            for case in repository.fault_cases()
-        ]
-    )
     index_ms = (time.perf_counter() - started) * 1000
 
     recalls: dict[int, list[float]] = {k: [] for k in (1, 3, 5, 10)}

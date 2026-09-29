@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--entity",
         choices=ENTITIES,
-        help="要重建的实体类型（device_status/device_log/knowledge_document/fault_case/diagnosis_record）",
+        help="要重建的实体类型（device_status/device_log/knowledge_document/diagnosis_record）",
     )
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument(

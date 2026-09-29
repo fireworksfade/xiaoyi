@@ -4,8 +4,9 @@ from sqlalchemy import select
 from app.api.common import envelope
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.memory import service
-from app.memory.models import Memory, MemoryJob, MemoryRevision
+from app.memory.models import Memory, MemoryActionLink, MemoryJob, MemoryRevision
 from app.memory.schemas import ForgetSource, MemorySearch, MemoryWrite, RevisionAction
+from app.models import AgentRun, RunStatus
 
 router = APIRouter(prefix="/memories", tags=["memory"])
 
@@ -40,7 +41,9 @@ async def create_memory(payload: MemoryWrite, request: Request, db: Db, user: Cu
 @router.post("/search")
 async def search_memories(payload: MemorySearch, request: Request, db: Db, user: CurrentUser, _: CsrfProtected):
     from app.memory.retrieval import search
-    return envelope(request, {"items": await search(db, user.id, payload)})
+    items = await search(db, user.id, payload)
+    await db.commit()
+    return envelope(request, {"items": items})
 
 
 @router.get("/activity")
@@ -48,9 +51,18 @@ async def activity(request: Request, db: Db, user: CurrentUser):
     jobs = (await db.scalars(select(MemoryJob).where(MemoryJob.owner_user_id == user.id).order_by(MemoryJob.created_at.desc()).limit(50))).all()
     candidates = (await db.scalars(select(Memory.id).where(Memory.owner_user_id == user.id,
         (Memory.status == "candidate") | ((Memory.status == "active") & (Memory.current_revision != Memory.active_revision))))).all()
+    links = (await db.scalars(select(MemoryActionLink).where(MemoryActionLink.owner_user_id == user.id)
+        .order_by(MemoryActionLink.created_at.desc()).limit(20))).all()
+    action_results = []
+    for link in links:
+        run = await db.get(AgentRun, link.run_id)
+        action_results.append({"run_id": link.run_id, "command_id": link.command_id,
+            "proposal_id": link.proposal_id, "outcome": link.outcome,
+            "run_status": run.status.value if run else None,
+            "needs_followup": link.outcome == "failed" and (not run or run.status != RunStatus.RUNNING)})
     return envelope(request, {"candidate_count": len(candidates), "items": [{"id": j.id,
         "kind": j.kind, "status": j.status, "error_code": j.error_code, "attempts": j.attempts,
-        "created_at": j.created_at.isoformat()} for j in jobs]})
+        "created_at": j.created_at.isoformat()} for j in jobs], "action_results": action_results})
 
 
 @router.get("/forget-impact")

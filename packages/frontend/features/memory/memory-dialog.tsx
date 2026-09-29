@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Loader2, Trash2, X } from 'lucide-react';
+import { Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -24,8 +25,10 @@ import {
   confirmMemory,
   deleteMemory,
   ensureDemoSession,
+  getMemory,
   listMemories,
   rejectMemory,
+  updateMemory,
   type MemorySummary,
 } from '@/lib/api/index';
 
@@ -53,6 +56,17 @@ function describeError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+type EditDraft = {
+  memoryId: string;
+  kind: 'episodic' | 'experience';
+  title: string;
+  summary: string;
+  contentText: string;
+  applicabilityText: string;
+  expectedRevision: number;
+  wasActive: boolean;
+};
+
 export function MemoryDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -63,7 +77,9 @@ export function MemoryDialog(props: {
   const [kind, setKind] = useState<string>('all');
   const [status, setStatus] = useState<string>('all');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<EditDraft | null>(null);
 
   async function refresh() {
     await ensureDemoSession();
@@ -129,6 +145,68 @@ export function MemoryDialog(props: {
     }
   }
 
+  async function startEdit(memory: MemorySummary) {
+    setBusyId(memory.id);
+    setError(null);
+    setNotice(null);
+    try {
+      await ensureDemoSession();
+      const detail = await getMemory(memory.id);
+      setDraft({
+        memoryId: memory.id,
+        kind: memory.kind,
+        title: detail.title,
+        summary: detail.summary,
+        contentText: JSON.stringify(detail.content ?? {}, null, 2),
+        applicabilityText: JSON.stringify(detail.applicability ?? {}, null, 2),
+        expectedRevision: detail.current_revision,
+        wasActive: detail.status === 'active',
+      });
+      setExpandedId(memory.id);
+    } catch (cause) {
+      setError(describeError(cause, '记忆详情加载失败'));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveEdit() {
+    if (!draft) return;
+    let content: Record<string, unknown>;
+    let applicability: Record<string, unknown>;
+    try {
+      content = JSON.parse(draft.contentText) as Record<string, unknown>;
+      applicability = JSON.parse(draft.applicabilityText) as Record<string, unknown>;
+    } catch {
+      setError('内容必须是合法 JSON');
+      return;
+    }
+    setBusyId(draft.memoryId);
+    setError(null);
+    try {
+      await ensureDemoSession();
+      await updateMemory(draft.memoryId, {
+        title: draft.title,
+        summary: draft.summary,
+        content,
+        applicability,
+        expected_revision: draft.expectedRevision,
+      });
+      // 编辑已启用记忆：新版本待确认，旧版本继续参与召回（spec §6.3/§10.3）。
+      setNotice(
+        draft.wasActive
+          ? '已生成待确认新版本；旧版本仍在正常召回中使用。'
+          : '已保存为新版本，待确认后生效。',
+      );
+      setDraft(null);
+      await refresh();
+    } catch (cause) {
+      setError(describeError(cause, '保存失败'));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
@@ -184,7 +262,14 @@ export function MemoryDialog(props: {
             <ul className="divide-y divide-slate-100">
               {items.map((item) => {
                 const expanded = expandedId === item.id;
-                const editable = item.status === 'candidate';
+                const editable =
+                  item.status === 'candidate' ||
+                  item.status === 'active' ||
+                  item.status === 'suspended';
+                const hasPendingRevision =
+                  item.status === 'active' &&
+                  item.current_revision > (item.active_revision ?? 0);
+                const editing = draft?.memoryId === item.id;
                 return (
                   <li key={item.id} className="px-3 py-2 text-sm">
                     <div className="flex items-center justify-between gap-3">
@@ -217,7 +302,7 @@ export function MemoryDialog(props: {
                         </p>
                       </button>
                       <span className="flex shrink-0 items-center gap-1">
-                        {editable ? (
+                        {item.status === 'candidate' ? (
                           <>
                             <Button
                               type="button"
@@ -243,6 +328,19 @@ export function MemoryDialog(props: {
                             </Button>
                           </>
                         ) : null}
+                        {editable ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="size-7 text-slate-400 hover:text-slate-700"
+                            aria-label={`编辑 ${item.title}`}
+                            disabled={busyId === item.id}
+                            onClick={() => void startEdit(item)}
+                          >
+                            <Pencil />
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           size="icon"
@@ -256,6 +354,73 @@ export function MemoryDialog(props: {
                         </Button>
                       </span>
                     </div>
+                    {editing && draft ? (
+                      <form
+                        className="mt-2 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveEdit();
+                        }}
+                      >
+                        <Input
+                          aria-label="标题"
+                          value={draft.title}
+                          maxLength={160}
+                          onChange={(event) =>
+                            setDraft({ ...draft, title: event.target.value })
+                          }
+                        />
+                        <Input
+                          aria-label="摘要"
+                          value={draft.summary}
+                          maxLength={1200}
+                          onChange={(event) =>
+                            setDraft({ ...draft, summary: event.target.value })
+                          }
+                        />
+                        <textarea
+                          aria-label="内容 JSON"
+                          className="w-full rounded-md border border-slate-300 bg-white p-2 font-mono text-xs"
+                          rows={8}
+                          value={draft.contentText}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              contentText: event.target.value,
+                            })
+                          }
+                        />
+                        <textarea
+                          aria-label="适用条件 JSON"
+                          className="w-full rounded-md border border-slate-300 bg-white p-2 font-mono text-xs"
+                          rows={3}
+                          value={draft.applicabilityText}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              applicabilityText: event.target.value,
+                            })
+                          }
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button type="submit" size="sm" disabled={busyId === item.id}>
+                            保存新版本
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDraft(null)}
+                          >
+                            取消
+                          </Button>
+                          <span className="text-xs text-slate-400">
+                            保存会生成待确认新版本（版本 {draft.expectedRevision} →{' '}
+                            {draft.expectedRevision + 1}）。
+                          </span>
+                        </div>
+                      </form>
+                    ) : null}
                     {expanded ? (
                       <dl className="mt-1 space-y-1 border-t border-slate-100 pt-2 pl-6 text-xs text-slate-600">
                         <div>
@@ -266,6 +431,11 @@ export function MemoryDialog(props: {
                           <dt className="inline text-slate-400">索引状态：</dt>
                           <dd className="inline">{item.index_status}</dd>
                         </div>
+                        {hasPendingRevision ? (
+                          <div className="text-amber-600">
+                            有新版本待确认；旧版本（v{item.active_revision}）仍在正常召回中使用。
+                          </div>
+                        ) : null}
                       </dl>
                     ) : null}
                   </li>
@@ -274,6 +444,7 @@ export function MemoryDialog(props: {
             </ul>
           )}
         </div>
+        {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </DialogContent>
     </Dialog>

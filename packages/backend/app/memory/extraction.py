@@ -54,4 +54,6 @@ async def extract(job):
         if item:
             rev = await revision(db, item)
             rev.model_id = model
+            from app.observability.metrics import MEMORY_EVENTS
+            MEMORY_EVENTS.labels(event="candidate_created").inc()
         await db.commit()

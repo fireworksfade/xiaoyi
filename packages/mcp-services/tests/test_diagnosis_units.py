@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from iot_diagnosis.diagnosis import _profile
+from iot_diagnosis.diagnosis import _profile, diagnose
 from iot_diagnosis.embeddings import (
     HashEmbeddingProvider,
     OpenAICompatibleEmbeddingProvider,
@@ -567,3 +567,66 @@ def test_rejects_case_sources_after_retirement(tmp_path) -> None:
     assert not hasattr(repository, "fault_cases")
 
 
+def test_diagnose_passes_memory_context_to_llm_and_preserves_refs(tmp_path, monkeypatch) -> None:
+    """AC13：memory_context 实际进入 MCP 内部诊断 LLM，输出保留版本引用（spec 4.2/8.4）。"""
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.upsert_status(
+        "ESP32_05",
+        {
+            "device_type": "ESP32",
+            "name": "节点 05",
+            "online": False,
+            "wifi": "connected",
+            "mqtt": "disconnected",
+        },
+    )
+    calls: dict[str, object] = {}
+
+    class RecordingLLM:
+        available = True
+
+        def route(self, query, state, logs):
+            return SimpleNamespace(
+                data={"fault_type": "mqtt", "need_retrieval": True,
+                      "sources": ["mqtt_docs"], "top_k": 3},
+                latency_ms=0.1, input_tokens=1, output_tokens=1,
+            )
+
+        def diagnose(self, query, state, logs, contexts,
+                     memory_context=None, repair_context=None):
+            calls["memory_context"] = memory_context
+            calls["repair_context"] = repair_context
+            return SimpleNamespace(
+                data={"fault_type": "mqtt_connection", "fault_name": "MQTT 连接异常",
+                      "cause": "keep alive 配置大于 Broker 超时",
+                      "solutions": ["下调 keep alive"], "severity": "medium",
+                      "confidence": 0.7, "requires_manual_inspection": False,
+                      "new_evidence": ["更换参数后仍超时"]},
+                latency_ms=1.0, input_tokens=2, output_tokens=3,
+            )
+
+    monkeypatch.setattr(
+        "iot_diagnosis.diagnosis.DiagnosisLLMClient",
+        SimpleNamespace(from_env=lambda: RecordingLLM()),
+    )
+    memory_context = [{
+        "memory_id": "m-1", "revision": 2, "title": "历史经验", "excerpt": "e",
+        "applicability": {}, "uncertainty": [], "retrieval_mode": "keyword",
+    }]
+    result = diagnose(
+        repository, "ESP32_05", "MQTT keep alive timeout", None, True,
+        memory_context=memory_context,
+        repair_context={"previous_diagnosis_id": "DIA_0"},
+    )
+    assert calls["memory_context"] == memory_context
+    assert calls["repair_context"] == {"previous_diagnosis_id": "DIA_0"}
+    # 输出只保留引用与版本，不把记忆正文伪装成日志
+    assert result["memory_refs"] == [{"memory_id": "m-1", "revision": 2}]
+
+
+def test_diagnose_rejects_oversized_memory_context(tmp_path) -> None:
+    """AC13：后端注入的记忆有界（12000 字符/6 条），超限拒绝。"""
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    oversized = [{"memory_id": "m", "revision": 1, "pad": "x" * 13000}]
+    with pytest.raises(ValueError, match="MEMORY_CONTEXT_TOO_LARGE"):
+        diagnose(repository, "ESP32_05", "查询", None, True, memory_context=oversized)

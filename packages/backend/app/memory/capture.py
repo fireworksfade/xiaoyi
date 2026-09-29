@@ -99,6 +99,8 @@ async def capture_source(db, source):
         # Rule-reviewed facts may be active; pending episodes are still excluded at retrieval.
         item.status, item.active_revision = "active", item.current_revision
         await index_change(db, item)
+        from app.observability.metrics import MEMORY_EVENTS
+        MEMORY_EVENTS.labels(event="episode_recorded").inc()
         if outcome != "pending" and get_settings().memory_auto_propose_experience:
             await enqueue(db, source.owner_user_id, "propose_experience", f"extract:{item.id}:{item.current_revision}",
                 {"memory_id": item.id, "revision": item.current_revision})

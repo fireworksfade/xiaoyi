@@ -14,7 +14,7 @@ from iot_diagnosis.retrieval.bm25 import (
 logger = logging.getLogger("xiaoyi.iot_diagnosis.repository")
 
 
-class KnowledgeCaseMixin:
+class KnowledgeDocumentMixin:
     def knowledge_documents(self, sources: list[str]) -> list[dict[str, Any]]:
         selected = [item for item in sources if item != "realtime_db"]
         if not selected:

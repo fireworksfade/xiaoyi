@@ -71,3 +71,20 @@ CONTEXT_ARTIFACT_BYTES = Counter(
     "xiaoyi_context_artifact_bytes_total", "上下文归档字节数", ["kind"]
 )
 CONTEXT_REACTIVE_FAILURES = Counter("xiaoyi_context_reactive_failures_total", "响应式压缩失败次数")
+
+# Memory 生命周期（spec §13.2）。标签不含用户 ID，也不含记忆正文。
+MEMORY_EVENTS = Counter(
+    "xiaoyi_memory_events_total",
+    "记忆生命周期事件（episode_recorded/candidate_created/confirmed/updated/suspended/deleted）",
+    ["event"],
+)
+MEMORY_JOBS = Counter(
+    "xiaoyi_memory_jobs_total",
+    "记忆后台任务结果（按类型与成功/失败）",
+    ["kind", "result"],
+)
+REMEDIATION_LOOP_STOPS = Counter(
+    "xiaoyi_remediation_loop_stops_total",
+    "修复循环停止次数（按停止原因）",
+    ["reason"],
+)

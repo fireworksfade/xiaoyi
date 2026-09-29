@@ -76,4 +76,7 @@ async def search(db, owner, query: MemorySearch):
         budget -= cost
         if len(result) >= query.top_k:
             break
+    if result:
+        from app.memory.service import record_usage
+        await record_usage(db, owner, result, run_id=query.run_id, stage="retrieved")
     return result

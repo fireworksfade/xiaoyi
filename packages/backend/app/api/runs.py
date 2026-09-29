@@ -11,6 +11,7 @@ from app.api.common import envelope, run_view
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.config import get_settings
 from app.db import SessionFactory
+from app.memory.actions import pinned_budget
 from app.models import (
     AgentRun,
     Conversation,
@@ -99,6 +100,7 @@ async def retry_run(
         user_message_id=message.id,
         status=RunStatus.QUEUED,
         queued_at=now,
+        runtime_state={"repair_budget": pinned_budget()},
     )
     db.add(retried)
     conversation = await db.get(Conversation, original.conversation_id)

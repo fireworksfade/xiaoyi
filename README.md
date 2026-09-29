@@ -69,7 +69,7 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 
 - 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。
 - IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
-- 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/README.md`](packages/backend/README.md)。
+- 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
 ## 检索模型档位
 
@@ -113,13 +113,15 @@ IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 
 
 ## 记忆（Memory）
 
-旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)）：
+旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，逐条验收证据见 [`docs/memory-acceptance-report.md`](docs/memory-acceptance-report.md)）：
 
-- 三层记忆：工作记忆（会话内，不入向量）、情景记忆（一次具体经历，含成功/失败/无结论）、经验记忆（可复用认识与步骤）。
-- 自动提炼的经验一律先进入候选，用户在界面确认后才参与召回；情景中已收敛的事实性经历可直接作为历史参考。
-- 召回按用户隔离：Run 开始与 `diagnose_fault` 前两次注入，设备/状态查询等纯实时请求不加载历史经验。
-- 修复预算：每个 Run 最多 3 次修复（`AGENT_REPAIR_MAX_ATTEMPTS`，部署时可降为 1–3）；明确失败后自动重新诊断，需要新依据才继续，高风险动作逐次审批。
-- REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动）。旧案例不迁入 memory；新记忆只来自此后记录的任务或用户输入。
+- 三层记忆：工作记忆（会话内，不入向量）、情景记忆（一次具体经历，含成功/失败/无结论）、经验记忆（可复用认识与步骤）。同一会话的新 Run 会加载此前任务留下的工作记忆（TTL 默认 24 小时，`MEMORY_WORKING_TTL_HOURS`）。
+- 自动提炼的经验一律先进入候选，用户在界面确认后才参与召回；情景中已收敛的事实性经历可直接作为历史参考。Agent 可用只读的 `search_memory` / `get_memory` 查询当前用户自己的记忆；`propose_memory` 只能创建待确认候选。
+- 召回按用户隔离：Run 开始与 `diagnose_fault` 前两次注入，设备/状态查询等纯实时请求不加载历史经验。检索命中会记录使用阶段，但只有被实际采纳并执行的经验才按命令结果累计有效/无效反馈。
+- 反例处理：被采用的经验在适用范围内明确失败时，立即暂停该经验并生成附反例说明的待确认修订；范围不匹配只记录范围问题。
+- 修复预算：每个 Run 最多 3 次修复（`AGENT_REPAIR_MAX_ATTEMPTS`，部署时可降为 1–3，Run 创建时固化）；明确失败后自动重新诊断，需要新依据才继续，高风险动作逐次审批；超过运行期限（`AGENT_RUN_MAX_RUNTIME_MINUTES`，默认 60）后停止自动再诊断，结果由后台跟踪（最长 7 天）。
+- 可观测性：`/metrics` 暴露 `memory.*` 生命周期事件、后台任务与 `remediation.loop_stopped`（含停止原因与已用名额）指标；`/api/v1/memories/activity` 返回候选数量、后台任务状态与命令结果追踪（含"需要后续诊断"标记）。
+- REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动），前端"记忆"入口支持筛选、确认、编辑（生成待确认新版本，旧版本继续召回）与删除。旧案例不迁入 memory；新记忆只来自此后记录的任务或用户输入。
 - 旧案例 REST 接口（`/api/v1/fault-cases`、`/api/v1/diagnosis`）与 MCP 案例工具（`list_fault_cases` 等）已删除，调用返回 404；历史工具目录条目保持不可调用。
 - 删除聊天默认保留长期记忆（`memory_policy=keep`）；勾选清除时同事务写入来源抑制标记并暂停派生经验。
 
