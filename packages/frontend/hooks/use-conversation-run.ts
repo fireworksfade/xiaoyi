@@ -206,6 +206,38 @@ export function useConversationRun({
             }));
           }
         }
+        if (event.type.startsWith('remediation.')) {
+          const used = displayValue(
+            event.data.used_attempts ?? event.data.used,
+            '0',
+          );
+          const limit = displayValue(event.data.limit, '3');
+          const counts = `已执行 ${used}/${limit} 次`;
+          const reasons: Record<string, string> = {
+            attempt_limit_reached: '修复次数已用尽',
+            no_new_evidence: '没有新依据',
+            run_finished: '任务已结束，需要发起后续诊断',
+            run_deadline: '已达到运行期限',
+            tool_budget: '已达到工具调用限制',
+            device_recovered: '设备已恢复，自动修复已停止',
+          };
+          const status =
+            event.type === 'remediation.rediagnosis_started'
+              ? `正在重新诊断，${counts}`
+              : event.type === 'remediation.rediagnosis_completed'
+                ? `重新诊断完成，${counts}`
+                : event.type === 'remediation.loop_stopped'
+                  ? `${reasons[displayValue(event.data.reason)] ?? '自动修复已停止'}，${counts}`
+                  : event.type === 'remediation.result_updated' &&
+                      event.data.needs_followup
+                    ? '修复失败；任务已结束，需要发起后续诊断'
+                    : null;
+          if (status)
+            updateAssistant((message) => ({
+              ...message,
+              remediationStatus: status,
+            }));
+        }
         if (event.type === 'run.failed') {
           const error = event.data.error as
             | { code?: string; message?: string }

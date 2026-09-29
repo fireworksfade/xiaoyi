@@ -487,8 +487,8 @@ export default function Home() {
               同时清除由该聊天产生的记忆（默认保留）
               {forgetMemory && forgetImpact ? (
                 <span className="mt-1 block text-xs text-amber-600">
-                  将清除 {forgetImpact.episodic} 条情景、{forgetImpact.experience}{' '}
-                  条经验；多来源经验将重新审核。
+                  将清除 {forgetImpact.episodic} 条情景、
+                  {forgetImpact.experience} 条经验；多来源经验将重新审核。
                 </span>
               ) : null}
             </span>
@@ -522,7 +522,18 @@ export default function Home() {
 
       <KnowledgeDialog open={knowledgeOpen} onOpenChange={setKnowledgeOpen} />
 
-      <MemoryDialog open={memoryOpen} onOpenChange={setMemoryOpen} />
+      <MemoryDialog
+        open={memoryOpen}
+        onOpenChange={setMemoryOpen}
+        onFollowup={
+          running
+            ? undefined
+            : (prompt) => {
+                startNewChat();
+                setInput(prompt);
+              }
+        }
+      />
 
       <RunRecordsSheet open={runRecordsOpen} onOpenChange={setRunRecordsOpen} />
 

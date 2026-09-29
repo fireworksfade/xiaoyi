@@ -259,13 +259,18 @@ async def execute_claimed_run(run_id: str) -> None:
         runtime_messages = context.messages
 
         # Historical references consume only spare context budget, never the current message.
-        from app.memory.retrieval import search
+        from app.memory.boundary import recall_safely
         from app.memory.schemas import MemorySearch
         from app.memory.service import build_working_message, working_snapshot
         from app.services.token_estimator import DEFAULT_ESTIMATOR
         async with SessionFactory() as db:
-            recalled = await search(db, run.user_id, MemorySearch(query=current_message.content[:2000] or "诊断", run_id=run_id)) if any(word in current_message.content.lower() for word in ("故障", "诊断", "修复", "失败", "异常", "diagnos", "fault", "repair")) else []
-            working = await working_snapshot(db, run.user_id, run.conversation_id)
+            recalled = await recall_safely(db, run.user_id, MemorySearch(query=current_message.content[:2000] or "诊断", run_id=run_id)) if any(word in current_message.content.lower() for word in ("故障", "诊断", "修复", "失败", "异常", "diagnos", "fault", "repair")) else []
+            working = None
+            try:
+                async with db.begin_nested():
+                    working = await working_snapshot(db, run.user_id, run.conversation_id)
+            except Exception:
+                logger.warning("working memory unavailable; continuing current run", exc_info=True)
             await db.commit()
         reference = json.dumps(recalled, ensure_ascii=False)
         budget_left = limits.max_input_tokens - context.metadata["estimated_input_tokens"] - limits.reserve_output_tokens

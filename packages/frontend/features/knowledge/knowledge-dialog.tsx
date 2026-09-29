@@ -201,7 +201,7 @@ export function KnowledgeDialog(props: {
           <DialogTitle>知识库</DialogTitle>
           <DialogDescription>
             官方技术文档分块写入数据库并生成语义向量，供诊断检索引用；
-            历史故障经验已迁移至「记忆」统一管理。
+            旧故障案例已退役；新任务产生的经历与经验在「记忆」中管理。
           </DialogDescription>
         </DialogHeader>
 
@@ -325,9 +325,7 @@ export function KnowledgeDialog(props: {
                   required
                   accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
                   className="mt-1.5"
-                  onChange={(event) =>
-                    setFile(event.target.files?.[0] ?? null)
-                  }
+                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
                   key={file ? file.name : 'empty'}
                 />
               </div>

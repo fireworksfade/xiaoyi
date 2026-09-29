@@ -32,6 +32,8 @@ def main() -> None:
     with httpx.Client(timeout=30, follow_redirects=True, trust_env=False) as client:
         frontend = client.get(origin)
         frontend.raise_for_status()
+        readiness = envelope(client.get(f"{args.backend.rstrip('/')}/ready"))
+        assert readiness["status"] == "ready"
 
         api_origin = urlsplit(api)
         frontend_origin = urlsplit(origin)
@@ -62,6 +64,10 @@ def main() -> None:
             )
         )
         csrf_headers = {"Origin": origin, "X-CSRF-Token": login["csrf_token"]}
+        rejected = client.post(
+            f"{api}/conversations", headers={"Origin": origin}, json={"title": "must-not-create"}
+        )
+        assert rejected.status_code == 403
 
         try:
             created = envelope(
@@ -89,6 +95,8 @@ def main() -> None:
                     json={
                         "content": "请回复联调成功",
                         "client_message_id": f"smoke-{uuid.uuid4()}",
+                        "tool_mode": "none",
+                        "mcp_server_ids": [],
                     },
                 )
             )
@@ -107,6 +115,7 @@ def main() -> None:
 
             assert "answer.delta" in event_names
             assert "run.completed" in event_names
+            assert "tool.started" not in event_names
 
             messages = envelope(
                 client.get(
@@ -134,6 +143,7 @@ def main() -> None:
                     "frontend": frontend.status_code,
                     "transport": cors_status,
                     "authentication": "ok",
+                    "csrf_rejection": "ok",
                     "conversation_crud": "ok",
                     "sse": event_names,
                 },

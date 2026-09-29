@@ -96,6 +96,11 @@ export function MessageList({
               <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
                 {message.text}
               </p>
+              {message.remediationStatus ? (
+                <output className="mt-2 block rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+                  {message.remediationStatus}
+                </output>
+              ) : null}
               {message.proposals?.length ? (
                 <div className="mt-2 space-y-2">
                   {message.proposals.map((proposal) => (

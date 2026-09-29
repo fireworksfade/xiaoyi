@@ -26,23 +26,72 @@ async def search(db, owner, query: MemorySearch):
     mode = "keyword"
     try:
         from app.memory.indexing import vector_search
-        vector_scores = await asyncio.wait_for(vector_search(owner, query), get_settings().memory_recall_timeout_ms / 1000)
+
+        hits = await asyncio.wait_for(
+            vector_search(owner, query), get_settings().memory_recall_timeout_ms / 1000
+        )
+        for hit in hits or []:
+            payload = hit.get("payload") or {}
+            item = await db.get(Memory, payload.get("memory_id"))
+            if (
+                not item
+                or item.owner_user_id != owner
+                or payload.get("revision") != item.active_revision
+                or not await eligible(db, item, payload.get("revision"))
+            ):
+                continue
+            rev = await db.scalar(
+                select(MemoryRevision).where(
+                    MemoryRevision.memory_id == item.id,
+                    MemoryRevision.revision == item.active_revision,
+                )
+            )
+            if (
+                payload.get("owner_user_id") != owner
+                or payload.get("status") != "active"
+                or payload.get("model_fingerprint") != get_settings().memory_embedding_fingerprint
+                or payload.get("content_hash") != rev.content_hash
+            ):
+                continue
+            vector_scores[item.id] = max(vector_scores.get(item.id, 0), float(hit["score"]))
         if vector_scores:
             mode = "hybrid"
     except (Exception, TimeoutError):
         pass
-    rows = (await db.execute(select(Memory, MemoryRevision).join(MemoryRevision,
-        (MemoryRevision.memory_id == Memory.id) & (MemoryRevision.revision == Memory.active_revision)).where(
-        Memory.owner_user_id == owner, Memory.status == "active",
-        or_(*[MemoryRevision.search_text.contains(token, autoescape=True) for token in tokens], Memory.id.in_(vector_scores)),
-    ).order_by(Memory.updated_at.desc()).limit(30))).all()
+    rows = (
+        await db.execute(
+            select(Memory, MemoryRevision)
+            .join(
+                MemoryRevision,
+                (MemoryRevision.memory_id == Memory.id)
+                & (MemoryRevision.revision == Memory.active_revision),
+            )
+            .where(
+                Memory.owner_user_id == owner,
+                Memory.status == "active",
+                or_(
+                    *[
+                        MemoryRevision.search_text.contains(token, autoescape=True)
+                        for token in tokens
+                    ],
+                    Memory.id.in_(vector_scores),
+                ),
+            )
+            .order_by(Memory.updated_at.desc())
+            .limit(30)
+        )
+    ).all()
     ranked = []
     for item, rev in rows:
         if not await eligible(db, item, rev.revision):
             continue
         scope = rev.applicability_json
         uncertain = []
-        for field, actual in (("mcp_server_id", query.mcp_server_id), ("device_types", query.device_type), ("device_ids", query.device_id)):
+        for field, actual in (
+            ("mcp_server_id", query.mcp_server_id),
+            ("device_types", query.device_type),
+            ("device_ids", query.device_id),
+        ):
             expected = scope.get(field)
             if not expected:
                 continue
@@ -51,7 +100,9 @@ async def search(db, owner, query: MemorySearch):
             elif actual not in (expected if isinstance(expected, list) else [expected]):
                 break
         else:
-            score = sum(token in rev.search_text.lower() for token in tokens) / len(tokens) + vector_scores.get(item.id, 0)
+            score = sum(token in rev.search_text.lower() for token in tokens) / len(
+                tokens
+            ) + vector_scores.get(item.id, 0)
             if score > 0:
                 ranked.append((score, item, rev, uncertain))
     ranked.sort(key=lambda row: row[0], reverse=True)
@@ -64,9 +115,16 @@ async def search(db, owner, query: MemorySearch):
         if signature in signatures:
             continue
         # Preserve the whole summary/conditions. Omit oversized entries instead of cutting qualifiers.
-        entry = {"memory_id": item.id, "revision": rev.revision, "kind": item.kind, "title": rev.title,
-            "excerpt": rev.summary, "applicability": rev.applicability_json,
-            "uncertainty": uncertain + ["历史参考不证明当前根因"], "retrieval_mode": mode}
+        entry = {
+            "memory_id": item.id,
+            "revision": rev.revision,
+            "kind": item.kind,
+            "title": rev.title,
+            "excerpt": rev.summary,
+            "applicability": rev.applicability_json,
+            "uncertainty": uncertain + ["历史参考不证明当前根因"],
+            "retrieval_mode": mode,
+        }
         cost = DEFAULT_ESTIMATOR.estimate_text(json.dumps(entry, ensure_ascii=False))
         if cost > min(450, budget):
             continue
@@ -78,5 +136,6 @@ async def search(db, owner, query: MemorySearch):
             break
     if result:
         from app.memory.service import record_usage
+
         await record_usage(db, owner, result, run_id=query.run_id, stage="retrieved")
     return result

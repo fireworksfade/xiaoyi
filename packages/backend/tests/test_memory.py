@@ -23,12 +23,15 @@ from app.memory.boundary import rediagnose
 from app.memory.models import (
     Memory,
     MemoryActionLink,
+    MemoryEvidenceLink,
     MemoryFeedback,
     MemoryIndexState,
     MemoryJob,
+    MemoryRevision,
     MemorySource,
     MemoryTombstone,
     MemoryUsage,
+    MemoryVectorOutbox,
     WorkingMemory,
 )
 from app.memory.retrieval import search
@@ -41,6 +44,12 @@ async def _cleanup_memory_tables() -> None:
         # users 一并清空：否则先前测试创建的用户会阻止 seed_users 落库 admin
         await db.execute(delete(User))
         for model in (
+            MemoryUsage,
+            MemoryFeedback,
+            MemoryEvidenceLink,
+            MemoryIndexState,
+            MemoryVectorOutbox,
+            MemoryRevision,
             WorkingMemory,
             MemoryJob,
             MemoryActionLink,
@@ -57,12 +66,24 @@ async def _clean_memory(_migrated_clean_db):
     """conftest 全局禁用了 memory（避免后台 worker 与测试争锁）；
     本文件直接测服务函数，在此打开并在结束时还原。"""
     settings = get_settings()
-    previous = (settings.memory_enabled, settings.memory_auto_capture, settings.memory_auto_propose_experience)
-    settings.memory_enabled, settings.memory_auto_capture, settings.memory_auto_propose_experience = True, True, True
+    previous = (
+        settings.memory_enabled,
+        settings.memory_auto_capture,
+        settings.memory_auto_propose_experience,
+    )
+    (
+        settings.memory_enabled,
+        settings.memory_auto_capture,
+        settings.memory_auto_propose_experience,
+    ) = True, True, True
     await _cleanup_memory_tables()
     yield
     await _cleanup_memory_tables()
-    settings.memory_enabled, settings.memory_auto_capture, settings.memory_auto_propose_experience = previous
+    (
+        settings.memory_enabled,
+        settings.memory_auto_capture,
+        settings.memory_auto_propose_experience,
+    ) = previous
 
 
 def _episode_payload(outcome="succeeded", title="ESP32_05 · MQTT 超时") -> MemoryWrite:
@@ -107,9 +128,18 @@ def _experience_payload(confirm=False) -> MemoryWrite:
 
 
 def test_normalize_result_mapping_table() -> None:
-    assert capture.normalize_result({"command": {"status": "applied", "verify_status": "succeeded"}}) == "succeeded"
-    assert capture.normalize_result({"command": {"status": "failed", "verify_status": "succeeded"}}) == "inconclusive"
-    assert capture.normalize_result({"command": {"status": "failed", "verify_status": "failed"}}) == "failed"
+    assert (
+        capture.normalize_result({"command": {"status": "applied", "verify_status": "succeeded"}})
+        == "succeeded"
+    )
+    assert (
+        capture.normalize_result({"command": {"status": "failed", "verify_status": "succeeded"}})
+        == "inconclusive"
+    )
+    assert (
+        capture.normalize_result({"command": {"status": "failed", "verify_status": "failed"}})
+        == "failed"
+    )
     assert capture.normalize_result({"proposal": {"status": "rejected"}}) == "not_executed"
     assert capture.normalize_result({"command": {"status": "applied"}}) == "pending"
     assert capture.normalize_result({"command": {"status": "timed_out"}}) == "inconclusive"
@@ -150,7 +180,9 @@ async def test_record_tool_creates_source_and_working_fact() -> None:
         stored = await db.get(MemorySource, source.id)
         assert stored.excerpt["command"]["action"] == "reconnect_mqtt"
         assert "api_key" not in json.dumps(stored.excerpt)
-        working = await db.scalar(select(WorkingMemory).where(WorkingMemory.owner_user_id == "user-a"))
+        working = await db.scalar(
+            select(WorkingMemory).where(WorkingMemory.owner_user_id == "user-a")
+        )
         assert working is not None and "srv-1:CMD_1" in working.facts
 
 
@@ -159,7 +191,9 @@ async def test_repeated_tool_result_does_not_duplicate_episodes() -> None:
     second = await _capture_for("user-a")
     assert first.id == second.id  # 同一来源幂等合并
     async with SessionFactory() as db:
-        jobs = (await db.scalars(select(MemoryJob).where(MemoryJob.kind == "capture_episode"))).all()
+        jobs = (
+            await db.scalars(select(MemoryJob).where(MemoryJob.kind == "capture_episode"))
+        ).all()
         keys = {job.job_key for job in jobs}
         assert len(keys) == len({key.rsplit(":", 1)[0] for key in keys})
 
@@ -254,7 +288,9 @@ async def test_confirm_then_recall_and_revision_flow() -> None:
 
 async def test_suspend_stops_recall_and_delete_tombstones() -> None:
     async with SessionFactory() as db:
-        item = await service.create(db, "user-a", _experience_payload(confirm=True), event_key="ep-key")
+        item = await service.create(
+            db, "user-a", _experience_payload(confirm=True), event_key="ep-key"
+        )
         await db.commit()
         item_id = item.id
     async with SessionFactory() as db:
@@ -359,8 +395,24 @@ async def test_repair_budget_limits_and_reuse_gates() -> None:
         await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d1"})
     assert excinfo.value.detail == "REPAIR_RESULT_UNRESOLVED"
 
-    await actions.save_result(link.id, {"ok": True, "data": {"command": {"command_id": "C1", "status": "failed", "verify_status": "failed"}}})
-    saved = await actions.save_result(link.id, {"ok": True, "data": {"command": {"command_id": "C1", "status": "failed", "verify_status": "failed"}}})
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {"command_id": "C1", "status": "failed", "verify_status": "failed"}
+            },
+        },
+    )
+    saved = await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {"command_id": "C1", "status": "failed", "verify_status": "failed"}
+            },
+        },
+    )
     assert saved.command_id == "C1"
 
     # 失败结果必须先重新诊断且给出新依据，才能继续下一次修复
@@ -372,18 +424,26 @@ async def test_repair_budget_limits_and_reuse_gates() -> None:
         stored.rediagnosis = {"diagnosis_id": "DIA_NEW", "new_evidence": False}
         await db.commit()
     with pytest.raises(HTTPException) as excinfo:
-        await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d1", "diagnosis_id": "DIA_NEW"})
+        await actions.reserve(
+            run.id, "srv-1", "execute_device_action", {"device_id": "d1", "diagnosis_id": "DIA_NEW"}
+        )
     assert excinfo.value.detail == "REPAIR_NO_NEW_EVIDENCE"
 
 
 async def test_repair_budget_exhaustion_returns_limit_error() -> None:
     run = await _make_running_run()
-    link = await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d1"})
+    link = await actions.reserve(
+        run.id, "srv-1", "create_remediation_proposal", {"device_id": "d1"}
+    )
     # 确定性校验拒绝：释放名额
     await actions.save_result(link.id, {"ok": False, "error": {"code": "UNKNOWN_ACTION"}})
     links = []
     for index in range(3):
-        links.append(await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": f"d{index}"}))
+        links.append(
+            await actions.reserve(
+                run.id, "srv-1", "create_remediation_proposal", {"device_id": f"d{index}"}
+            )
+        )
     with pytest.raises(HTTPException) as excinfo:
         await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d9"})
     assert excinfo.value.detail == "REPAIR_ATTEMPT_LIMIT_REACHED"
@@ -417,18 +477,41 @@ async def test_working_memory_snapshot_expiry_budget_and_scope() -> None:
 
 
 async def _failed_repair(run, device="d1", index=0) -> MemoryActionLink:
-    link = await actions.reserve(run.id, "srv-1", "execute_device_action",
-        {"device_id": device, "diagnosis_id": f"DIA_{index}"})
-    await actions.save_result(link.id, {"ok": True, "data": {"command": {
-        "command_id": f"C{index}", "device_id": device,
-        "status": "failed", "verify_status": "failed"}}})
+    link = await actions.reserve(
+        run.id,
+        "srv-1",
+        "execute_device_action",
+        {"device_id": device, "diagnosis_id": f"DIA_{index}"},
+    )
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": f"C{index}",
+                    "device_id": device,
+                    "status": "failed",
+                    "verify_status": "failed",
+                }
+            },
+        },
+    )
     return link
 
 
 async def _set_rediagnosis(link_id, diagnosis_id, new_evidence=True, memories=None) -> None:
     async with SessionFactory() as db:
         stored = await db.get(MemoryActionLink, link_id)
-        stored.rediagnosis = {"diagnosis_id": diagnosis_id, "new_evidence": new_evidence, "memories": memories or []}
+        stored.rediagnosis = {
+            "diagnosis_id": diagnosis_id,
+            "new_evidence": new_evidence,
+            "memories": memories or [],
+        }
+        if memories:
+            await service.record_usage(
+                db, stored.owner_user_id, memories, run_id=stored.run_id, stage="retrieved"
+            )
         await db.commit()
 
 
@@ -440,9 +523,19 @@ async def test_rediagnosis_feeds_next_repair_with_context() -> None:
     async def call(tool, arguments):
         seen[tool] = arguments
         if tool == "diagnose_fault":
-            return SimpleNamespace(structured_content={"ok": True, "data": {
-                "diagnosis_id": "DIA_NEW", "new_evidence": True, "fault_name": "MQTT keep alive 超时"}})
-        return SimpleNamespace(structured_content={"ok": True, "data": {"device_id": "d1", "online": False}})
+            return SimpleNamespace(
+                structured_content={
+                    "ok": True,
+                    "data": {
+                        "diagnosis_id": "DIA_NEW",
+                        "new_evidence": True,
+                        "fault_name": "MQTT keep alive 超时",
+                    },
+                }
+            )
+        return SimpleNamespace(
+            structured_content={"ok": True, "data": {"device_id": "d1", "online": False}}
+        )
 
     result = await rediagnose(run.id, "srv-1", link.id, call)
     assert result["diagnosis_id"] == "DIA_NEW" and result["new_evidence"] is True
@@ -456,14 +549,17 @@ async def test_rediagnosis_feeds_next_repair_with_context() -> None:
     assert repair_context["remaining_attempts"] == 2
     assert "memory_context" in seen["diagnose_fault"]
     async with SessionFactory() as db:
-        events = (await db.scalars(select(RunEvent.event_type).where(RunEvent.run_id == run.id))).all()
+        events = (
+            await db.scalars(select(RunEvent.event_type).where(RunEvent.run_id == run.id))
+        ).all()
         assert "remediation.rediagnosis_started" in events
         assert "remediation.rediagnosis_completed" in events
         stored = await db.get(MemoryActionLink, link.id)
         assert "memories" in stored.rediagnosis  # 注入诊断的记忆被记录，供 applied 反馈链使用
     # 有新依据才允许下一次修复
-    next_link = await actions.reserve(run.id, "srv-1", "execute_device_action",
-        {"device_id": "d1", "diagnosis_id": "DIA_NEW"})
+    next_link = await actions.reserve(
+        run.id, "srv-1", "execute_device_action", {"device_id": "d1", "diagnosis_id": "DIA_NEW"}
+    )
     assert next_link.diagnosis_id == "DIA_NEW"
 
 
@@ -473,17 +569,32 @@ async def test_rediagnosis_without_new_evidence_stops_loop() -> None:
 
     async def call(tool, arguments):
         if tool == "diagnose_fault":
-            return SimpleNamespace(structured_content={"ok": True, "data": {"diagnosis_id": "DIA_SAME", "new_evidence": False}})
+            return SimpleNamespace(
+                structured_content={
+                    "ok": True,
+                    "data": {"diagnosis_id": "DIA_SAME", "new_evidence": False},
+                }
+            )
         return SimpleNamespace(structured_content={"ok": True, "data": {}})
 
     result = await rediagnose(run.id, "srv-1", link.id, call)
     assert result["new_evidence"] is False
     with pytest.raises(HTTPException) as excinfo:
-        await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d1", "diagnosis_id": "DIA_SAME"})
+        await actions.reserve(
+            run.id,
+            "srv-1",
+            "execute_device_action",
+            {"device_id": "d1", "diagnosis_id": "DIA_SAME"},
+        )
     assert excinfo.value.detail == "REPAIR_NO_NEW_EVIDENCE"
     async with SessionFactory() as db:
-        stops = (await db.scalars(select(RunEvent).where(
-            RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"))).all()
+        stops = (
+            await db.scalars(
+                select(RunEvent).where(
+                    RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"
+                )
+            )
+        ).all()
         assert [stop.data["reason"] for stop in stops] == ["no_new_evidence"]
 
 
@@ -493,11 +604,18 @@ async def test_three_failures_exhaust_budget_and_stop_loop() -> None:
         link = await _failed_repair(run, device=f"d{index}", index=index)
         await _set_rediagnosis(link.id, f"DIA_{index}", new_evidence=True)
     with pytest.raises(HTTPException) as excinfo:
-        await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d9", "diagnosis_id": "DIA_2"})
+        await actions.reserve(
+            run.id, "srv-1", "execute_device_action", {"device_id": "d9", "diagnosis_id": "DIA_2"}
+        )
     assert excinfo.value.detail == "REPAIR_ATTEMPT_LIMIT_REACHED"
     async with SessionFactory() as db:
-        stops = (await db.scalars(select(RunEvent).where(
-            RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"))).all()
+        stops = (
+            await db.scalars(
+                select(RunEvent).where(
+                    RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"
+                )
+            )
+        ).all()
         assert stops[-1].data["reason"] == "attempt_limit_reached"
         assert stops[-1].data["used"] == 3 and stops[-1].data["reserved"] == 0
         assert stops[-1].data["origin_run_id"] == run.id
@@ -522,8 +640,13 @@ async def test_rediagnosis_respects_run_deadline() -> None:
     finally:
         settings.agent_run_max_runtime_minutes = previous
     async with SessionFactory() as db:
-        stops = (await db.scalars(select(RunEvent).where(
-            RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"))).all()
+        stops = (
+            await db.scalars(
+                select(RunEvent).where(
+                    RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"
+                )
+            )
+        ).all()
         assert [stop.data["reason"] for stop in stops] == ["run_deadline"]
 
 
@@ -534,11 +657,28 @@ async def test_run_finished_failure_records_followup_event() -> None:
         stored_run = await db.get(AgentRun, run.id)
         stored_run.status = RunStatus.FAILED
         await db.commit()
-    await actions.save_result(link.id, {"ok": True, "data": {"command": {
-        "command_id": "C_LATE", "device_id": "d1", "status": "failed", "verify_status": "failed"}}})
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": "C_LATE",
+                    "device_id": "d1",
+                    "status": "failed",
+                    "verify_status": "failed",
+                }
+            },
+        },
+    )
     async with SessionFactory() as db:
-        stops = (await db.scalars(select(RunEvent).where(
-            RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"))).all()
+        stops = (
+            await db.scalars(
+                select(RunEvent).where(
+                    RunEvent.run_id == run.id, RunEvent.event_type == "remediation.loop_stopped"
+                )
+            )
+        ).all()
         assert [stop.data["reason"] for stop in stops] == ["run_finished"]
         assert stops[0].data["needs_followup"] is True
 
@@ -553,19 +693,50 @@ async def test_usage_feedback_and_counterexample_suspend() -> None:
         experience_id = experience.id
     run = await _make_running_run()
     link = await _failed_repair(run)
-    await _set_rediagnosis(link.id, "DIA_NEW", new_evidence=True,
-        memories=[{"memory_id": experience_id, "revision": 1}])
-    next_link = await actions.reserve(run.id, "srv-1", "execute_device_action",
-        {"device_id": "d1", "diagnosis_id": "DIA_NEW"})
+    await _set_rediagnosis(
+        link.id,
+        "DIA_NEW",
+        new_evidence=True,
+        memories=[{"memory_id": experience_id, "revision": 1}],
+    )
+    next_link = await actions.reserve(
+        run.id,
+        "srv-1",
+        "execute_device_action",
+        {"device_id": "d1", "diagnosis_id": "DIA_NEW"},
+        applied_memory_refs=[{"memory_id": experience_id, "revision": 1}],
+    )
     async with SessionFactory() as db:
         stored = await db.get(MemoryActionLink, next_link.id)
         assert stored.applied_memory_ids == [{"memory_id": experience_id, "revision": 1}]
-        stages = {usage.stage for usage in (await db.scalars(select(MemoryUsage).where(MemoryUsage.owner_user_id == "user-a"))).all()}
-        assert "applied" in stages
-    await actions.save_result(next_link.id, {"ok": True, "data": {"command": {
-        "command_id": "C_ADOPTED", "device_id": "d1", "status": "failed", "verify_status": "failed"}}})
+        stages = {
+            usage.stage
+            for usage in (
+                await db.scalars(select(MemoryUsage).where(MemoryUsage.owner_user_id == "user-a"))
+            ).all()
+        }
+        assert "applied" not in stages
+    await actions.save_result(
+        next_link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": "C_ADOPTED",
+                    "device_id": "d1",
+                    "status": "failed",
+                    "verify_status": "failed",
+                }
+            },
+        },
+    )
     async with SessionFactory() as db:
-        feedback = (await db.scalars(select(MemoryFeedback).where(MemoryFeedback.owner_user_id == "user-a"))).all()
+        assert await db.scalar(select(MemoryUsage.id).where(MemoryUsage.stage == "applied"))
+        item = await db.get(Memory, experience_id)
+        assert item.status == "suspended"  # No worker is needed to stop recall.
+        feedback = (
+            await db.scalars(select(MemoryFeedback).where(MemoryFeedback.owner_user_id == "user-a"))
+        ).all()
         assert len(feedback) == 1
         assert feedback[0].outcome == "failed" and feedback[0].command_id == "C_ADOPTED"
         job = await db.scalar(select(MemoryJob).where(MemoryJob.kind == "reconcile_experience"))
@@ -591,12 +762,44 @@ async def test_counterexample_out_of_scope_only_records_feedback() -> None:
         experience_id = experience.id
     run = await _make_running_run()
     link = await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d1"})
-    await actions.save_result(link.id, {"ok": True, "data": {"command": {
-        "command_id": "C1", "device_id": "d1", "status": "failed", "verify_status": "failed"}}})
-    await _set_rediagnosis(link.id, "DIA_X", new_evidence=True, memories=[{"memory_id": experience_id, "revision": 1}])
-    next_link = await actions.reserve(run.id, "srv-1", "execute_device_action", {"device_id": "d1", "diagnosis_id": "DIA_X"})
-    await actions.save_result(next_link.id, {"ok": True, "data": {"command": {
-        "command_id": "C2", "device_id": "d1", "status": "failed", "verify_status": "failed"}}})
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": "C1",
+                    "device_id": "d1",
+                    "status": "failed",
+                    "verify_status": "failed",
+                }
+            },
+        },
+    )
+    await _set_rediagnosis(
+        link.id, "DIA_X", new_evidence=True, memories=[{"memory_id": experience_id, "revision": 1}]
+    )
+    next_link = await actions.reserve(
+        run.id,
+        "srv-1",
+        "execute_device_action",
+        {"device_id": "d1", "diagnosis_id": "DIA_X"},
+        applied_memory_refs=[{"memory_id": experience_id, "revision": 1}],
+    )
+    await actions.save_result(
+        next_link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": "C2",
+                    "device_id": "d1",
+                    "status": "failed",
+                    "verify_status": "failed",
+                }
+            },
+        },
+    )
     async with SessionFactory() as db:
         job = await db.scalar(select(MemoryJob).where(MemoryJob.kind == "reconcile_experience"))
         assert job.payload["scope_matched"] is False
@@ -607,19 +810,25 @@ async def test_counterexample_out_of_scope_only_records_feedback() -> None:
         item = await db.get(Memory, experience_id)
         # 条件不一致：只记范围问题（反馈），不暂停、不改写
         assert item.status == "active" and item.current_revision == 1
-        feedback = (await db.scalars(select(MemoryFeedback).where(MemoryFeedback.memory_id == experience_id))).all()
+        feedback = (
+            await db.scalars(
+                select(MemoryFeedback).where(MemoryFeedback.memory_id == experience_id)
+            )
+        ).all()
         assert len(feedback) == 1 and feedback[0].outcome == "failed"
 
 
 async def test_retrieval_records_usage_and_use_count() -> None:
     async with SessionFactory() as db:
-        item = await service.create(db, "user-a", _experience_payload(confirm=True))
+        await service.create(db, "user-a", _experience_payload(confirm=True))
         await db.commit()
     async with SessionFactory() as db:
         found = await search(db, "user-a", MemorySearch(query="MQTT 超时"))
         assert found
         await db.commit()
-        usages = (await db.scalars(select(MemoryUsage).where(MemoryUsage.stage == "retrieved"))).all()
+        usages = (
+            await db.scalars(select(MemoryUsage).where(MemoryUsage.stage == "retrieved"))
+        ).all()
         assert len(usages) == len(found)
         stored = await db.get(Memory, found[0]["memory_id"])
         assert stored.use_count == 1 and stored.last_used_at is not None
@@ -640,11 +849,23 @@ async def test_memory_tool_handlers_bind_to_run_user() -> None:
     assert found["items"] and found["items"][0]["memory_id"] == item_id
     detail = await handle_memory_tool(run.id, "get_memory", {"memory_id": item_id})
     assert detail["item"]["id"] == item_id
-    assert await handle_memory_tool(run.id, "get_memory", {"memory_id": "missing"}) == {"error": "MEMORY_NOT_FOUND"}
-    proposed = await handle_memory_tool(run.id, "propose_memory", {
-        "title": "模型提议的经验", "summary": "候选不自动启用。",
-        "content": {"claims": [{"text": "假设", "epistemic_status": "observed", "evidence_refs": ["fake"]}]},
-        "applicability": {"mcp_server_id": "srv-1"}})
+    assert await handle_memory_tool(run.id, "get_memory", {"memory_id": "missing"}) == {
+        "error": "MEMORY_NOT_FOUND"
+    }
+    proposed = await handle_memory_tool(
+        run.id,
+        "propose_memory",
+        {
+            "title": "模型提议的经验",
+            "summary": "候选不自动启用。",
+            "content": {
+                "claims": [
+                    {"text": "假设", "epistemic_status": "observed", "evidence_refs": ["fake"]}
+                ]
+            },
+            "applicability": {"mcp_server_id": "srv-1"},
+        },
+    )
     assert proposed["status"] == "candidate" and proposed.get("note")
     async with SessionFactory() as db:
         stored = await db.get(Memory, proposed["id"])
@@ -680,7 +901,9 @@ async def test_run_creation_pins_repair_budget() -> None:
         await db.commit()
     # 固化后的预算与 reserve 的读取一致：3 次用尽即拒绝
     for index in range(3):
-        await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": f"d{index}"})
+        await actions.reserve(
+            run.id, "srv-1", "create_remediation_proposal", {"device_id": f"d{index}"}
+        )
     with pytest.raises(HTTPException) as excinfo:
         await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d9"})
     assert excinfo.value.detail == "REPAIR_ATTEMPT_LIMIT_REACHED"
@@ -697,11 +920,23 @@ async def test_retrieval_applicability_scoping_and_uncertainty() -> None:
         await db.commit()
     async with SessionFactory() as db:
         # 同名设备在不同 MCP 服务下不误匹配：整体排除
-        assert await search(db, "user-a", MemorySearch(
-            query="MQTT 超时", mcp_server_id="srv-2", device_id="ESP32_05")) == []
+        assert (
+            await search(
+                db,
+                "user-a",
+                MemorySearch(query="MQTT 超时", mcp_server_id="srv-2", device_id="ESP32_05"),
+            )
+            == []
+        )
         # 设备明确不适用：排除
-        assert await search(db, "user-a", MemorySearch(
-            query="MQTT 超时", mcp_server_id="srv-1", device_id="OTHER")) == []
+        assert (
+            await search(
+                db,
+                "user-a",
+                MemorySearch(query="MQTT 超时", mcp_server_id="srv-1", device_id="OTHER"),
+            )
+            == []
+        )
         # 范围未知时不能当作已满足条件，返回"适用性待核实"
         found = await search(db, "user-a", MemorySearch(query="MQTT 超时", mcp_server_id="srv-1"))
         assert found and any(u.startswith("适用性待核实") for u in found[0]["uncertainty"])
@@ -744,7 +979,9 @@ class _FakeQdrantClient:
     async def post(self, url, json=None):
         _FakeQdrantClient.requests.append(("POST", url))
         if url.endswith("/embeddings"):
-            return _FakeResponse(200, {"data": [{"embedding": [0.0] * get_settings().memory_embedding_dimensions}]})
+            return _FakeResponse(
+                200, {"data": [{"embedding": [0.0] * get_settings().memory_embedding_dimensions}]}
+            )
         if url.endswith("/points/query"):
             return _FakeResponse(200, {"result": {"points": []}})
         return _FakeResponse(200)
@@ -761,10 +998,12 @@ async def test_vector_indexing_uses_owner_filter_and_marks_indexed(monkeypatch) 
             await service.create(db, "user-a", _experience_payload(confirm=True))
             await db.commit()
         from app.memory.indexing import sync, vector_search
+
         async with SessionFactory() as db:
             job_id = await db.scalar(select(MemoryJob.id).where(MemoryJob.kind == "sync_vector"))
             outbox_id = await db.scalar(select(MemoryJob.payload).where(MemoryJob.id == job_id))
         from types import SimpleNamespace
+
         await sync(SimpleNamespace(payload=outbox_id))
         async with SessionFactory() as db:
             state = await db.scalar(select(MemoryIndexState))
@@ -775,12 +1014,18 @@ async def test_vector_indexing_uses_owner_filter_and_marks_indexed(monkeypatch) 
         settings.memory_qdrant_url, settings.memory_embedding_url = previous
 
 
-async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive(monkeypatch) -> None:
+async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive(
+    monkeypatch,
+) -> None:
     from types import SimpleNamespace
 
     settings = get_settings()
     monkeypatch.setattr("app.memory.indexing.httpx.AsyncClient", _FakeQdrantClient)
-    previous = (settings.memory_qdrant_url, settings.memory_embedding_url, settings.memory_embedding_fingerprint)
+    previous = (
+        settings.memory_qdrant_url,
+        settings.memory_embedding_url,
+        settings.memory_embedding_fingerprint,
+    )
     settings.memory_qdrant_url = "http://qdrant:6333"
     settings.memory_embedding_url = "http://embed:8080"
     try:
@@ -790,9 +1035,11 @@ async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive
             item_id, revision = item.id, item.current_revision
         from app.memory.indexing import sync
         from app.memory.models import MemoryVectorOutbox
+
         async with SessionFactory() as db:
-            outbox_id = await db.scalar(select(MemoryVectorOutbox.id).where(
-                MemoryVectorOutbox.memory_id == item_id))
+            outbox_id = await db.scalar(
+                select(MemoryVectorOutbox.id).where(MemoryVectorOutbox.memory_id == item_id)
+            )
         await sync(SimpleNamespace(payload={"outbox_id": outbox_id}))
         async with SessionFactory() as db:
             state = await db.scalar(select(MemoryIndexState))
@@ -803,20 +1050,36 @@ async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive
         old_fingerprint = settings.memory_embedding_fingerprint
         settings.memory_embedding_fingerprint = "other-model"
         async with SessionFactory() as db:
-            stale = MemoryVectorOutbox(owner_user_id="user-a", memory_id=item_id,
-                revision=revision, operation="upsert",
+            stale = MemoryVectorOutbox(
+                owner_user_id="user-a",
+                memory_id=item_id,
+                revision=revision,
+                operation="upsert",
                 model_fingerprint=old_fingerprint,
-                collection=f"{settings.memory_collection_prefix}_{old_fingerprint}_{settings.memory_embedding_dimensions}_v1")
+                collection=f"{settings.memory_collection_prefix}_{old_fingerprint}_{settings.memory_embedding_dimensions}_v1",
+            )
             db.add(stale)
             await db.flush()
             stale_id = stale.id
             await db.commit()
         await sync(SimpleNamespace(payload={"outbox_id": stale_id}))
-        assert not [r for r in _FakeQdrantClient.requests if r[0] == "PUT" and r[1].endswith("/points?wait=true")]
-        assert any(r[0] == "POST" and r[1].endswith("/points/delete?wait=true") for r in _FakeQdrantClient.requests)
+        assert not [
+            r
+            for r in _FakeQdrantClient.requests
+            if r[0] == "PUT" and r[1].endswith("/points?wait=true")
+        ]
+        assert any(
+            r[0] == "POST" and r[1].endswith("/points/delete?wait=true")
+            for r in _FakeQdrantClient.requests
+        )
         async with SessionFactory() as db:
-            row = await db.scalar(select(MemoryIndexState).where(MemoryIndexState.memory_id == item_id,
-                MemoryIndexState.revision == revision, MemoryIndexState.model_fingerprint == old_fingerprint))
+            row = await db.scalar(
+                select(MemoryIndexState).where(
+                    MemoryIndexState.memory_id == item_id,
+                    MemoryIndexState.revision == revision,
+                    MemoryIndexState.model_fingerprint == old_fingerprint,
+                )
+            )
             assert row.status == "excluded"
         _FakeQdrantClient.requests.clear()
 
@@ -824,24 +1087,42 @@ async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive
         async with SessionFactory() as db:
             await service.transition(db, "user-a", item_id, revision, "delete")
             await db.commit()
-            purge_id = await db.scalar(select(MemoryVectorOutbox.id).where(
-                MemoryVectorOutbox.memory_id == item_id, MemoryVectorOutbox.operation == "purge",
-                MemoryVectorOutbox.status != "done").order_by(MemoryVectorOutbox.id.desc()).limit(1))
+            purge_id = await db.scalar(
+                select(MemoryVectorOutbox.id)
+                .where(
+                    MemoryVectorOutbox.memory_id == item_id,
+                    MemoryVectorOutbox.operation == "purge",
+                    MemoryVectorOutbox.status != "done",
+                )
+                .order_by(MemoryVectorOutbox.id.desc())
+                .limit(1)
+            )
         await sync(SimpleNamespace(payload={"outbox_id": purge_id}))
-        assert any(r[0] == "POST" and r[1].endswith("/points/delete?wait=true") for r in _FakeQdrantClient.requests)
+        assert any(
+            r[0] == "POST" and r[1].endswith("/points/delete?wait=true")
+            for r in _FakeQdrantClient.requests
+        )
 
         # 任何晚到的 upsert 都不能让已删除记忆的向量复活
         async with SessionFactory() as db:
-            late = MemoryVectorOutbox(owner_user_id="user-a", memory_id=item_id,
-                revision=revision, operation="upsert",
+            late = MemoryVectorOutbox(
+                owner_user_id="user-a",
+                memory_id=item_id,
+                revision=revision,
+                operation="upsert",
                 model_fingerprint=settings.memory_embedding_fingerprint,
-                collection=f"{settings.memory_collection_prefix}_{settings.memory_embedding_fingerprint}_{settings.memory_embedding_dimensions}_v1")
+                collection=f"{settings.memory_collection_prefix}_{settings.memory_embedding_fingerprint}_{settings.memory_embedding_dimensions}_v1",
+            )
             db.add(late)
             await db.flush()
             late_id = late.id
             await db.commit()
         await sync(SimpleNamespace(payload={"outbox_id": late_id}))
-        assert not [r for r in _FakeQdrantClient.requests if r[0] == "PUT" and r[1].endswith("/points?wait=true")]
+        assert not [
+            r
+            for r in _FakeQdrantClient.requests
+            if r[0] == "PUT" and r[1].endswith("/points?wait=true")
+        ]
     finally:
         settings.memory_qdrant_url, settings.memory_embedding_url = previous[0], previous[1]
         settings.memory_embedding_fingerprint = previous[2]
@@ -854,34 +1135,71 @@ async def test_pending_proposal_reservation_and_release() -> None:
     run = await _make_running_run()
     links = []
     for index in range(3):
-        links.append(await actions.reserve(run.id, "srv-1", "create_remediation_proposal",
-            {"device_id": f"d{index}", "diagnosis_id": "DIA_0"}))
+        links.append(
+            await actions.reserve(
+                run.id,
+                "srv-1",
+                "create_remediation_proposal",
+                {"device_id": f"d{index}", "diagnosis_id": "DIA_0"},
+            )
+        )
     # 3 个待批提案占满额度，第 4 个被拒绝
     with pytest.raises(HTTPException) as excinfo:
-        await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d9", "diagnosis_id": "DIA_0"})
+        await actions.reserve(
+            run.id,
+            "srv-1",
+            "create_remediation_proposal",
+            {"device_id": "d9", "diagnosis_id": "DIA_0"},
+        )
     assert excinfo.value.detail == "REPAIR_ATTEMPT_LIMIT_REACHED"
     # 提案被拒绝：确认无命令后名额释放
-    await actions.save_result(links[0].id, {"ok": True, "data": {"proposal": {
-        "proposal_id": "P0", "status": "rejected", "device_id": "d0"}}})
+    await actions.save_result(
+        links[0].id,
+        {
+            "ok": True,
+            "data": {"proposal": {"proposal_id": "P0", "status": "rejected", "device_id": "d0"}},
+        },
+    )
     async with SessionFactory() as db:
         released = await db.get(MemoryActionLink, links[0].id)
         assert released.reservation == "released" and released.outcome == "not_executed"
-    next_link = await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d3", "diagnosis_id": "DIA_0"})
+    next_link = await actions.reserve(
+        run.id, "srv-1", "create_remediation_proposal", {"device_id": "d3", "diagnosis_id": "DIA_0"}
+    )
     assert next_link.reservation == "reserved"
 
 
 async def test_late_approval_stays_on_original_run_budget() -> None:
     run = await _make_running_run()
-    link = await actions.reserve(run.id, "srv-1", "create_remediation_proposal", {"device_id": "d1", "diagnosis_id": "DIA_0"})
+    link = await actions.reserve(
+        run.id, "srv-1", "create_remediation_proposal", {"device_id": "d1", "diagnosis_id": "DIA_0"}
+    )
     async with SessionFactory() as db:
         stored_run = await db.get(AgentRun, run.id)
         stored_run.status = RunStatus.FAILED
         await db.commit()
     # Run 结束后用户显式批准并执行：结果归属原 Run 的关联记录
-    await actions.save_result(link.id, {"ok": True, "data": {"proposal": {
-        "proposal_id": "P1", "status": "approved", "device_id": "d1"}}})
-    await actions.save_result(link.id, {"ok": True, "data": {"command": {
-        "command_id": "C_LATE", "device_id": "d1", "status": "applied", "verify_status": "succeeded"}}})
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {"proposal": {"proposal_id": "P1", "status": "approved", "device_id": "d1"}},
+        },
+    )
+    await actions.save_result(
+        link.id,
+        {
+            "ok": True,
+            "data": {
+                "command": {
+                    "command_id": "C_LATE",
+                    "device_id": "d1",
+                    "status": "applied",
+                    "verify_status": "succeeded",
+                }
+            },
+        },
+    )
     async with SessionFactory() as db:
         stored = await db.get(MemoryActionLink, link.id)
         assert stored.run_id == run.id
@@ -889,5 +1207,9 @@ async def test_late_approval_stays_on_original_run_budget() -> None:
         assert stored.command_id == "C_LATE"
     # 晚到成功不产生"需要后续诊断"信号
     async with SessionFactory() as db:
-        stops = (await db.scalars(select(RunEvent).where(RunEvent.event_type == "remediation.loop_stopped"))).all()
+        stops = (
+            await db.scalars(
+                select(RunEvent).where(RunEvent.event_type == "remediation.loop_stopped")
+            )
+        ).all()
         assert stops == []

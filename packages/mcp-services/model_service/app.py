@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from model_service.cache import inspect_cache
 from model_service.errors import MODEL_LOAD_FAILED, ModelServiceError
@@ -158,7 +158,11 @@ async def lifespan(_: FastAPI):
         service_state["loading_stage"] = "loading_reranker"
         reranker_tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL, padding_side="left")
         reranker_model = (
-            AutoModelForCausalLM.from_pretrained(RERANKER_MODEL, dtype=dtype).to(device).eval()
+            # Scoring only needs forward logits. Explicit generation settings avoid
+            # importing a model repository's custom generate implementation.
+            AutoModelForCausalLM.from_pretrained(
+                RERANKER_MODEL, dtype=dtype, generation_config=GenerationConfig()
+            ).to(device).eval()
         )
         prefix = (
             "<|im_start|>system\nJudge whether the Document meets the requirements based on "

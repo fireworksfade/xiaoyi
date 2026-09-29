@@ -25,6 +25,7 @@ export type ChatMessage = {
   citation?: string;
   attachments?: UploadedAttachment[];
   proposals?: RemediationProposal[];
+  remediationStatus?: string;
 };
 
 export function toChatMessage(message: ConversationMessage): ChatMessage {

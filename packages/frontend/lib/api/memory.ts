@@ -40,9 +40,54 @@ export type MemoryDetail = MemorySummary & {
   applicability: Record<string, unknown>;
   review_state: string;
   sources: MemorySourceSummary[];
+  active_version?: {
+    revision: number;
+    title: string;
+    summary: string;
+    content: Record<string, unknown>;
+    applicability: Record<string, unknown>;
+  } | null;
 };
 
+export type MemoryActivity = {
+  candidate_count: number;
+  items: {
+    id: string;
+    kind: string;
+    status: string;
+    error_code: string | null;
+    attempts: number;
+    created_at: string;
+  }[];
+  action_results: {
+    run_id: string;
+    conversation_id: string;
+    device_id: string | null;
+    command_id: string | null;
+    proposal_id: string | null;
+    outcome: string;
+    run_status: string | null;
+    needs_followup: boolean;
+  }[];
+};
+
+export function getMemoryActivity() {
+  return request<MemoryActivity>('/memories/activity');
+}
+
+export function forgetMemorySource(conversationId: string) {
+  return request<{ affected_count: number; job_id: string }>(
+    '/memories/forget-source',
+    {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
+    },
+    true,
+  );
+}
+
 export type MemoryUpdate = {
+  kind?: MemoryKind;
   title: string;
   summary: string;
   content: Record<string, unknown>;
@@ -51,28 +96,39 @@ export type MemoryUpdate = {
   change_reason?: string;
 };
 
+export async function retryMemoryJob(jobId: string) {
+  return request<{ queued: boolean }>(
+    `/memories/jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST' },
+    true,
+  );
+}
+
 export async function getMemory(memoryId: string) {
   return request<MemoryDetail>(`/memories/${encodeURIComponent(memoryId)}`);
 }
 
 /** 编辑生成待确认新版本；expected_revision 不符时后端返回 409 版本冲突。 */
-export async function updateMemory(
-  memoryId: string,
-  payload: MemoryUpdate,
-) {
-  return request<MemoryDetail>(`/memories/${encodeURIComponent(memoryId)}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  }, true);
+export async function updateMemory(memoryId: string, payload: MemoryUpdate) {
+  return request<MemoryDetail>(
+    `/memories/${encodeURIComponent(memoryId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    },
+    true,
+  );
 }
 
-export async function listMemories(params: {
-  kind?: MemoryKind;
-  status?: string;
-  q?: string;
-  limit?: number;
-  cursor?: string;
-} = {}) {
+export async function listMemories(
+  params: {
+    kind?: MemoryKind;
+    status?: string;
+    q?: string;
+    limit?: number;
+    cursor?: string;
+  } = {},
+) {
   const search = new URLSearchParams();
   if (params.kind) search.set('kind', params.kind);
   if (params.status) search.set('status', params.status);
@@ -85,10 +141,16 @@ export async function listMemories(params: {
   );
 }
 
-export async function confirmMemory(memoryId: string, expectedRevision: number) {
+export async function confirmMemory(
+  memoryId: string,
+  expectedRevision: number,
+) {
   return request<MemorySummary>(
     `/memories/${encodeURIComponent(memoryId)}/confirm`,
-    { method: 'POST', body: JSON.stringify({ expected_revision: expectedRevision }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    },
     true,
   );
 }
@@ -96,7 +158,10 @@ export async function confirmMemory(memoryId: string, expectedRevision: number) 
 export async function rejectMemory(memoryId: string, expectedRevision: number) {
   return request<MemorySummary>(
     `/memories/${encodeURIComponent(memoryId)}/reject`,
-    { method: 'POST', body: JSON.stringify({ expected_revision: expectedRevision }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    },
     true,
   );
 }

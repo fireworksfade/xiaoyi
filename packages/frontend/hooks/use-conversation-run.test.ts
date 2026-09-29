@@ -36,6 +36,34 @@ describe('useConversationRun', () => {
     window.sessionStorage.clear();
   });
 
+  it('shows rediagnosis progress and terminal followup without restarting a run', async () => {
+    let submissions = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) => {
+        if (input.endsWith('/auth/me'))
+          return Response.json({ data: { id: 'u1' } });
+        if (input.includes('/messages')) {
+          submissions += 1;
+          return Response.json({ data: { run_id: 'run-1' } });
+        }
+        return sse(
+          'event: remediation.rediagnosis_started\ndata: {"id":1,"data":{"used_attempts":1,"limit":3}}\n\n' +
+            'event: remediation.loop_stopped\ndata: {"id":2,"data":{"used":1,"reason":"run_finished"}}\n\n',
+        );
+      }),
+    );
+    const { result } = setupHook();
+    await act(async () => {
+      await result.current.submit('检查设备');
+    });
+    expect(result.current.messages[1].remediationStatus).toContain(
+      '需要发起后续诊断',
+    );
+    expect(result.current.messages[1].remediationStatus).toContain('1/3');
+    expect(submissions).toBe(1);
+  });
+
   it('streams answer and tool state into the optimistic conversation', async () => {
     vi.stubGlobal(
       'fetch',

@@ -360,8 +360,9 @@ def execute_device_action(
     parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
     issued_by: Annotated[str, Field(max_length=160)] = "agent",
     correlation_key: Annotated[str | None, Field(max_length=120)] = None,
+    applied_memory_refs: Annotated[list[dict[str, Any]] | None, Field(max_length=6)] = None,
 ) -> dict[str, Any]:
-    """下发低风险修复动作（重启/改配置等高风险动作会被拒绝并要求走提案审批）。"""
+    """下发低风险修复动作。若实际采用经验，在 applied_memory_refs 指定 memory_id/revision；后端校验，检索命中不算采用。"""
     item = actions.get_action(action)
     if not item:
         return failure("UNKNOWN_ACTION", f"Action {action} is not supported")
@@ -421,8 +422,9 @@ def create_remediation_proposal(
     diagnosis_id: Annotated[str, Field(min_length=21, max_length=21, pattern=r"^DIA_\d{8}_[A-F0-9]{8}$")],
     parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
     correlation_key: Annotated[str | None, Field(max_length=120)] = None,
+    applied_memory_refs: Annotated[list[dict[str, Any]] | None, Field(max_length=6)] = None,
 ) -> dict[str, Any]:
-    """为高风险动作创建修复提案，等待人工批准后才会执行。"""
+    """为高风险动作创建修复提案。实际采用经验时在 applied_memory_refs 指定 memory_id/revision；批准执行后才计为采用。"""
     item = actions.get_action(action)
     if not item:
         return failure("UNKNOWN_ACTION", f"Action {action} is not supported")

@@ -113,7 +113,32 @@ python -m pytest
 python packages/backend/scripts/smoke_frontend_backend.py
 ```
 
-默认通过前端同源代理验证登录、会话 CRUD 与 SSE 对话全链路；加 `--api-base http://127.0.0.1:8000/api/v1` 可切换为跨域直连后端（要求 `FRONTEND_ORIGINS` 包含该前端来源）。
+默认通过前端同源代理验证就绪状态、登录 Cookie、CSRF 拒绝、会话 CRUD 与 SSE 对话全链路；测试消息固定 `tool_mode=none`，不调用设备工具，结束后清理临时对话。已保存的模型配置会覆盖 `AGENT_RUNTIME=mock`，因此普通冒烟的生成结果依赖该模型服务。加 `--api-base http://127.0.0.1:8000/api/v1` 可切换为跨域直连后端（要求 `FRONTEND_ORIGINS` 包含该前端来源）。
+
+完整记忆浏览器联调使用独立前端 13000 和临时后端 18001，实际经过前端 `/api/backend` 代理、Cookie/CSRF、后端 SSE 与持久 worker。外部诊断和提炼采用确定性桩，不需要模型密钥。默认 `npm run test:e2e` 只运行原有会话流程，记忆流程需显式启用。Windows PowerShell 在仓库根目录执行：
+
+```powershell
+$env:E2E_MEMORY_LIVE = '1'
+# 指向已安装 packages/backend[dev] 的 Python；使用现有可用虚拟环境即可
+$env:E2E_PYTHON = (Resolve-Path 'packages/backend/.venv/Scripts/python.exe').Path
+npm run test:e2e
+Remove-Item Env:E2E_MEMORY_LIVE, Env:E2E_PYTHON
+```
+
+macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bin/python" npm run test:e2e`。测试会禁用 Wrangler 对 `.env.local` 的覆盖，并在发送消息前核验临时后端标记；不拦截或 mock 记忆 API 响应。运行前关闭同一前端目录已有的 dev 服务，Vinext 同一目录只允许一个 dev 实例。临时测试服务在结束后退出。
+
+2026-09-30 联调结果：
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 3000 → 同源代理 → 8000 | 登录、CSRF、会话 CRUD、SSE 通过，设备工具调用为零 |
+| localhost:3000 → localhost:8000 | CORS 预检、凭据、会话 CRUD、SSE 通过 |
+| 完整记忆浏览器流程 | 2 项 Playwright 通过，含既有会话流程；覆盖审核、409 版本冲突、新会话召回和 keep/forget |
+| 后端回归 | 149 passed、1 skipped；真实 MCP 发现与动作工具新参数另行验证通过 |
+| MCP 回归 | 150 passed、5 skipped；其中 2 项 MySQL 实库用例在专用容器已另行通过 |
+| 前端回归 | typecheck、lint、34 项 Vitest、build 全通过 |
+
+首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。详细记忆验证与小样本在线语义评估见 [修复报告](docs/memory-repair-report-20260930.md)。
 
 数据库迁移会在后端启动流程中按 Alembic 版本执行。升级旧数据库时，迁移会清理已废弃的 workflow 表；历史迁移文件仍保留，用于保证已有数据库能够连续升级。
 
@@ -121,17 +146,18 @@ IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 
 
 ## 记忆（Memory）
 
-旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，逐条验收证据见 [`docs/memory-acceptance-report.md`](docs/memory-acceptance-report.md)）：
+旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，最新验收证据见 [`docs/memory-repair-report-20260930.md`](docs/memory-repair-report-20260930.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，真实 MySQL、浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。
 
 - 三层记忆：工作记忆（会话内，不入向量）、情景记忆（一次具体经历，含成功/失败/无结论）、经验记忆（可复用认识与步骤）。同一会话的新 Run 会加载此前任务留下的工作记忆（TTL 默认 24 小时，`MEMORY_WORKING_TTL_HOURS`）。
 - 自动提炼的经验一律先进入候选，用户在界面确认后才参与召回；情景中已收敛的事实性经历可直接作为历史参考。Agent 可用只读的 `search_memory` / `get_memory` 查询当前用户自己的记忆；`propose_memory` 只能创建待确认候选。
 - 召回按用户隔离：Run 开始与 `diagnose_fault` 前两次注入，设备/状态查询等纯实时请求不加载历史经验。检索命中会记录使用阶段，但只有被实际采纳并执行的经验才按命令结果累计有效/无效反馈。
-- 反例处理：被采用的经验在适用范围内明确失败时，立即暂停该经验并生成附反例说明的待确认修订；范围不匹配只记录范围问题。
+- 反例处理：具体动作以 `applied_memory_refs` 指定已检索、仍有效的经验版本，真实命令执行后才算采用；适用范围内明确失败会立即暂停并异步生成待确认修订。未知条件不算范围已匹配，超时不算明确失败；旧版本的晚到反例不暂停已重新确认的新版本。
 - 修复预算：每个 Run 最多 3 次修复（`AGENT_REPAIR_MAX_ATTEMPTS`，部署时可降为 1–3，Run 创建时固化）；明确失败后自动重新诊断，需要新依据才继续，高风险动作逐次审批；超过运行期限（`AGENT_RUN_MAX_RUNTIME_MINUTES`，默认 60）后停止自动再诊断，结果由后台跟踪（最长 7 天）。
 - 可观测性：`/metrics` 暴露 `memory.*` 生命周期事件、后台任务与 `remediation.loop_stopped`（含停止原因与已用名额）指标；`/api/v1/memories/activity` 返回候选数量、后台任务状态与命令结果追踪（含"需要后续诊断"标记）。
-- REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动），前端"记忆"入口支持筛选、确认、编辑（生成待确认新版本，旧版本继续召回）与删除。旧案例不迁入 memory；新记忆只来自此后记录的任务或用户输入。
+- REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动/失败任务重试），前端"记忆"入口展示认识、步骤、条件、限制、来源和版本对照，确认的是已查看的具体版本。编辑生成待确认新版本，旧版本继续召回；暂停版本重新确认前不可使用。晚到失败提供“发起后续诊断”入口，失败的记忆任务可手动重试。旧案例不迁入 memory。
 - 旧案例 REST 接口（`/api/v1/fault-cases`、`/api/v1/diagnosis`）与 MCP 案例工具（`list_fault_cases` 等）已删除，调用返回 404；历史工具目录条目保持不可调用。
-- 删除聊天默认保留长期记忆（`memory_policy=keep`）；勾选清除时同事务写入来源抑制标记并暂停派生经验。
+- 删除聊天默认保留长期记忆（`memory_policy=keep`）；勾选清除时撤回来源和受影响正文，多来源经验仅保留独立有效证据并重新审核。保留后也可从记忆详情清除已删除聊天的来源。删除的记忆正文按默认 30 天保留期由到期任务和周期扫描清理。
+- 默认记忆检索使用 SQL 关键词降级。`MEMORY_QDRANT_URL` 与 `MEMORY_EMBEDDING_URL` 单独控制后端记忆的向量检索；MCP 的检索模型档位不会自动打开后端记忆向量配置。Docker 地址分别使用 `http://qdrant:6333` 和 `http://retrieval-models:9010`，宿主机运行使用 `127.0.0.1` 对应端口。模型、维度与指纹配置见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
 ## 常用维护命令
 
