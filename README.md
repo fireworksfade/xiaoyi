@@ -67,7 +67,7 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 
 ## 配置
 
-- 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。
+- 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。`FRONTEND_ORIGINS` 支持逗号分隔多来源，默认允许 `http://localhost:3000` 与 `http://127.0.0.1:3000`。
 - IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
@@ -106,6 +106,14 @@ python -m pytest
 ```
 
 前端测试使用 Vitest 和 Playwright；后端与 MCP 服务测试使用 pytest。Python 需要 3.12 或更高版本。
+
+前后端联调冒烟（需先启动后端 8000 与前端 3000）：
+
+```bash
+python packages/backend/scripts/smoke_frontend_backend.py
+```
+
+默认通过前端同源代理验证登录、会话 CRUD 与 SSE 对话全链路；加 `--api-base http://127.0.0.1:8000/api/v1` 可切换为跨域直连后端（要求 `FRONTEND_ORIGINS` 包含该前端来源）。
 
 数据库迁移会在后端启动流程中按 Alembic 版本执行。升级旧数据库时，迁移会清理已废弃的 workflow 表；历史迁移文件仍保留，用于保证已有数据库能够连续升级。
 
