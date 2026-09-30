@@ -3,8 +3,9 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from pypdf import PdfReader
 from sqlalchemy import select
 
@@ -169,8 +170,15 @@ async def upload_knowledge_document(
     source: str = Form("mqtt_docs"),
     document_id: str = Form(""),
     title: str = Form(""),
-    device_type: str = Form("ESP32"),
+    device_type: str = Form(""),
     service_id: str = Form(""),
+    category: Literal["hardware", "network", "protocol", "software"] | None = Form(None),
+    document_type: Literal[
+        "specification", "manual", "configuration", "api", "troubleshooting", "release_notes"
+    ]
+    | None = Form(None),
+    hardware_version: str = Form("", max_length=120),
+    firmware_version: str = Form("", max_length=120),
 ) -> dict[str, object]:
     if source not in KNOWLEDGE_SOURCES:
         raise HTTPException(status_code=422, detail="KNOWLEDGE_SOURCE_INVALID")
@@ -199,7 +207,11 @@ async def upload_knowledge_document(
             "document_id": final_id,
             "title": final_title[:300],
             "content": text,
-            "device_type": device_type.strip()[:120] or "ESP32",
+            "device_type": device_type.strip()[:120] or None,
+            **({"category": category} if category else {}),
+            **({"document_type": document_type} if document_type else {}),
+            **({"hardware_version": hardware_version.strip()} if hardware_version.strip() else {}),
+            **({"firmware_version": firmware_version.strip()} if firmware_version.strip() else {}),
         },
         read_only=False,
         require_approval=True,
@@ -264,12 +276,17 @@ async def list_knowledge_documents(
     db: Db,
     user: CurrentUser,
     service_id: str = "",
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int | None = Query(None, ge=0),
 ) -> dict[str, object]:
     _, item, _trace = await call_tool(
         db,
         service_id or None,
         LIST_TOOL_NAME,
-        {},
+        {
+            **({"limit": limit} if limit is not None else {}),
+            **({"offset": offset} if offset is not None else {}),
+        },
         read_only=True,
         request_id=request.state.request_id,
     )

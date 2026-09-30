@@ -1,8 +1,10 @@
+import json
 import logging
 import re
 import time
 from typing import Any
 
+from iot_diagnosis.knowledge_taxonomy import default_document_metadata
 from iot_diagnosis.repository_common import iso
 from iot_diagnosis.retrieval.bm25 import (
     delete_fts_document,
@@ -54,6 +56,13 @@ class KnowledgeDocumentMixin:
             document_id = row.get("document_id") or row["source_id"].split("#", 1)[0]
             key = (row["source"], document_id)
             if key not in documents:
+                try:
+                    chunk_metadata = json.loads(row.get("metadata_json") or "{}")
+                    metadata = chunk_metadata.get("metadata", {})
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                except (ValueError, AttributeError, TypeError):
+                    metadata = {}
                 documents[key] = {
                     "source": row["source"],
                     "document_id": document_id,
@@ -62,6 +71,17 @@ class KnowledgeDocumentMixin:
                     "chunk_count": 0,
                     "content_chars": 0,
                     "created_at": row["created_at"],
+                    **default_document_metadata(row["source"], document_id),
+                    **{
+                        field: metadata[field]
+                        for field in (
+                            "category",
+                            "document_type",
+                            "hardware_version",
+                            "firmware_version",
+                        )
+                        if isinstance(metadata.get(field), str) and metadata[field]
+                    },
                 }
             item = documents[key]
             item["chunk_count"] += 1
@@ -274,8 +294,7 @@ class KnowledgeDocumentMixin:
             raise ValueError("INVALID_REQUEST")
         started = time.perf_counter()
         documents = [
-            self._knowledge_vector_document(item)
-            for item in self.knowledge_documents(selected)
+            self._knowledge_vector_document(item) for item in self.knowledge_documents(selected)
         ]
         items = documents
         indexed = self._qdrant_write_many(items)

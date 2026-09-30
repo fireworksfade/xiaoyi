@@ -21,6 +21,7 @@ from iot_diagnosis.chunking import (
     parse_blocks,
     token_counter_from_env,
 )
+from iot_diagnosis.knowledge_taxonomy import default_document_metadata
 from iot_diagnosis.repository import DiagnosisRepository
 
 DOCUMENT_SOURCES = {"mqtt_docs", "wifi_docs", "sensor_docs", "device_docs"}
@@ -102,6 +103,10 @@ def ingest_text(
     device_type: str | None = "ESP32",
     chunk_size: int | None = None,
     overlap: int | None = None,
+    category: str | None = None,
+    document_type: str | None = None,
+    hardware_version: str | None = None,
+    firmware_version: str | None = None,
 ) -> dict[str, Any]:
     if source not in DOCUMENT_SOURCES:
         raise ValueError("INVALID_DOCUMENT_SOURCE")
@@ -109,6 +114,21 @@ def ingest_text(
         raise ValueError("DOCUMENT_ID_INVALID")
     if not title.strip():
         raise ValueError("DOCUMENT_TITLE_INVALID")
+    if category is not None and category not in {"hardware", "network", "protocol", "software"}:
+        raise ValueError("DOCUMENT_CATEGORY_INVALID")
+    if document_type is not None and document_type not in {
+        "specification",
+        "manual",
+        "configuration",
+        "api",
+        "troubleshooting",
+        "release_notes",
+    }:
+        raise ValueError("DOCUMENT_TYPE_INVALID")
+    if any(
+        value is not None and len(value) > 120 for value in (hardware_version, firmware_version)
+    ):
+        raise ValueError("DOCUMENT_VERSION_INVALID")
     chunks = chunk_document(
         content,
         document_id=document_id,
@@ -117,6 +137,22 @@ def ingest_text(
         chunk_size=chunk_size,
         overlap=overlap,
     )
+    # 标签与结构元数据一起持久化，保留原来的检索来源和文档标识。
+    document_metadata = {
+        **default_document_metadata(source, document_id),
+        **{
+            key: value
+            for key, value in {
+                "category": category,
+                "document_type": document_type,
+                "hardware_version": hardware_version,
+                "firmware_version": firmware_version,
+            }.items()
+            if value
+        },
+    }
+    for chunk in chunks:
+        chunk.metadata = {**(chunk.metadata or {}), **document_metadata}
     return repository.replace_knowledge_document(
         source=source,
         document_id=document_id,

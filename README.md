@@ -144,6 +144,14 @@ macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bi
 
 IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 执行。升级时直接删除旧故障案例与反馈表，并取消旧案例向量重试任务；官方文档、诊断和设备数据保留。
 
+## 知识库分类
+
+知识库按「设备与硬件」「网络与连接」「协议与通信」「平台与软件」展示，空分类自动隐藏。
+原有 MQTT、WiFi、传感器和设备检索来源保留；展示领域独立保存，传感器与设备资料合并到硬件领域，
+随项目提供的 OTA、日志、内存、事件循环等资料归入软件领域。已有资料无需重新摄取即可使用新分类。
+上传文档可填写适用设备、文档类型、硬件版本和固件版本，标签保存在分块元数据中；列表支持搜索标题、文档 ID 和设备型号。
+分类显示文档数量，分块数与字符数在「文档详情」中查看。现场案例与任务经验继续在「记忆」中管理。
+
 ## 记忆（Memory）
 
 旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，最新验收证据见 [`docs/memory-repair-report-20260930.md`](docs/memory-repair-report-20260930.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，真实 MySQL、浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。

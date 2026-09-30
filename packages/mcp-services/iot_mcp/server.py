@@ -266,6 +266,10 @@ def ingest_knowledge_text(
     device_type: Annotated[str | None, Field(max_length=120)] = "ESP32",
     chunk_size: Annotated[int | None, Field(ge=64, le=4000)] = None,
     overlap: Annotated[int | None, Field(ge=0, le=1000)] = None,
+    category: str | None = None,
+    document_type: str | None = None,
+    hardware_version: Annotated[str | None, Field(max_length=120)] = None,
+    firmware_version: Annotated[str | None, Field(max_length=120)] = None,
 ) -> dict[str, Any]:
     """摄取已提取的文本或 Markdown，按结构感知 + token 分块后写入知识库和向量索引。"""
     try:
@@ -279,6 +283,10 @@ def ingest_knowledge_text(
                 device_type=device_type,
                 chunk_size=chunk_size,
                 overlap=overlap,
+                category=category,
+                document_type=document_type,
+                hardware_version=hardware_version,
+                firmware_version=firmware_version,
             )
         )
     except ValueError as exc:

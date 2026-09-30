@@ -109,7 +109,15 @@ def test_upload_knowledge_document_ingests_via_mcp(monkeypatch) -> None:
             files={
                 "file": ("mqtt guide.md", "# MQTT 指南\n\n保持心跳。".encode(), "text/markdown")
             },
-            data={"source": "mqtt_docs", "service_id": server_id},
+            data={
+                "source": "mqtt_docs",
+                "service_id": server_id,
+                "category": "protocol",
+                "document_type": "configuration",
+                "device_type": "MODEL-X",
+                "hardware_version": "Rev. B",
+                "firmware_version": "2.0",
+            },
             headers={"X-CSRF-Token": csrf},
         )
         assert response.status_code == 201
@@ -120,6 +128,19 @@ def test_upload_knowledge_document_ingests_via_mcp(monkeypatch) -> None:
         # 文件名含空格仍可作为合法 document_id；标题从文件名推导
         assert captured["title"] == "mqtt guide"
         assert captured["source"] == "mqtt_docs"
+        assert captured["category"] == "protocol"
+        assert captured["document_type"] == "configuration"
+        assert captured["device_type"] == "MODEL-X"
+        assert captured["hardware_version"] == "Rev. B"
+        assert captured["firmware_version"] == "2.0"
+
+        invalid = client.post(
+            "/api/v1/knowledge-documents",
+            files={"file": ("doc.md", b"content", "text/markdown")},
+            data={"category": "unknown", "service_id": server_id},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert invalid.status_code == 422
 
 
 def test_upload_requires_ingest_tool_policy(monkeypatch) -> None:
