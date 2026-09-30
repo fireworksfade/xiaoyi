@@ -80,6 +80,8 @@ async def retry_run(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     if original.status != RunStatus.FAILED or not is_retryable(original.error_code):
         raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
+    from app.services.harness import require_enabled
+    await require_enabled(db, user.id, (original.runtime_state or {}).get("harness_instance"))
     source_message = await db.get(Message, original.user_message_id)
     if not source_message:
         raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
@@ -100,7 +102,9 @@ async def retry_run(
         user_message_id=message.id,
         status=RunStatus.QUEUED,
         queued_at=now,
-        runtime_state={"repair_budget": pinned_budget()},
+        runtime_state={"repair_budget": pinned_budget(), "harness_instance":
+                       request.headers.get("X-Xiaoyi-Harness-Instance") or
+                       (original.runtime_state or {}).get("harness_instance")},
     )
     db.add(retried)
     conversation = await db.get(Conversation, original.conversation_id)

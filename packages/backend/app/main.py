@@ -114,7 +114,11 @@ async def lifespan(app: FastAPI):
         memory_stop = asyncio.Event()
         memory_task = asyncio.create_task(worker_loop(memory_stop), name="memory-worker")
     await seed_users()
+    from app.services.harness import lease_watchdog
+    harness_watchdog = asyncio.create_task(lease_watchdog(app), name="harness-leases")
     yield
+    harness_watchdog.cancel()
+    await asyncio.gather(harness_watchdog, return_exceptions=True)
     if memory_task is not None and memory_stop is not None:
         memory_stop.set()
         try:

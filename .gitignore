@@ -33,6 +33,7 @@ out/
 coverage/
 playwright-report/
 test-results/
+/packages/harness-plugin/lib/
 
 # Local archives, logs, and editor metadata
 *.tar.gz

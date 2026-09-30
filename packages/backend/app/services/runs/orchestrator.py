@@ -143,6 +143,8 @@ async def _stream_with_context_recovery(
 
 async def execute_claimed_run(run_id: str) -> None:
     """执行已处于 RUNNING 的 run（由 Dispatcher 或 legacy 入口认领后调用）。"""
+    from app.services.harness import assert_run_enabled
+    await assert_run_enabled(run_id)
     settings = get_settings()
     DEFAULT_HOOKS.set_timeout_ms(settings.hook_timeout_ms)
     final_content = ""

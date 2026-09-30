@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "description": "Xiaoyi IoT Platform - Monorepo",
-  "workspaces": ["packages/frontend"],
+  "workspaces": ["packages/frontend", "packages/harness-plugin"],
   "scripts": {
+    "plugin:build": "npm run build --workspace=packages/harness-plugin",
+    "plugin:test": "npm test --workspace=packages/harness-plugin",
+    "plugin:test:browser": "npm run test:browser --workspace=packages/harness-plugin",
+    "plugin:pack": "npm run pack:release --workspace=packages/harness-plugin",
     "dev": "npm run dev --workspace=packages/frontend --",
     "build": "npm run build --workspace=packages/frontend --",
     "start": "npm run start --workspace=packages/frontend --",

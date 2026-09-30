@@ -137,6 +137,8 @@ class OpenAIAgentsRuntime:
                 arguments: dict[str, Any] | None,
                 meta: dict[str, Any] | None = None,
             ) -> CallToolResult:
+                from app.services.harness import assert_run_enabled
+                await assert_run_enabled(runtime_run_id)
                 correlation.begin_tool_call(tool_name, arguments)
                 try:
                     prepared = correlation.prepare_arguments(tool_name, arguments)

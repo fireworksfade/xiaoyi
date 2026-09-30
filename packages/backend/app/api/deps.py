@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import Cookie, Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,10 +27,12 @@ async def current_session(
     return record
 
 
-async def current_user(db: Db, session: Annotated[Session, Depends(current_session)]) -> User:
+async def current_user(request: Request, db: Db, session: Annotated[Session, Depends(current_session)]) -> User:
     user = await db.get(User, session.user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_DISABLED")
+    from app.services.harness import HEADER, instance_id, require_enabled
+    await require_enabled(db, user.id, instance_id(request.headers.get(HEADER)))
     return user
 
 

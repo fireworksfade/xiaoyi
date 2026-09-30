@@ -71,6 +71,25 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 - IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
+## 可选扩展：DeepSeek Harness Desktop 插件
+
+小忆平台可以独立运行。需要在 DeepSeek Harness Desktop 中使用时，可额外安装 [`packages/harness-plugin`](packages/harness-plugin/README.md) 中的插件；插件 **0.2.0** 当前适配 Desktop **0.2.0-rc.2**。
+
+插件登录小忆平台后，把后端已启用的设备、知识、诊断和记忆工具注册到 **Harness 主对话**。主对话使用 Harness 当前配置的 DeepSeek 模型选择工具并回答，工具调用不会启动小忆后端的聊天 Agent；诊断工具内部的专业诊断服务仍按 IoT MCP 的独立配置运行。平台的数据、权限、修复预算、记忆和审计继续由原服务负责。
+
+在仓库根目录构建安装包：
+
+```bash
+npm ci
+npm run plugin:build
+npm run plugin:test
+npm run plugin:pack
+```
+
+安装包输出到 `output/xiaoyi-dsh-iot-0.2.0.tgz`。在 Desktop 插件页安装并开启“小忆 IoT”，从侧栏连接小忆账号，然后回到 Harness 主对话发送消息，例如“用小忆查询 ESP32_05 的 MQTT 状态，只做查询”。默认主对话接入不需要运行前端；查看数据、上传知识或处理人工审批时，再启动前端并打开可选的数据与审批面板。
+
+插件支持 Desktop 原生开关。关闭会撤销工具和连接、停止关联任务，并保留平台数据；重新开启需再次登录。高风险提案与记忆候选仍由用户确认。安装路径、地址和生命周期详见 [插件说明](packages/harness-plugin/README.md) 与 [接入说明](docs/harness-plugin.md)。已完成 Windows 主对话设备查询、知识／记忆检索和开关验证，范围见 [验证记录](docs/harness-plugin-validation.md)。
+
 ## 检索模型档位
 
 在 Portable 档位之上叠加 `compose.retrieval-models.yaml`，把检索切换到本地 Docker 内的 Qwen3 模型服务：
@@ -168,6 +187,27 @@ IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 
 - 默认记忆检索使用 SQL 关键词降级。`MEMORY_QDRANT_URL` 与 `MEMORY_EMBEDDING_URL` 单独控制后端记忆的向量检索；MCP 的检索模型档位不会自动打开后端记忆向量配置。Docker 地址分别使用 `http://qdrant:6333` 和 `http://retrieval-models:9010`，宿主机运行使用 `127.0.0.1` 对应端口。模型、维度与指纹配置见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
 ## 常用维护命令
+
+### 更新 Docker 服务
+
+当前开发 Compose 将后端与 IoT MCP 的源码、脚本和迁移以只读方式挂载到容器。仅修改这些文件时，拉取代码后重启对应服务即可加载更新；容器启动命令会先执行数据库迁移：
+
+```bash
+git pull --ff-only
+docker compose restart backend iot-mcp
+docker compose exec -T backend python -m alembic current
+docker compose ps
+```
+
+更新 Python 依赖、Dockerfile 或 Compose 配置时，需要重新构建并应用服务配置：
+
+```bash
+docker compose up -d --build backend iot-mcp
+```
+
+如果使用检索模型档位，维护命令继续带上原先使用的 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。插件接入要求后端迁移至少为 `0010_harness_connections`，可在 `/docs` 核对 `/api/v1/harness/native/*` 接口。设备、知识和记忆数据保存在命名卷中。
+
+### 日志与停止
 
 ```bash
 docker compose logs -f backend iot-mcp

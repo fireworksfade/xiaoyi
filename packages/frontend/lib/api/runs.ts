@@ -1,4 +1,4 @@
-import { request, API_BASE_URL, ApiError } from './client';
+import { request, backendFetch, ApiError } from './client';
 
 export type AgentEvent = {
   id: number;
@@ -70,7 +70,7 @@ export async function streamAgentRun(
   runId: string,
   onEvent: (event: AgentEvent) => void,
 ) {
-  const response = await fetch(`${API_BASE_URL}/agent-runs/${runId}/events`, {
+  const response = await backendFetch(`/agent-runs/${runId}/events`, {
     credentials: 'include',
     headers: { Accept: 'text/event-stream' },
   });

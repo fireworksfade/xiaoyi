@@ -169,7 +169,8 @@ async def submit_message(
         user_message_id=message.id,
         status=RunStatus.QUEUED,
         queued_at=datetime.now(timezone.utc),
-        runtime_state={"repair_budget": pinned_budget()},
+        runtime_state={"repair_budget": pinned_budget(),
+                       "harness_instance": request.headers.get("X-Xiaoyi-Harness-Instance")},
     )
     db.add(run)
     if conversation.title == "新对话":
