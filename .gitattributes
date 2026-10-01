@@ -1,0 +1,3 @@
+# Archify receipts bind the exact bytes of the HTML and JSON artifacts.
+.archify/**/*.html text eol=lf
+.archify/**/*.json text eol=lf

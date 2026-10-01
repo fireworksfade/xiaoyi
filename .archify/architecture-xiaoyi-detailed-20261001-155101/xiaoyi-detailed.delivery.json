@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "5c70ba8c-3b75-458f-a2d4-96ffb2f61c8f",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\last-work\\.archify\\architecture-xiaoyi-detailed-20261001-155101\\candidate.json",
+  "output": "D:\\last-work\\.archify\\architecture-xiaoyi-detailed-20261001-155101\\xiaoyi-detailed.html",
+  "specification": {
+    "sha256": "f6f99dd11631fe5c48b58bf2b82b37c60e68618b29aa5ba43afc654404aabd75",
+    "bytes": 21272
+  },
+  "artifact": {
+    "sha256": "0c382160ad8e107538c83fbd8919707c8252d3a7b38306aa4de941ffd068d053",
+    "bytes": 827036
+  }
+}
