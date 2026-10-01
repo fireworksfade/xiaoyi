@@ -63,13 +63,13 @@ def _insert(repo: DiagnosisRepository) -> None:
         db.execute(
             """INSERT INTO external_sync_outbox
             (id, dedupe_key, component, operation, payload_json, attempts, created_at, updated_at, completed_at)
-            VALUES ('out-done', 'k1', 'mysql', 'add_log', '{}', 0, ?, ?, ?)""",
+            VALUES ('out-done', 'k1', 'qdrant', 'upsert', '{}', 0, ?, ?, ?)""",
             (_iso(10), _iso(10), _iso(8)),
         )
         db.execute(
             """INSERT INTO external_sync_outbox
             (id, dedupe_key, component, operation, payload_json, attempts, created_at, updated_at)
-            VALUES ('out-pending', 'k2', 'mysql', 'add_log', '{}', 5, ?, ?)""",
+            VALUES ('out-pending', 'k2', 'qdrant', 'upsert', '{}', 5, ?, ?)""",
             (_iso(30), _iso(30)),
         )
 

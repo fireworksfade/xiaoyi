@@ -65,9 +65,6 @@ ACTIONS: dict[str, dict[str, Any]] = {
     },
 }
 
-PARAMETER_TYPES = {"integer", "string"}
-
-
 def get_action(action: str) -> dict[str, Any] | None:
     return ACTIONS.get(action)
 

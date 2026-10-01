@@ -1,4 +1,4 @@
-"""轻量级有序迁移框架（SQLite 与 MySQL）。
+"""轻量级 SQLite 有序迁移框架。
 
 约束（specs WP-05）：
 - 普通 Repository 构造只验证版本（空库除外）；迁移通过 scripts/migrate.py 或
@@ -202,68 +202,3 @@ class SQLiteMigrationRunner:
             "sqlite backup written",
             extra={"event": "sqlite_backup", "service": self.service, "target": target},
         )
-
-
-@dataclass(frozen=True)
-class MySqlMigration:
-    version: int
-    name: str
-    upgrade: Callable[[object], None]  # 接收 DB cursor，可执行语句并检查列
-    checksum: str
-
-    @classmethod
-    def of(cls, module: object) -> "MySqlMigration":
-        typed_module = cast(Any, module)
-        source = inspect.getsource(typed_module)
-        return cls(
-            version=int(typed_module.version),
-            name=str(typed_module.name),
-            upgrade=typed_module.upgrade,
-            checksum=hashlib.sha256(source.encode("utf-8")).hexdigest(),
-        )
-
-
-class MySQLMigrationRunner:
-    """外部 MySQL schema 的有序迁移（DDL 幂等，版本记录在库内）。
-
-    migration.upgrade(execute) 通过注入的 execute 逐条执行语句，
-    版本行在迁移内容完成后写入；失败不记录版本，DDL 幂等可安全重试。
-    """
-
-    def __init__(self, migrations: Sequence[MySqlMigration], *, service: str):
-        ordered = sorted(migrations, key=lambda item: item.version)
-        versions = [item.version for item in ordered]
-        if versions != list(range(1, len(ordered) + 1)):
-            raise MigrationError(
-                "MIGRATION_SEQUENCE_INVALID",
-                f"{service}: MySQL 迁移版本必须从 1 连续递增，当前 {versions}",
-            )
-        self.migrations = ordered
-        self.service = service
-
-    def ensure(self, connect: Callable[[], object]) -> None:
-        with cast(Any, connect()) as connection:
-            cursor = connection.cursor()
-            cursor.execute(MIGRATIONS_TABLE_DDL)
-            connection.commit()
-
-            cursor.execute("SELECT version, checksum FROM schema_migrations")
-            rows = cursor.fetchall()
-            applied = {int(row[0]): row[1] for row in rows}
-            for migration in self.migrations:
-                expected = applied.get(migration.version)
-                if expected and expected != migration.checksum:
-                    raise MigrationError(
-                        "MIGRATION_CHECKSUM_MISMATCH",
-                        f"{self.service}: MySQL migration "
-                        f"{migration.version}_{migration.name} 已应用但内容变化",
-                    )
-                if expected:
-                    continue
-                migration.upgrade(cursor)
-                cursor.execute(
-                    "INSERT INTO schema_migrations (version, name, checksum, applied_at) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (migration.version, migration.name, migration.checksum, utc_now_iso()),
-                )
-                connection.commit()

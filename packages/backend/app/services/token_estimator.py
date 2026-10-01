@@ -10,17 +10,9 @@
 
 from __future__ import annotations
 
-from typing import Protocol
-
 ASCII_CHARS_PER_TOKEN = 4.0
 NON_ASCII_CHARS_PER_TOKEN = 1.5
 MESSAGE_OVERHEAD_TOKENS = 8
-
-
-class TokenEstimator(Protocol):
-    def estimate_text(self, text: str) -> int: ...
-
-    def estimate_message(self, role: str, content: str) -> int: ...
 
 
 class ConservativeTokenEstimator:

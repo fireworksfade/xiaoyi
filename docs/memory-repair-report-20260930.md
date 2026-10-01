@@ -1,5 +1,7 @@
 # Memory 修复与复验报告
 
+> 历史范围说明（2026-10-01）：本报告保留当时的验证结果。当前项目已移除 MySQL 依赖、迁移、镜像重建及相关测试；其中的 MySQL 记录和旧重建命令不代表当前支持范围。当前业务数据库使用 SQLite，知识向量使用 Qdrant。
+
 日期：2026-09-30（Asia/Shanghai）
 
 对应规格：`memory-replacement-spec.md` v1.2

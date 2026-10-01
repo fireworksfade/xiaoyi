@@ -1,69 +1,32 @@
-# 项目清理与结构优化建议
+# 当前项目结构与维护入口
 
-2026-10-01 更新：前端重复业务组件、两种工具入口的执行编排、知识库与记忆的检索基础代码已收敛，当前结构与安装配置见 [架构简化说明](architecture-simplification.md)。下文保留为 2026-09-24 的清理记录和当时建议；其中“两仓库”与旧目录描述已不代表当前 monorepo 结构。
+项目是一个 monorepo，根目录统一管理 npm workspaces、锁文件与 Docker Compose。
 
-## 本次清理（2026-09-24）
+| 目录 | 职责 | 入口 |
+| --- | --- | --- |
+| `packages/frontend` | 对话、知识库、记忆与设置界面 | `app/` 路由，`features/` 业务组件，`hooks/` 状态，`lib/api/` 请求 |
+| `packages/backend` | 认证、Agent 运行、审批、记忆、审计 | `app/main.py`，`app/cli.py`，`app/services/runs/` |
+| `packages/mcp-services` | 设备诊断与控制、知识检索、模拟器、可选模型服务 | `iot_mcp/server.py`，`iot_diagnosis/simulator/__main__.py` |
+| `packages/retrieval` | 共用 embedding 与 Qdrant HTTP 客户端 | `xiaoyi_retrieval/` |
+| `packages/harness-plugin` | Harness 主对话原生工具和可选数据面板 | `src/index.ts`，`src/client/index.tsx` |
+| `deploy` | MQTT Broker 配置 | `mosquitto.conf` |
+| `docs` | 当前设计、操作说明和注明日期的验收记录 | 本文、架构简化说明、memory 规格及验收报告 |
+| `.archify` | README 链接的交互式架构图、可编辑源文件与验证收据 | 图内源码证据固定于生成时的提交 |
 
-- 根据 TypeScript 语法树中的本地模块引用，从业务代码、路由、测试与配置递归追踪依赖，删除不可达的 48 个模板 UI 组件及 `hooks/use-mobile.ts`。
-- `frontend/components/ui/` 保留 11 个实际使用的基础组件：badge、button、dialog、dropdown-menu、input、label、select、sheet、switch、tabs、textarea。
-- 移除仅服务于被删组件或未被源码使用的 7 项直接依赖：`@shadcn/react`、`cmdk`、`date-fns`、`embla-carousel-react`、`input-otp`、`react-day-picker`、`react-resizable-panels`，同步更新 npm 锁文件。某些包仍可能作为其他工具的传递依赖出现。
-- 补充 `.mypy_cache/`、`.ruff_cache/` 的 Git 忽略规则。
+## 数据与配置
 
-`.tmp/` 中的验收结果、`tmp/` 和 `output/` 中的个人文档与素材均保留；它们不是可确认无用的缓存。数据库、本地环境变量、迁移、测试、工作记录和设计规格也保留。`mcp-services/` 是独立 Git 仓库，本次没有修改其内容。
+主后端、诊断和控制分别使用 SQLite；知识向量存于 Qdrant。历史 SQLite 与 Alembic 迁移必须保留，已有库的版本连续性和 checksum 校验依赖这些文件。
 
-验证结果：前端 lint、格式检查、类型检查、28 项单元测试、1 项 Playwright 端到端测试和生产构建全部通过。锁文件移除 35 个包条目，保留包的版本与完整性校验值未变。后端代码未改动，本次未重跑后端测试。
+诊断与控制只运行一个 IoT MCP 服务，默认端口 9000。`external/` 和 `simulator/` 是实际实现；已删除同名 `.py` 兼容文件，原包导入和 `python -m iot_diagnosis.simulator` 命令仍可使用。
 
-后端缓存批量删除命令被自动审批策略阻止，未执行；`.mypy_cache/`、`.ruff_cache/`、`.pytest_cache/` 和 Python 字节码缓存仍保留。
+根 `.env`、各包的本地 `.env*`、运行数据库和 `data/` 属于本机状态，不随源码提交。`node_modules/` 与 `.venv/` 属于运行依赖；`output/`、`tmp/` 和 `.tmp/` 还包含安装包、个人资料、备份和验收产物，不能作为缓存统一删除。
 
-## 建议按以下顺序优化
+## 构建与验证
 
-### 1. 前端按业务组织，优先拆分大组件
+在根目录执行 `npm ci`，前端使用 `npm run typecheck`、`npm run lint`、`npm test`、`npm run build`；插件使用 `npm run plugin:build` 和 `npm run plugin:test`。
 
-`settings-sheet.tsx` 和 `knowledge-dialog.tsx` 各有数百行，包含多个功能；`lib/api.ts` 集中了不同业务的请求与类型。下一步建议：
+在 backend 或 mcp-services 目录执行 `python -m pip install -e ../retrieval -e ".[dev]"`，再执行 `python -m pytest`。共享检索库的独立测试位于 `packages/retrieval/tests`。
 
-- 将设置中的模型配置、MCP 服务管理拆成独立组件，保留一个薄的面板入口。
-- 知识库只保留官方文档管理；故障经验与情景已迁入独立「记忆」模块。
-- 将 API 客户端拆成共用请求层及 auth、conversations、runs、knowledge、mcp 模块；共用层统一处理 Cookie、CSRF、错误解析。
-- 业务组件和 Hook 放在同一个 feature 中，测试随模块放置；`components/ui/` 只保留跨业务复用的基础组件。
+当前 IoT MCP wheel 包含 `common`、`iot_diagnosis`、`iot_control`、`iot_mcp` 和 `model_service`。旧子仓库中无法被 GitHub 发现、安装路径也已失效的嵌套 CI 配置已删除。
 
-建议目标结构（尚未执行迁移）：
-
-```text
-frontend/
-├── app/                       # 路由、布局、后端代理
-├── features/
-│   ├── conversation/          # 会话界面、消息与运行 Hook、测试
-│   ├── knowledge/             # 官方技术文档管理
-│   ├── settings/              # 模型与 MCP 配置
-│   └── memory/                # 记忆管理（情景/经验、候选确认）
-├── components/ui/             # 共享基础组件
-├── lib/
-│   ├── api/                   # 请求基础设施与各业务 API
-│   ├── datetime.ts
-│   └── utils.ts
-├── test/                      # 全局测试初始化、通用测试工具
-└── e2e/                       # 跨功能端到端流程
-```
-
-### 2. 后端先明确运行模块边界，再考虑目录分组
-
-`app/services/runs.py` 同时协调事件、上下文恢复、工具提案。建议逐步抽出有独立职责的代码，保持 `execute_claimed_run` 为清晰的编排入口。现有 dispatcher、recovery、state、event_buffer 已经分离，应优先复用这些边界，避免新建重复服务。
-
-运行相关模块较多，可在后续独立重构中归入 `services/runs/` 包；迁移时保留现有导入接口，重点验证取消、恢复、SSE、审批与事务边界。`models.py` 和 `schemas.py` 暂时仍可管理，无须为了目录对称立即拆分。历史数据库迁移必须保留。
-
-### 3. 区分稳定文档、工作记录和个人产物
-
-- README 保留启动步骤与导航，稳定的架构和部署说明逐步放入 `docs/`。
-- 当前根目录 `WORK_STATE.md` 已较长，建议按月份归档到 `docs/history/`，根文件只保留当前状态和链接；归档前核对旧记录中的相对路径。
-- `specs/` 保留需求与验收依据，修正 README 中只描述 RAG/IoT MCP 的旧说明。
-- 个人简历与面试资料建议另行迁出项目；当前继续忽略，避免随源码提交。验收数据确认已归档后再清理。
-
-### 4. 保持两个仓库的部署边界
-
-`mcp-services/` 被主仓库忽略，却由根 Compose 构建使用。建议在发布说明中记录主仓库与 MCP 仓库验证通过的提交 SHA，减少各自更新造成的组合差异；如以后采用 submodule，应单独迁移并更新 CI 和克隆说明。
-
-根目录 Compose 文件目前承担统一入口，路径与 build context 有实际依赖，暂不搬动。`frontend/.openai/hosting.json`、`vite.config.ts` 和 `next.config.ts` 属于当前构建配置，不能仅因名称看似模板文件而删除。
-
-### 5. 后续清理以引用和验证为准
-
-新增 UI 组件按需引入；删除组件后检查独占依赖并同步锁文件。目录迁移分批进行，每批运行 lint、格式检查、类型检查、相关单元测试、E2E 和构建。缓存目录可重新生成；验收证据、用户文件、运行数据不能只凭目录名判断为垃圾。
+2026-10-01 全项目清理范围与验证记录见 [清理记录](project-cleanup-20261001.md)。架构与共享配置见 [架构简化说明](architecture-simplification.md)。

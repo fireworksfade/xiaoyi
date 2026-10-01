@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import update
@@ -81,14 +80,6 @@ async def stop_queued_run(run_id: str) -> bool:
         )
         await db.commit()
         return True
-
-
-async def touch_progress(run_id: str, when: datetime | None = None) -> None:
-    async with SessionFactory() as db:
-        await db.execute(
-            update(AgentRun).where(AgentRun.id == run_id).values(last_progress_at=when or utc_now())
-        )
-        await db.commit()
 
 
 async def mark_finished(

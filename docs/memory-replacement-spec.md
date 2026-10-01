@@ -524,7 +524,7 @@ flowchart TD
 - 删除旧工具 `list_fault_cases`、`search_fault_cases`、`add_verified_fault_case`、`delete_fault_case`。
 - 从 `repositories/knowledge_cases.py` 删除案例 CRUD 和案例文档构造，可将剩余文件按文档职责重命名并修正引用。
 - 从 `router.py`、`retrieval/hybrid.py`、`retrieval/__init__.py`、`reranker.py`、`llm.py`、`diagnosis.py` 删除 `fault_cases` 来源、强制路由、加分和模板。
-- 从 `rebuild.py`、external sync、种子数据和重试队列去除旧案例索引路径。
+- 从向量重建、external sync、种子数据和重试队列去除旧案例索引路径。
 - 删除专用的 `scripts/generate_fault_cases.py`、`scripts/dedup_fault_cases.py`；若故障注入脚本兼具其他用途，仅保留独立可用部分并改验收目标。
 
 ### 11.2 主后端
@@ -547,14 +547,14 @@ flowchart TD
 
 - 清理迁移直接删除 MCP 的 `fault_case`、`fault_case_feedback` 及专属索引，不要求导入清单。
 - 新增控制库迁移删除 `case_id / case_status / case_attempts / case_error`；保留其他命令字段。使用表重建时显式复制保留列并验证行数/关联。
-- SQLite 主库与已有 MySQL 镜像迁移路径都需要处理；不能只清主库后由镜像/重建恢复旧功能。
+- 业务数据仅存于 SQLite；向量重建以 SQLite 为事实源，不能恢复已退役的旧案例功能。
 - 旧集合可能同时包含文档、设备数据和案例，只按已核对的旧案例 source/document ID 清理；严禁整库删除知识向量。
 - 所有旧 outbox 中的案例操作必须标记取消并从可重试集合移除，防止清理后重新写回。
 
 ## 12. 旧案例直接清理与切换
 
 1. 停止旧案例写入和 MQTT 自动沉淀消费者。
-2. SQLite 与 MySQL 镜像清理迁移直接删除 `fault_case`、`fault_case_feedback` 及专属索引；控制库清理旧案例关联列。
+2. SQLite 清理迁移直接删除 `fault_case`、`fault_case_feedback` 及专属索引；控制库清理旧案例关联列。
 3. 取消旧案例向量 outbox 的待重试操作，按旧案例 source 精确清理向量；文档和设备向量保留。
 4. 验证旧表、旧 API、工具与界面不存在，文档检索、设备诊断、审批和恢复验证正常。
 5. 旧案例不导入 memory；新情景和经验从后续任务与用户输入开始生成。
@@ -659,7 +659,7 @@ flowchart TD
 - [x] AC22：旧 MQTT 发布/处理/持久订阅均退役，成功验证不再产生 case_status/case_id。
 - [x] AC23：旧表/列、旧向量、旧 outbox 清理完成，文档知识库和设备数据不受误删。
 - [x] AC24：原有诊断关联、动作审批、命令执行、恢复验证及官方文档检索回归通过。
-- [x] AC25：新库创建、已有 SQLite 升级、已有 MySQL 镜像升级及失败恢复均有测试。
+- [x] AC25：新库创建、已有 SQLite 升级及迁移失败不推进版本均有测试。
 - [x] AC26：不存在历史待分配区、导入接口或跨用户共享的旧案例记忆。
 - [x] AC27：删除聊天不勾选清除时，长期记忆保留、聊天全文不可访问；勾选后即使有晚到命令结果也不能重新生成被清除内容。
 - [x] AC28：ACK 成功但未验证、状态矛盾、远程未知投递均正确映射；memory 重试不导致新的设备动作。

@@ -1,10 +1,10 @@
-"""外部存储集成 - 向后兼容导入层。
+"""知识向量的 Qdrant 存储与降级路由。
 
 功能已拆分到：
 - qdrant_store.py: Qdrant 向量存储
 - manager.py: ExternalStores 统一管理
 
-注意: MySQL 镜像已移除，数据直接从 SQLite → Qdrant 同步
+知识向量从 SQLite 同步到 Qdrant。
 """
 
 from .manager import ExternalStores

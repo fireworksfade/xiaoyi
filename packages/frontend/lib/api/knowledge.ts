@@ -18,7 +18,6 @@ export type IngestedKnowledgeDocument = {
   source: string;
   document_id: string;
   chunk_count: number;
-  mysql_saved: boolean;
   vector_indexed: boolean;
   sync_status: string;
 };
@@ -78,7 +77,6 @@ export async function deleteKnowledgeDocument(
     source: string;
     document_id: string;
     deleted_chunks: number;
-    mysql_saved: boolean;
     vector_deleted: boolean;
     sync_status: string;
     trace_id: string | null;

@@ -7,11 +7,10 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from pypdf import PdfReader
-from sqlalchemy import select
 
 from app.api.deps import AdminUser, CsrfProtected, CurrentUser, Db
 from app.config import get_settings
-from app.models import MCPPurpose, MCPServer, MCPTool, ToolRiskPolicy
+from app.models import MCPServer, ToolRiskPolicy
 from app.services.mcp_capabilities import resolve_mcp_server
 from app.services.mcp_catalog import invoke_remote_tool
 from app.services.operations import add_audit_log
@@ -59,67 +58,6 @@ def derive_document_id(filename: str) -> str:
         return stem
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"upload-{stamp}-{secrets.token_hex(3)}"
-
-
-async def require_ingest_tool(db: Db, server_id: str) -> None:
-    tool = await db.scalar(
-        select(MCPTool).where(
-            MCPTool.server_id == server_id,
-            MCPTool.original_name == INGEST_TOOL_NAME,
-            MCPTool.enabled.is_(True),
-            MCPTool.risk_policy == ToolRiskPolicy.APPROVAL_REQUIRED,
-        )
-    )
-    if not tool:
-        raise HTTPException(status_code=409, detail="KNOWLEDGE_INGEST_TOOL_NOT_APPROVED")
-
-
-async def active_iot_server(
-    db: Db,
-    service_id: str | None,
-    *,
-    required_tools: set[str] | None = None,
-    require_policy: dict[str, ToolRiskPolicy] | None = None,
-) -> MCPServer:
-    """按能力路由选择 IoT MCP（WP-09）；不再依赖服务创建顺序。
-
-    未传 required_tools 的旧调用退化为：purpose=iot 且至少有一个已启用工具的
-    最老服务（保持既有行为），后续调用点应迁移到显式能力集合。
-    """
-    if required_tools is None:
-        servers = list(
-            (
-                await db.scalars(
-                    select(MCPServer).where(
-                        MCPServer.purpose == MCPPurpose.IOT,
-                        MCPServer.enabled.is_(True),
-                        MCPServer.connection_status == "connected",
-                        MCPServer.deleted_at.is_(None),
-                    )
-                )
-            ).all()
-        )
-        for candidate in servers:
-            tool_names = list(
-                (
-                    await db.scalars(
-                        select(MCPTool.original_name).where(
-                            MCPTool.server_id == candidate.id,
-                            MCPTool.enabled.is_(True),
-                            MCPTool.risk_policy != ToolRiskPolicy.DISABLED,
-                        )
-                    )
-                ).all()
-            )
-            if tool_names:
-                return candidate
-        raise HTTPException(status_code=503, detail="MCP_CAPABILITY_UNAVAILABLE")
-    return await resolve_mcp_server(
-        db,
-        required_tools=required_tools,
-        explicit_server_id=service_id,
-        require_policy=require_policy,
-    )
 
 
 async def call_tool(

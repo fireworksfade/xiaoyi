@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import re
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from xiaoyi_retrieval.embeddings import EmbeddingClient, EmbeddingConfig
 
@@ -152,34 +151,3 @@ def embedding_provider_from_env() -> EmbeddingProvider:
             timeout_seconds=float(os.getenv("DIAGNOSIS_EMBEDDING_TIMEOUT_SECONDS", "20")),
         )
     raise ValueError("EMBEDDING_PROVIDER_INVALID")
-
-
-def retrieval_model_status() -> dict[str, Any]:
-    provider = os.getenv("DIAGNOSIS_EMBEDDING_PROVIDER", "hash").strip().lower()
-    health_url = os.getenv("DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL", "").strip()
-    if provider == "hash" and not health_url:
-        return {"status": "disabled", "provider": "hash"}
-    if not health_url:
-        return {"status": "unavailable", "provider": provider, "error": "NOT_CONFIGURED"}
-    request = Request(health_url, method="GET", headers={"Accept": "application/json"})
-    try:
-        with urlopen(
-            request,
-            timeout=float(os.getenv("DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_TIMEOUT_SECONDS", "3")),
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        status = "ready" if payload.get("status") == "ready" else "unavailable"
-        return {
-            "status": status,
-            "provider": provider,
-            "device": payload.get("device"),
-            "embedding_model": payload.get("embedding_model"),
-            "reranker_model": payload.get("reranker_model"),
-            "dimensions": payload.get("dimensions"),
-        }
-    except (HTTPError, URLError, TimeoutError, ValueError, TypeError) as exc:
-        return {
-            "status": "unavailable",
-            "provider": provider,
-            "error": type(exc).__name__,
-        }

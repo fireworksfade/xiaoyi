@@ -294,7 +294,6 @@ def main() -> None:
 
     os.environ["DIAGNOSIS_LLM_API_KEY"] = ""
     os.environ["DIAGNOSIS_LLM_MODEL"] = ""
-    os.environ["DIAGNOSIS_MYSQL_DSN"] = ""
     live = args.profile == "live-retrieval"
     if not live:
         os.environ["DIAGNOSIS_QDRANT_URL"] = ""

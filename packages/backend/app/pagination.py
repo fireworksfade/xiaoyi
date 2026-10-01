@@ -11,7 +11,6 @@ import base64
 import binascii
 import json
 from datetime import datetime, timezone
-from typing import Any
 
 
 def encode_cursor(created_at: datetime, item_id: str) -> str:
@@ -37,18 +36,3 @@ def decode_cursor(cursor: str | None) -> tuple[datetime, str] | None:
         return created_at, str(payload["id"])
     except (ValueError, binascii.Error, KeyError, TypeError, UnicodeDecodeError):
         return None
-
-
-def page_window(
-    items: list[dict[str, Any]],
-    *,
-    limit: int,
-    created_at_key: str = "created_at",
-    id_key: str = "id",
-) -> dict[str, Any]:
-    """输入为升序一页 + 是否有更早数据；输出分页信封字段。"""
-    if not items:
-        return {"items": [], "next_cursor": None, "has_more": False}
-    oldest = items[0]
-    next_cursor = encode_cursor(oldest[created_at_key], oldest[id_key])
-    return {"items": items, "next_cursor": next_cursor, "has_more": True}

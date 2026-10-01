@@ -27,7 +27,7 @@ def auth_configuration() -> tuple[AuthSettings | None, StaticBearerTokenVerifier
     token = os.getenv("DIAGNOSIS_MCP_BEARER_TOKEN", "").strip()
     if not token:
         return None, None
-    public_url = os.getenv("DIAGNOSIS_MCP_PUBLIC_URL", "http://127.0.0.1:9001").rstrip("/")
+    public_url = os.getenv("DIAGNOSIS_MCP_PUBLIC_URL", "http://127.0.0.1:9000").rstrip("/")
     settings = AuthSettings(
         issuer_url=AnyHttpUrl(public_url),
         resource_server_url=AnyHttpUrl(f"{public_url}/mcp"),

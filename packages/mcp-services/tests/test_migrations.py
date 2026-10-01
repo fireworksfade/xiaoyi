@@ -6,16 +6,13 @@
 
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from common.migrations import (
     Migration,
     MigrationError,
-    MySQLMigrationRunner,
     SQLiteMigrationRunner,
-    load_migration_module,
     load_migrations_from_dir,
 )
 from iot_control.repository import ControlRepository
@@ -94,17 +91,6 @@ def test_populated_legacy_cases_are_deleted_by_cleanup_migration(tmp_path: Path)
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "fault_case" not in tables
         assert "fault_case_feedback" not in tables
-
-
-def test_mysql_cleanup_drops_case_tables() -> None:
-    migration = load_migration_module(
-        _ROOT / "iot_diagnosis" / "mysql_migrations" / "0003_drop_fault_cases.py"
-    )
-    cursor = MagicMock()
-    migration.upgrade(cursor)
-    assert [call.args[0] for call in cursor.execute.call_args_list] == [
-        "DROP TABLE IF EXISTS fault_case_feedback", "DROP TABLE IF EXISTS fault_case"
-    ]
 
 
 @pytest.mark.parametrize("service", ["diagnosis", "control"])
@@ -198,26 +184,22 @@ def test_sequence_must_be_contiguous() -> None:
     assert excinfo.value.code == "MIGRATION_SEQUENCE_INVALID"
 
 
-def test_mysql_runner_reads_rows_from_cursor() -> None:
-    """PyMySQL execute 返回行数，结果必须从 cursor.fetchall 读取。"""
-    cursor = MagicMock()
-    cursor.execute.return_value = 0
-    cursor.fetchall.return_value = []
-    connection = MagicMock()
-    connection.__enter__.return_value = connection
-    connection.cursor.return_value = cursor
-
-    MySQLMigrationRunner([], service="test").ensure(lambda: connection)
-
-    cursor.fetchall.assert_called_once_with()
-
-
-def test_repository_construction_uses_runner(tmp_path: Path) -> None:
+def test_repository_construction_uses_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Repository 构造（auto_migrate 默认）等价于迁移到 head。"""
     repository = DiagnosisRepository(str(tmp_path / "diag.db"))
     status = get_runner("diagnosis").status(str(tmp_path / "diag.db"))
     assert status["pending"] == []
     assert repository.get_device_status("ESP32_05") is not None  # seed 数据生效
+
+    def reject_full_sync(*_args, **_kwargs):
+        raise AssertionError("Repository construction must not scan or sync all documents")
+
+    monkeypatch.setattr(DiagnosisRepository, "knowledge_documents", reject_full_sync)
+    monkeypatch.setattr(DiagnosisRepository, "_external_write", reject_full_sync)
+    fresh = DiagnosisRepository(repository.path)
+    assert fresh.get_device_status("ESP32_05") is not None
 
     ControlRepository(str(tmp_path / "control.db"))
     status = get_runner("control").status(str(tmp_path / "control.db"))

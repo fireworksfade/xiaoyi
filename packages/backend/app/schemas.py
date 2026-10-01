@@ -1,20 +1,11 @@
-from datetime import datetime
-from typing import Any
-
 from pydantic import BaseModel, Field
 
-from app.models import MCPPurpose, RunStatus, ToolRiskPolicy, UserRole
+from app.models import MCPPurpose, ToolRiskPolicy
 
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=200)
-
-
-class UserView(BaseModel):
-    id: str
-    username: str
-    role: UserRole
 
 
 class ConversationCreate(BaseModel):
@@ -25,44 +16,12 @@ class ConversationUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
-class ConversationView(BaseModel):
-    id: str
-    title: str
-    created_at: datetime
-    updated_at: datetime
-
-
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     client_message_id: str = Field(min_length=1, max_length=80)
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     tool_mode: str = Field(default="auto", pattern=r"^(auto|none|selected)$")
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=10)
-
-
-class MessageView(BaseModel):
-    id: str
-    role: str
-    content: str
-    metadata: dict[str, Any]
-    created_at: datetime
-
-
-class RunView(BaseModel):
-    id: str
-    conversation_id: str
-    status: RunStatus
-    final_message_id: str | None
-    error: dict[str, Any] | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class Page(BaseModel):
-    items: list[Any]
-    page: int
-    page_size: int
-    total: int
 
 
 class MCPServerCreate(BaseModel):

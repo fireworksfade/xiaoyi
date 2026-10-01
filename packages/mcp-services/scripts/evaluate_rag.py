@@ -166,7 +166,6 @@ def main() -> None:
     args = parser.parse_args()
     os.environ["DIAGNOSIS_LLM_API_KEY"] = ""
     os.environ["DIAGNOSIS_LLM_MODEL"] = ""
-    os.environ["DIAGNOSIS_MYSQL_DSN"] = ""
     if args.profile == "deterministic":
         os.environ["DIAGNOSIS_QDRANT_URL"] = ""
         os.environ["DIAGNOSIS_EMBEDDING_PROVIDER"] = "hash"

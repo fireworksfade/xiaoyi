@@ -25,7 +25,6 @@ class LogRepositoryMixin:
                     item["timestamp"],
                 ),
             )
-        # MySQL 镜像已移除 - 日志仅存储在 SQLite
 
     def add_fault(self, device_id: str, payload: dict[str, Any]) -> None:
         fault_type = str(payload.get("fault_type") or payload.get("type") or "unknown")

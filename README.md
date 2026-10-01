@@ -16,7 +16,7 @@
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
 
-前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天与 Harness 原生工具入口共用 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断；两种入口各自保留认证、传输和运行事件适配。结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
+前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天与 Harness 原生工具入口共用 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断；两种入口各自保留认证、传输和运行事件适配。目录与维护入口见 [项目结构](docs/project-structure.md)，结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
 
 交互式架构图见 [`小忆 IoT 平台 · 详细架构与运行闭环`](.archify/architecture-xiaoyi-detailed-20261001-155101/xiaoyi-detailed.html)，由 Archify 根据源码生成，展开 27 个组件、32 条关系与 5 个重点视图：会话调度、双入口工具执行、用户记忆、混合检索、审批与设备闭环。克隆仓库后可直接在浏览器打开单文件 HTML，查看源码依据和追踪上下游关系。
 
@@ -59,6 +59,14 @@ npm run dev
 
 项目统一使用 npm workspaces，依赖锁文件为根目录的 `package-lock.json`。安装与 CI 均在根目录运行 `npm ci`；为前端添加依赖使用 `npm install <包名> --workspace=packages/frontend`（开发依赖加 `-D`）。前端目录内也可运行 `npm run dev`。
 
+### 前端运行与容器化
+
+当前推荐的本地开发方式是：Docker Compose 管理后端与基础设施，前端在宿主机通过 `npm run dev` 运行。前端尚未提供 Dockerfile 或 Compose 服务；`docker compose up`、`restart` 和 `down` 均不管理前端进程。
+
+长期运行或交付时，可增加前端容器，将整套服务的启动、依赖版本和自动重启统一到 Compose。开发时仍可保留本机运行。容器内前端需要监听 `0.0.0.0`，服务端代理的 `BACKEND_BASE_URL` 应使用 `http://backend:8000`；浏览器继续访问同源 `/api/backend`。
+
+前端包含 Vinext 服务端渲染与 API 代理，依赖 Cloudflare Workers 运行时。仅托管静态构建文件不足以运行完整应用。`npm run build` 用于构建，当前 `npm start` 调用 `wrangler dev`，属于本地预览；正式部署需明确运行时与后端连接配置。以上容器化方案尚未实现，不能直接作为现有启动步骤使用。
+
 ### 服务地址与检查
 
 | 地址 | 用途 |
@@ -75,8 +83,20 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 ## 配置
 
 - 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。`FRONTEND_ORIGINS` 支持逗号分隔多来源，默认允许 `http://localhost:3000` 与 `http://127.0.0.1:3000`。
-- IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
+- IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)，本地运行示例见 [`packages/mcp-services/.env.example`](packages/mcp-services/.env.example)。诊断与控制共用 `IOT_MCP_HOST` / `IOT_MCP_PORT`（默认 9000）；配置 `DIAGNOSIS_MCP_BEARER_TOKEN` 后，所有 MCP 工具请求均须携带该令牌，`/ready` 保持可用于健康检查。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/.env.example`](packages/backend/.env.example)。
+
+## 数据存储与迁移
+
+当前业务数据库均为 SQLite：主后端使用 `xiaoyi.db`，IoT 诊断使用 `iot_diagnosis.db`，IoT 控制使用 `iot_control.db`。知识向量同步到 Qdrant。项目不再提供 MySQL 连接、镜像同步、迁移或重建入口。
+
+主后端已启用 SQLite WAL 和写入等待超时；IoT 诊断与控制使用各自的 SQLite 连接配置，未显式开启 WAL。当前单机部署可继续使用 SQLite，多实例部署或持续写入竞争需要另行评估数据库方案。
+
+后端迁移由部署命令按 Alembic 版本执行，基础 Compose 的容器启动流程会先迁移再启动应用。升级旧数据库时会清理已废弃的 workflow 表；历史 SQLite 与 Alembic 迁移保留，用于连续升级和 checksum 校验。
+
+IoT MCP 的 SQLite 迁移通过 `python -m scripts.migrate upgrade --service diagnosis` 和 `python -m scripts.migrate upgrade --service control` 执行，基础 Compose 启动时自动运行。升级时直接删除旧故障案例与反馈表，并取消旧案例向量重试任务；官方文档、诊断和设备数据保留。向量重建使用 `rebuild_vector_index` 工具；旧 `scripts.rebuild_external` 命令已移除。
+
+Compose 使用命名卷持久化业务数据库、MQTT 和 Qdrant 数据。普通 `docker compose down` 保留这些卷；`docker compose down -v` 会删除卷及其中的数据。
 
 ## 可选扩展：DeepSeek Harness Desktop 插件
 
@@ -155,7 +175,9 @@ Remove-Item Env:E2E_MEMORY_LIVE, Env:E2E_PYTHON
 
 macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bin/python" npm run test:e2e`。测试会禁用 Wrangler 对 `.env.local` 的覆盖，并在发送消息前核验临时后端标记；不拦截或 mock 记忆 API 响应。运行前关闭同一前端目录已有的 dev 服务，Vinext 同一目录只允许一个 dev 实例。临时测试服务在结束后退出。
 
-2026-09-30 联调结果：
+2026-10-01 全项目清理后的验证：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，Harness 插件 9 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
+
+2026-09-30 联调结果（历史记录）：
 
 | 项目 | 实际结果 |
 | --- | --- |
@@ -163,14 +185,10 @@ macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bi
 | localhost:3000 → localhost:8000 | CORS 预检、凭据、会话 CRUD、SSE 通过 |
 | 完整记忆浏览器流程 | 2 项 Playwright 通过，含既有会话流程；覆盖审核、409 版本冲突、新会话召回和 keep/forget |
 | 后端回归 | 149 passed、1 skipped；真实 MCP 发现与动作工具新参数另行验证通过 |
-| MCP 回归 | 150 passed、5 skipped；其中 2 项 MySQL 实库用例在专用容器已另行通过 |
+| MCP 回归 | 150 passed、5 skipped（历史结果，当前存储与测试范围见上文） |
 | 前端回归 | typecheck、lint、34 项 Vitest、build 全通过 |
 
 首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。详细记忆验证与小样本在线语义评估见 [修复报告](docs/memory-repair-report-20260930.md)。
-
-数据库迁移会在后端启动流程中按 Alembic 版本执行。升级旧数据库时，迁移会清理已废弃的 workflow 表；历史迁移文件仍保留，用于保证已有数据库能够连续升级。
-
-IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 执行。升级时直接删除旧故障案例与反馈表，并取消旧案例向量重试任务；官方文档、诊断和设备数据保留。
 
 ## 知识库分类
 
@@ -182,7 +200,7 @@ IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 
 
 ## 记忆（Memory）
 
-旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，最新验收证据见 [`docs/memory-repair-report-20260930.md`](docs/memory-repair-report-20260930.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，真实 MySQL、浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。
+旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，历史验收证据见 [`docs/memory-repair-report-20260930.md`](docs/memory-repair-report-20260930.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。
 
 - 三层记忆：工作记忆（会话内，不入向量）、情景记忆（一次具体经历，含成功/失败/无结论）、经验记忆（可复用认识与步骤）。同一会话的新 Run 会加载此前任务留下的工作记忆（TTL 默认 24 小时，`MEMORY_WORKING_TTL_HOURS`）。
 - 自动提炼的经验一律先进入候选，用户在界面确认后才参与召回；情景中已收敛的事实性经历可直接作为历史参考。Agent 可用只读的 `search_memory` / `get_memory` 查询当前用户自己的记忆；`propose_memory` 只能创建待确认候选。
@@ -216,7 +234,11 @@ docker compose up -d --build backend iot-mcp
 
 如果使用检索模型档位，维护命令继续带上原先使用的 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。插件接入要求后端迁移至少为 `0010_harness_connections`，可在 `/docs` 核对 `/api/v1/harness/native/*` 接口。设备、知识和记忆数据保存在命名卷中。
 
-### 日志与停止
+### 前端重启、日志与停止
+
+前端在运行 `npm run dev` 的终端按 `Ctrl+C` 停止，再执行 `npm run dev` 重启。更新前端依赖或锁文件后，先在根目录运行 `npm ci`。前端日志显示在该终端中。
+
+Docker 服务的日志与停止：
 
 ```bash
 docker compose logs -f backend iot-mcp

@@ -18,7 +18,6 @@ from app.services.run_state import RUN_INTERRUPTED, append_failure_event, mark_f
 
 logger = logging.getLogger("xiaoyi.run_recovery")
 
-_TERMINAL_STATUSES = {RunStatus.COMPLETED, RunStatus.FAILED}
 _TERMINAL_EVENT_TYPES = {"run.completed", "run.failed"}
 
 
@@ -111,14 +110,3 @@ async def recover_interrupted_runs() -> RecoveryReport:
             extra={"event": "run_recovery_completed", **report.to_dict()},
         )
     return report
-
-
-async def list_recoverable_runs() -> list[str]:
-    """恢复扫描后仍处于 QUEUED 的任务，Dispatcher 启动时需要重新执行。"""
-    async with SessionFactory() as db:
-        runs = await db.scalars(
-            select(AgentRun.id)
-            .where(AgentRun.status == RunStatus.QUEUED)
-            .order_by(AgentRun.created_at, AgentRun.id)
-        )
-        return list(runs.all())

@@ -78,21 +78,6 @@ def chunk_document(
     )
 
 
-def chunk_text(
-    text: str,
-    chunk_size: int | None = None,
-    overlap: int | None = None,
-) -> list[str]:
-    """兼容入口：只返回 chunk 正文列表。"""
-    chunks = chunk_document(
-        text,
-        document_id="doc",
-        chunk_size=chunk_size,
-        overlap=overlap,
-    )
-    return [chunk.content for chunk in chunks]
-
-
 def ingest_text(
     repository: DiagnosisRepository,
     *,

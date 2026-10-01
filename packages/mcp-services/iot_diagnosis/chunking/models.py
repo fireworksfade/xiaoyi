@@ -5,20 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# block_type 取值（Spec §5 推荐集合；heading 为解析期内部块，
-# 不会作为最终 chunk 的 block_type 出现）。
-BLOCK_TYPES = {
-    "heading",
-    "paragraph",
-    "code",
-    "log",
-    "list",
-    "steps",
-    "table",
-    "quote",
-    "mixed",
-}
-
 
 @dataclass
 class Block:

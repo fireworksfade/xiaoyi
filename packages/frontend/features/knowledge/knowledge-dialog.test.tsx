@@ -138,7 +138,6 @@ describe('KnowledgeDialog organization', () => {
       source: 'device_docs',
       document_id: 'new',
       chunk_count: 1,
-      mysql_saved: false,
       vector_indexed: true,
       sync_status: 'complete',
     });

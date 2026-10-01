@@ -14,10 +14,10 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import SessionFactory
 from app.memory.models import MemorySource
-from app.models import AgentRun
 from app.memory.retrieval import search
 from app.memory.schemas import MemorySearch, MemoryWrite
 from app.memory.service import create, digest, owned, tombstoned, view
+from app.models import AgentRun
 
 MEMORY_TOOL_SPECS = [
     {

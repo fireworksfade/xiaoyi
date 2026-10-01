@@ -81,16 +81,15 @@ async def service_lifespan(_server):
         diagnosis_sync_task = asyncio.create_task(retry_external_writes())
         logger.info(f"Diagnosis sync task started (interval: {sync_interval}s)")
 
-    # MARKER_RETENTION
     retention_interval_hours = max(0.0, float(os.getenv("DIAGNOSIS_RETENTION_INTERVAL_HOURS", "24")))
     if retention_interval_hours:
-        retention = RetentionService(diagnosis_repository)
+        retention = RetentionService(diagnosis_repository.path)
 
         async def background_retention() -> None:
             while True:
                 await asyncio.sleep(retention_interval_hours * 3600)
                 try:
-                    await asyncio.to_thread(retention.execute)
+                    await asyncio.to_thread(retention.run)
                 except Exception:
                     logger.exception("Retention execution failed")
 
@@ -138,6 +137,8 @@ mcp = MCPServer(
     description="Combined diagnosis and control services for ESP32 IoT devices",
     version="2.0.0",
     lifespan=service_lifespan,
+    auth=auth_settings,
+    token_verifier=token_verifier,
 )
 
 

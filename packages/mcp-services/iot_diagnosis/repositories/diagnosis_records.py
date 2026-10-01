@@ -52,7 +52,6 @@ class DiagnosisRecordMixin:
                     created_at,
                 ),
             )
-        # MySQL 镜像已移除 - 诊断记录仅存储在 SQLite
 
     def save_diagnosis_error(
         self,

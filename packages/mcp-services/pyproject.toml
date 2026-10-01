@@ -10,7 +10,6 @@ dependencies = [
   "xiaoyi-retrieval==0.1.0",
   "mcp==2.1.1",
   "paho-mqtt==2.1.0",
-  "PyMySQL==1.2.0",
   "pypdf==6.17.0",
   "pydantic==2.12.5",
   "uvicorn==0.41.0",
@@ -20,7 +19,7 @@ dependencies = [
 dev = ["mypy==1.18.2", "pytest==9.0.2", "pytest-asyncio==1.3.0", "ruff==0.14.5"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["common", "iot_diagnosis", "iot_control", "model_service"]
+packages = ["common", "iot_diagnosis", "iot_control", "iot_mcp", "model_service"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
