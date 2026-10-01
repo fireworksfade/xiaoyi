@@ -12,7 +12,7 @@
 | 共享检索库 | `packages/retrieval` | 两个 Python 服务共用的 embedding 与 Qdrant 请求、响应校验；不负责业务数据和权限 |
 | 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
 
-默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载；需要真实语义检索时叠加检索模型档位（Qwen3 主档位，见下文「检索模型档位」），此时 hash + weighted 自动降级为兜底。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
+默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载；需要真实语义检索时叠加检索模型档位（Qwen3 主档位，见下文「检索模型档位」），此时 hash + weighted 自动降级为兜底。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。默认不启动 Qwen3 模型服务，是为了让开发环境无需 GPU、模型下载或较长的冷启动等待即可运行。
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
 
@@ -118,6 +118,8 @@ npm run plugin:pack
 插件支持 Desktop 原生开关。关闭会撤销工具和连接、停止关联任务，并保留平台数据；重新开启需再次登录。高风险提案与记忆候选仍由用户确认。安装路径、地址和生命周期详见 [插件说明](packages/harness-plugin/README.md) 与 [接入说明](docs/harness-plugin.md)。已完成 Windows 主对话设备查询、知识／记忆检索和开关验证，范围见 [验证记录](docs/harness-plugin-validation.md)。
 
 ## 检索模型档位
+
+Qwen3 模型服务没有放在默认 Compose 中，因为首次启动需要下载约 2.5 GiB 模型缓存，并占用约 2.6 GiB 显存；模型加载通常还需要 5–20 分钟。默认 Portable 档位使用 384 维 hash embedding，适合无 GPU、离线或快速开发环境。需要更强的语义检索时，再按下面的命令显式叠加模型档位。
 
 在 Portable 档位之上叠加 `compose.retrieval-models.yaml`，把检索切换到本地 Docker 内的 Qwen3 模型服务：
 
