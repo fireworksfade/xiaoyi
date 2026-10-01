@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "5c70ba8c-3b75-458f-a2d4-96ffb2f61c8f",
+  "deliveryReceiptId": "307d6788-98ac-43b3-99d1-42005f448afa",
   "artifact": {
     "path": "D:\\last-work\\.archify\\architecture-xiaoyi-detailed-20261001-155101\\xiaoyi-detailed.html",
-    "sha256": "0c382160ad8e107538c83fbd8919707c8252d3a7b38306aa4de941ffd068d053",
-    "bytes": 827036
+    "sha256": "65e16da09379df91c383c0989b6e2a0dc9ac3631c6161be7d2be7c71cf18c67f",
+    "bytes": 827227
   },
   "state": {
     "detail": "read",
@@ -18,7 +18,7 @@
   },
   "chrome": {
     "status": "available",
-    "executable": "C:\\Users\\yijia\\AppData\\Local\\ms-playwright\\chromium-1243\\chrome-win64\\chrome.exe"
+    "executable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
   },
   "diagnostics": [],
   "containment": {
@@ -715,7 +715,7 @@
     "contactSheet": null
   },
   "sidecars": {
-    "directory": "D:\\last-work\\.archify\\architecture-xiaoyi-detailed-20261001-155101\\review-3",
+    "directory": "D:\\last-work\\.archify\\architecture-xiaoyi-detailed-20261001-155101\\review-4",
     "receipt": "xiaoyi-detailed.browser-check.json",
     "files": []
   }
