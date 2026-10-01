@@ -34,6 +34,8 @@ coverage/
 playwright-report/
 test-results/
 /packages/harness-plugin/lib/
+packages/backend/build/
+packages/retrieval/build/
 
 # Local archives, logs, and editor metadata
 *.tar.gz
@@ -51,6 +53,7 @@ Thumbs.db
 /output/
 /tmp/
 /gui-test-screenshots/
+.archify/**/snapshot.index
 
 
 # Test scripts and temporary files

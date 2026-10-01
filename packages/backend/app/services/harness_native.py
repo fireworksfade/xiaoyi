@@ -8,11 +8,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.agent.memory_tools import MEMORY_TOOL_SPECS, handle_memory_tool
-from app.agent.remediation_correlation import RemediationCorrelationState
 from app.config import get_settings
 from app.db import SessionFactory
 from app.memory.actions import pinned_budget
-from app.memory.boundary import finish, prepare, rediagnose
 from app.memory.service import run_finished
 from app.models import (
     AgentRun,
@@ -28,6 +26,7 @@ from app.services.harness import require_enabled
 from app.services.mcp_catalog import RETIRED_TOOLS, invoke_remote_tool
 from app.services.operations import add_audit_log
 from app.services.runs.tool_processor import collect_proposal
+from app.services.tool_execution import ToolExecutor, ToolPreparationError
 
 # Approval decisions and administrative writes remain human operations.
 NATIVE_POLICIES = {"read_only", "proposal_only"}
@@ -209,7 +208,7 @@ async def execute_native_tool(app, user, instance, run_id, tool_id, arguments, c
                 raise HTTPException(403, "NATIVE_TOOL_NOT_ALLOWED")
             tool = await db.get(MCPTool, tool_id) if not tool_id.startswith("memory:") else None
             server = await db.get(MCPServer, tool.server_id) if tool else None
-            correlation = RemediationCorrelationState()
+            executor = ToolExecutor(run_id, server.id if server else None)
             if server:
                 events = (
                     await db.scalars(
@@ -221,26 +220,10 @@ async def execute_native_tool(app, user, instance, run_id, tool_id, arguments, c
                         .order_by(RunEvent.id)
                     )
                 ).all()
-                for event in events:
-                    if event.data.get("server_id") == server.id:
-                        if event.event_type == "tool.started":
-                            correlation.begin_tool_call(
-                                event.data.get("tool_name"), event.data.get("arguments")
-                            )
-                        else:
-                            correlation.record_tool_result(
-                                event.data.get("tool_name"), event.data.get("output")
-                            )
-                            diagnosis = (event.data.get("output") or {}).get("rediagnosis")
-                            if diagnosis:
-                                correlation.record_tool_result(
-                                    "diagnose_fault", {"ok": True, "data": diagnosis["diagnosis"]}
-                                )
-                prepared = correlation.prepare_arguments(spec["original_name"], arguments)
-                prepared = dict(prepared or {})
-                prepared.pop("issued_by", None)
-                if spec["original_name"] == "execute_device_action":
-                    prepared["issued_by"] = f"harness:{user.username}"
+                executor.restore(events)
+                prepared = executor.prepare_arguments(
+                    spec["original_name"], arguments, issued_by=f"harness:{user.username}"
+                )
             else:
                 prepared = arguments
             db.add(
@@ -264,40 +247,43 @@ async def execute_native_tool(app, user, instance, run_id, tool_id, arguments, c
         active[run_id] = task
         try:
             if server:
-                prepared, link = await prepare(run_id, server.id, spec["original_name"], prepared)
-                async with SessionFactory() as db:
-                    await require_enabled(db, user.id, instance)
-                result = await invoke_remote_tool(
-                    server,
-                    get_settings(),
-                    spec["original_name"],
-                    prepared,
-                    read_only=spec["risk_policy"] == "read_only",
-                )
-                link = await finish(
-                    run_id, server.id, spec["original_name"], prepared, result, link
-                )
-                if link:
 
-                    async def internal_call(name, args):
-                        async with SessionFactory() as db:
-                            await require_enabled(db, user.id, instance)
-                            allowed = any(
-                                s.get("server_id") == server.id
-                                and s["original_name"] == name
-                                and s["risk_policy"] == "read_only"
-                                for s in await native_catalog(db)
-                            )
-                            if not allowed:
-                                raise HTTPException(403, "NATIVE_TOOL_NOT_ALLOWED")
-                        output = await invoke_remote_tool(
-                            server, get_settings(), name, args, read_only=True
+                async def call(name, args):
+                    async with SessionFactory() as db:
+                        await require_enabled(db, user.id, instance)
+                    output = await invoke_remote_tool(
+                        server,
+                        get_settings(),
+                        name,
+                        args,
+                        read_only=spec["risk_policy"] == "read_only",
+                    )
+                    return SimpleNamespace(structured_content=output)
+
+                async def internal_call(name, args):
+                    async with SessionFactory() as db:
+                        await require_enabled(db, user.id, instance)
+                        allowed = any(
+                            s.get("server_id") == server.id
+                            and s["original_name"] == name
+                            and s["risk_policy"] == "read_only"
+                            for s in await native_catalog(db)
                         )
-                        return SimpleNamespace(structured_content=output)
+                        if not allowed:
+                            raise HTTPException(403, "NATIVE_TOOL_NOT_ALLOWED")
+                    output = await invoke_remote_tool(
+                        server, get_settings(), name, args, read_only=True
+                    )
+                    return SimpleNamespace(structured_content=output)
 
-                    diagnosis = await rediagnose(run_id, server.id, link.id, internal_call)
-                    if diagnosis:
-                        result = {**result, "rediagnosis": diagnosis}
+                try:
+                    result = (
+                        await executor.execute(
+                            spec["original_name"], prepared, call, internal_call=internal_call
+                        )
+                    ).structured_content
+                except ToolPreparationError as exc:
+                    raise exc.cause from None
             else:
                 result = await handle_memory_tool(run_id, spec["original_name"], prepared)
             async with SessionFactory() as db:

@@ -4,6 +4,8 @@ import uuid
 
 import httpx
 from sqlalchemy import select
+from xiaoyi_retrieval.embeddings import AsyncEmbeddingClient, EmbeddingConfig
+from xiaoyi_retrieval.qdrant import AsyncQdrantClient, collection_payload
 
 from app.config import get_settings
 from app.db import SessionFactory
@@ -22,19 +24,18 @@ def point_id(memory_id, number, fingerprint):
 
 async def embedding(client, text):
     s = get_settings()
-    response = await client.post(
-        s.memory_embedding_url.rstrip("/") + "/v1/embeddings",
-        json={
-            "model": s.memory_embedding_model,
-            "input": text,
-            "dimensions": s.memory_embedding_dimensions,
-        },
+    config = EmbeddingConfig(
+        s.memory_embedding_url,
+        s.memory_embedding_model,
+        s.memory_embedding_dimensions,
+        s.memory_embedding_api_key,
     )
-    response.raise_for_status()
-    vector = response.json()["data"][0]["embedding"]
-    if len(vector) != s.memory_embedding_dimensions:
-        raise ValueError("MEMORY_VECTOR_DIMENSION_MISMATCH")
-    return vector
+    try:
+        return await AsyncEmbeddingClient(config, client).embed(text)
+    except ValueError as exc:
+        if str(exc) == "EMBEDDING_DIMENSIONS_MISMATCH":
+            raise ValueError("MEMORY_VECTOR_DIMENSION_MISMATCH") from exc
+        raise
 
 
 async def vector_search(owner, query):
@@ -48,12 +49,9 @@ async def vector_search(owner, query):
     filters.append({"key": "model_fingerprint", "match": {"value": s.memory_embedding_fingerprint}})
     async with httpx.AsyncClient(timeout=s.memory_recall_timeout_ms / 1000) as client:
         vector = await embedding(client, query.query)
-        response = await client.post(
-            s.memory_qdrant_url.rstrip("/") + f"/collections/{collection()}/points/query",
-            json={"query": vector, "filter": {"must": filters}, "limit": 30, "with_payload": True},
+        return await AsyncQdrantClient(client, s.memory_qdrant_url).query(
+            collection(), vector, filters=filters, limit=30
         )
-        response.raise_for_status()
-        return response.json()["result"]["points"]
 
 
 async def sync(job):
@@ -86,18 +84,20 @@ async def sync(job):
         ):
             valid = False
         async with httpx.AsyncClient(timeout=20) as client:
-            base = s.memory_qdrant_url.rstrip("/") + f"/collections/{outbox.collection}"
+            qdrant = AsyncQdrantClient(client, s.memory_qdrant_url)
+            base = f"/collections/{outbox.collection}"
             if valid and outbox.operation == "upsert":
-                response = await client.put(
+                await qdrant.request(
+                    "PUT",
                     base,
-                    json={"vectors": {"size": s.memory_embedding_dimensions, "distance": "Cosine"}},
+                    collection_payload(s.memory_embedding_dimensions),
+                    accepted_statuses=(200, 409),
                 )
-                if response.status_code not in (200, 409):
-                    response.raise_for_status()
                 vector = await embedding(client, text)
-                response = await client.put(
+                await qdrant.request(
+                    "PUT",
                     base + "/points?wait=true",
-                    json={
+                    {
                         "points": [
                             {
                                 "id": point_id(item.id, outbox.revision, outbox.model_fingerprint),
@@ -107,19 +107,18 @@ async def sync(job):
                         ]
                     },
                 )
-                response.raise_for_status()
                 state = "indexed"
             else:
-                response = await client.post(
+                await qdrant.request(
+                    "POST",
                     base + "/points/delete?wait=true",
-                    json={
+                    {
                         "points": [
                             point_id(outbox.memory_id, outbox.revision, outbox.model_fingerprint)
                         ]
                     },
+                    accepted_statuses=(404,),
                 )
-                if response.status_code != 404:
-                    response.raise_for_status()
                 state = "excluded"
     async with SessionFactory() as db:
         current = await db.get(Memory, outbox.memory_id)

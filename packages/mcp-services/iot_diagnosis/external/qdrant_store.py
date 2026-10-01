@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from typing import Any
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
+
+from xiaoyi_retrieval.http import JsonClient
+from xiaoyi_retrieval.qdrant import collection_payload, query_payload
 
 from iot_diagnosis.embeddings import EmbeddingProvider, embedding_provider_from_env
 
@@ -45,19 +47,13 @@ class QdrantVectorStore:
         self._request(
             "PUT",
             path,
-            {"vectors": {"size": self.dimensions, "distance": "Cosine"}},
+            collection_payload(self.dimensions),
         )
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-        body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        request = Request(
-            f"{self.url}{path}",
-            data=body,
-            method=method,
-            headers={"Content-Type": "application/json"},
+        return JsonClient(self.url, timeout_seconds=10, opener=urlopen).request(
+            method, path, payload
         )
-        with urlopen(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
 
     def upsert(self, item: dict[str, Any]) -> bool:
         return self.upsert_many([item])
@@ -114,13 +110,8 @@ class QdrantVectorStore:
             if query_vector is not None
             else self.embedding_provider.embed(query, is_query=True)
         )
-        payload: dict[str, Any] = {
-            "query": vector,
-            "limit": top_k,
-            "with_payload": True,
-        }
-        if sources:
-            payload["filter"] = {"must": [{"key": "source", "match": {"any": sources}}]}
+        filters = [{"key": "source", "match": {"any": sources}}] if sources else None
+        payload = query_payload(vector, top_k, filters)
         response = self._request("POST", f"/collections/{self.collection}/points/query", payload)
         points = (response.get("result") or {}).get("points") or []
         return [

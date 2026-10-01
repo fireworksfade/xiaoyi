@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "小yi 通用智能体主后端"
 requires-python = ">=3.12"
 dependencies = [
+  "xiaoyi-retrieval==0.1.0",
   "aiosqlite==0.21.0",
   "alembic==1.16.5",
   "cryptography==50.0.1",

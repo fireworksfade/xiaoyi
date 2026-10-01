@@ -1,0 +1,47 @@
+M  README.md
+M  compose.retrieval-models.yaml
+M  compose.yaml
+A  docs/architecture-simplification.md
+ M docs/project-structure.md
+ M packages/backend/.env.example
+M  packages/backend/Dockerfile
+M  packages/backend/app/agent/runtime.py
+M  packages/backend/app/config.py
+M  packages/backend/app/memory/indexing.py
+M  packages/backend/app/services/harness_native.py
+A  packages/backend/app/services/tool_execution.py
+M  packages/backend/pyproject.toml
+M  packages/frontend/app/page.tsx
+D  packages/frontend/components/conversation-sidebar.tsx
+D  packages/frontend/components/conversation-view.tsx
+D  packages/frontend/components/message-composer.tsx
+D  packages/frontend/components/message-list.tsx
+D  packages/frontend/components/settings-sheet.tsx
+R  packages/frontend/components/conversation-view.test.tsx -> packages/frontend/features/conversation/conversation-view.test.tsx
+M  packages/frontend/features/conversation/conversation-view.tsx
+M  packages/frontend/features/conversation/message-list.tsx
+R  packages/frontend/components/remediation-card.test.tsx -> packages/frontend/features/conversation/remediation-card.test.tsx
+R  packages/frontend/components/remediation-card.tsx -> packages/frontend/features/conversation/remediation-card.tsx
+R  packages/frontend/components/run-records-sheet.tsx -> packages/frontend/features/conversation/run-records-sheet.tsx
+ M packages/mcp-services/.env.example
+M  packages/mcp-services/Dockerfile
+M  packages/mcp-services/iot_diagnosis/embeddings.py
+M  packages/mcp-services/iot_diagnosis/external/manager.py
+M  packages/mcp-services/iot_diagnosis/external/qdrant_store.py
+M  packages/mcp-services/pyproject.toml
+A  packages/retrieval/.dockerignore
+A  packages/retrieval/build/lib/xiaoyi_retrieval/__init__.py
+A  packages/retrieval/build/lib/xiaoyi_retrieval/embeddings.py
+A  packages/retrieval/build/lib/xiaoyi_retrieval/http.py
+A  packages/retrieval/build/lib/xiaoyi_retrieval/qdrant.py
+A  packages/retrieval/pyproject.toml
+A  packages/retrieval/tests/test_clients.py
+A  packages/retrieval/xiaoyi_retrieval/__init__.py
+A  packages/retrieval/xiaoyi_retrieval/embeddings.py
+A  packages/retrieval/xiaoyi_retrieval/http.py
+A  packages/retrieval/xiaoyi_retrieval/qdrant.py
+?? .archify/
+?? packages/backend/build/
+?? packages/backend/tests/test_retrieval_config.py
+?? packages/backend/tests/test_tool_execution.py
+?? packages/mcp-services/tests/test_shared_retrieval_config.py

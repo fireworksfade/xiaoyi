@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -35,11 +35,39 @@ class Settings(BaseSettings):
     memory_job_max_attempts: int = 8
     memory_action_poll_seconds: float = 5
     memory_deleted_content_retention_days: int = 30
-    memory_qdrant_url: str | None = None
-    memory_embedding_url: str | None = None
-    memory_embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    memory_qdrant_url: str | None = Field(
+        None,
+        validation_alias=AliasChoices(
+            "MEMORY_QDRANT_URL", "RETRIEVAL_QDRANT_URL", "memory_qdrant_url"
+        ),
+    )
+    memory_embedding_url: str | None = Field(
+        None,
+        validation_alias=AliasChoices(
+            "MEMORY_EMBEDDING_URL", "RETRIEVAL_EMBEDDING_BASE_URL", "memory_embedding_url"
+        ),
+    )
+    memory_embedding_api_key: str | None = Field(
+        None,
+        validation_alias=AliasChoices(
+            "MEMORY_EMBEDDING_API_KEY", "RETRIEVAL_EMBEDDING_API_KEY", "memory_embedding_api_key"
+        ),
+    )
+    memory_embedding_model: str = Field(
+        "Qwen/Qwen3-Embedding-0.6B",
+        validation_alias=AliasChoices(
+            "MEMORY_EMBEDDING_MODEL", "RETRIEVAL_EMBEDDING_MODEL", "memory_embedding_model"
+        ),
+    )
     memory_embedding_fingerprint: str = "qwen3-0-6b"
-    memory_embedding_dimensions: int = 512
+    memory_embedding_dimensions: int = Field(
+        512,
+        validation_alias=AliasChoices(
+            "MEMORY_EMBEDDING_DIMENSIONS",
+            "RETRIEVAL_EMBEDDING_DIMENSIONS",
+            "memory_embedding_dimensions",
+        ),
+    )
     memory_collection_prefix: str = "xiaoyi_memory"
     agent_repair_max_attempts: int = 3
     # Run 运行期限：超过后自动再诊断与结果补查停止，转后台跟踪（spec 7.3）
@@ -51,6 +79,7 @@ class Settings(BaseSettings):
         if not 1 <= value <= 3:
             raise ValueError("AGENT_REPAIR_MAX_ATTEMPTS must be between 1 and 3")
         return value
+
     seed_demo_users: bool = True
     # 开发/测试默认在启动时执行 alembic upgrade head；生产部署应先跑
     # `python -m app.cli deploy` 并设置 DB_AUTO_UPGRADE=false

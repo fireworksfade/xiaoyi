@@ -10,7 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-import { RemediationCard } from '@/components/remediation-card';
+import { RemediationCard } from '@/features/conversation/remediation-card';
 import { Button } from '@/components/ui/button';
 import type { ChatMessage } from '@/hooks/use-conversation-messages';
 

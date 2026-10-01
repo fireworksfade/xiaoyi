@@ -1,0 +1,608 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "小忆 IoT 平台 · 简化后的系统架构",
+    "locale": "zh-CN",
+    "output": ".archify/architecture-xiaoyi-20261001-151153/xiaoyi.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/fireworksfade/xiaoyi.git",
+      "revision": "95316735fa49b487f8ea9404b3c27a28ab6423d9",
+      "link_mode": "local-only"
+    },
+    "views": [
+      {
+        "id": "platform-chat",
+        "label": "网页聊天与诊断",
+        "focus": [
+          "web",
+          "platform",
+          "tool-execution",
+          "iot-mcp",
+          "mqtt",
+          "devices"
+        ],
+        "note": "网页经后端 Agent 调用工具；命令执行受风险与审批约束。"
+      },
+      {
+        "id": "harness-tools",
+        "label": "Harness 原生工具",
+        "focus": [
+          "harness",
+          "tool-execution",
+          "iot-mcp"
+        ],
+        "note": "Harness 使用自己的 DeepSeek 模型，后端适配器直接进入共用工具执行层。"
+      },
+      {
+        "id": "retrieval-path",
+        "label": "共享检索基础",
+        "focus": [
+          "platform",
+          "retrieval-lib",
+          "iot-mcp",
+          "vectors",
+          "platform-db",
+          "iot-db"
+        ],
+        "note": "共用 Python 客户端与协议；记忆、知识的权限、集合与生命周期各自维护。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "网页工作台",
+      "sublabel": "React 19 · Vinext :3000",
+      "tag": "会话 / 知识 / 记忆 / 设置",
+      "pos": [
+        20,
+        180
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/frontend/package.json",
+          "line": 8,
+          "end_line": 38,
+          "label": "前端运行与依赖"
+        },
+        {
+          "path": "packages/frontend/app/api/backend/[...path]/route.ts",
+          "line": 7,
+          "end_line": 97,
+          "label": "同源代理与流式响应"
+        },
+        {
+          "path": "packages/frontend/app/page.tsx",
+          "line": 1,
+          "end_line": 25,
+          "label": "页面入口"
+        }
+      ]
+    },
+    {
+      "id": "platform",
+      "type": "backend",
+      "label": "平台后端与 Agent",
+      "sublabel": "FastAPI :8000 · 运行调度",
+      "tag": "会话 / SSE / 用户记忆",
+      "pos": [
+        340,
+        180
+      ],
+      "size": [
+        210,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/backend/app/services/runs/orchestrator.py",
+          "line": 144,
+          "end_line": 223,
+          "label": "运行编排与模型选择"
+        },
+        {
+          "path": "packages/backend/app/main.py",
+          "line": 89,
+          "end_line": 118,
+          "label": "调度器与后台记忆任务"
+        },
+        {
+          "path": "packages/backend/app/api/remediation.py",
+          "line": 95,
+          "end_line": 150,
+          "label": "管理员审批与 CSRF"
+        }
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "frontend",
+      "label": "Harness 插件入口",
+      "sublabel": "DeepSeek 主聊 · 原生工具",
+      "tag": "可选 · Harness 自行推理",
+      "pos": [
+        20,
+        500
+      ],
+      "size": [
+        170,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/harness-plugin/src/native-tools.ts",
+          "line": 53,
+          "end_line": 92,
+          "label": "原生工具注册与调用"
+        },
+        {
+          "path": "packages/harness-plugin/src/backend.ts",
+          "line": 120,
+          "end_line": 130,
+          "label": "后端原生工具 API"
+        }
+      ]
+    },
+    {
+      "id": "tool-execution",
+      "type": "backend",
+      "label": "统一工具执行层",
+      "sublabel": "平台 / Harness 后端适配器",
+      "tag": "共用 ToolExecutor",
+      "pos": [
+        340,
+        500
+      ],
+      "size": [
+        210,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/backend/app/services/tool_execution.py",
+          "line": 15,
+          "end_line": 72,
+          "label": "诊断关联与记忆边界"
+        },
+        {
+          "path": "packages/backend/app/agent/runtime.py",
+          "line": 137,
+          "end_line": 174,
+          "label": "平台运行时调用执行器"
+        },
+        {
+          "path": "packages/backend/app/services/harness_native.py",
+          "line": 211,
+          "end_line": 286,
+          "label": "原生适配器调用执行器"
+        }
+      ]
+    },
+    {
+      "id": "iot-mcp",
+      "type": "backend",
+      "label": "统一 IoT MCP 服务",
+      "sublabel": "诊断 / 知识检索 / 设备控制",
+      "tag": "Streamable HTTP :9000",
+      "pos": [
+        710,
+        500
+      ],
+      "size": [
+        200,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/mcp-services/iot_mcp/server.py",
+          "line": 40,
+          "end_line": 143,
+          "label": "双业务仓库与 MQTT 生命周期"
+        },
+        {
+          "path": "packages/mcp-services/iot_mcp/server.py",
+          "line": 513,
+          "end_line": 572,
+          "label": "审批后的命令下发与 HTTP 入口"
+        },
+        {
+          "path": "packages/mcp-services/iot_diagnosis/external/qdrant_store.py",
+          "line": 12,
+          "end_line": 55,
+          "label": "知识检索导入共享客户端"
+        }
+      ]
+    },
+    {
+      "id": "retrieval-lib",
+      "type": "backend",
+      "label": "共享检索库",
+      "sublabel": "xiaoyi_retrieval · 进程内",
+      "tag": "HTTP / Embedding / Qdrant",
+      "pos": [
+        710,
+        180
+      ],
+      "size": [
+        200,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/retrieval/xiaoyi_retrieval/embeddings.py",
+          "line": 1,
+          "end_line": 83,
+          "label": "统一嵌入请求与结果校验"
+        },
+        {
+          "path": "packages/retrieval/xiaoyi_retrieval/qdrant.py",
+          "line": 1,
+          "end_line": 24,
+          "label": "集合、查询与异步传输"
+        },
+        {
+          "path": "compose.retrieval-models.yaml",
+          "line": 17,
+          "end_line": 78,
+          "label": "可选语义模型档位与独立兜底集合"
+        }
+      ]
+    },
+    {
+      "id": "platform-db",
+      "type": "database",
+      "label": "平台 SQLite",
+      "sublabel": "xiaoyi.db · 本地持久卷",
+      "tag": "用户 / 会话 / 事件 / 记忆",
+      "pos": [
+        340,
+        0
+      ],
+      "size": [
+        210,
+        84
+      ],
+      "sources": [
+        {
+          "path": "compose.yaml",
+          "line": 14,
+          "end_line": 33,
+          "label": "平台数据库与数据卷"
+        },
+        {
+          "path": "packages/backend/app/services/runs/event_handler.py",
+          "line": 14,
+          "end_line": 22,
+          "label": "运行事件实际写入"
+        },
+        {
+          "path": "packages/backend/app/memory/retrieval.py",
+          "line": 19,
+          "end_line": 83,
+          "label": "用户记忆的 SQL 读取"
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "配置的 LLM API",
+      "sublabel": "OpenAI 兼容 · Agent 推理",
+      "tag": "保存模型配置后使用",
+      "pos": [
+        710,
+        0
+      ],
+      "size": [
+        200,
+        84
+      ],
+      "sources": [
+        {
+          "path": "packages/backend/app/agent/runtime.py",
+          "line": 214,
+          "end_line": 287,
+          "label": "兼容模型客户端"
+        },
+        {
+          "path": "packages/backend/app/services/runs/orchestrator.py",
+          "line": 159,
+          "end_line": 181,
+          "label": "保存配置覆盖默认运行时"
+        }
+      ]
+    },
+    {
+      "id": "vectors",
+      "type": "database",
+      "label": "Qdrant :6333",
+      "sublabel": "知识向量 / 可选记忆向量",
+      "tag": "两类业务使用独立集合",
+      "pos": [
+        1030,
+        180
+      ],
+      "size": [
+        160,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/mcp-services/iot_diagnosis/external/qdrant_store.py",
+          "line": 58,
+          "end_line": 116,
+          "label": "知识向量写入与检索"
+        },
+        {
+          "path": "packages/backend/app/memory/indexing.py",
+          "line": 41,
+          "end_line": 98,
+          "label": "可选记忆投影与过滤"
+        },
+        {
+          "path": "compose.yaml",
+          "line": 138,
+          "end_line": 149,
+          "label": "向量服务与持久卷"
+        }
+      ]
+    },
+    {
+      "id": "iot-db",
+      "type": "database",
+      "label": "IoT SQLite",
+      "sublabel": "诊断库 + 控制库",
+      "tag": "遥测 / 知识 / 提案 / 命令",
+      "pos": [
+        1030,
+        500
+      ],
+      "size": [
+        160,
+        90
+      ],
+      "sources": [
+        {
+          "path": "packages/mcp-services/iot_diagnosis/repository.py",
+          "line": 47,
+          "end_line": 81,
+          "label": "诊断 SQLite 连接与写入"
+        },
+        {
+          "path": "packages/mcp-services/iot_control/repository.py",
+          "line": 57,
+          "end_line": 61,
+          "label": "独立控制数据库连接"
+        },
+        {
+          "path": "packages/mcp-services/iot_control/repository.py",
+          "line": 111,
+          "end_line": 140,
+          "label": "设备命令实际写入"
+        }
+      ]
+    },
+    {
+      "id": "mqtt",
+      "type": "messagebus",
+      "label": "MQTT 消息通道",
+      "sublabel": "Mosquitto :1883",
+      "tag": "命令 / 遥测 / ACK",
+      "pos": [
+        710,
+        850
+      ],
+      "size": [
+        200,
+        84
+      ],
+      "sources": [
+        {
+          "path": "compose.yaml",
+          "line": 129,
+          "end_line": 136,
+          "label": "MQTT 服务"
+        },
+        {
+          "path": "packages/mcp-services/iot_control/mqtt.py",
+          "line": 43,
+          "end_line": 108,
+          "label": "控制订阅、回执与命令发布"
+        },
+        {
+          "path": "packages/mcp-services/iot_diagnosis/mqtt.py",
+          "line": 37,
+          "end_line": 83,
+          "label": "遥测订阅与入库"
+        }
+      ]
+    },
+    {
+      "id": "devices",
+      "type": "external",
+      "label": "设备与模拟设备群",
+      "sublabel": "ESP32 / simulator-fleet",
+      "tag": "接收命令 · 上报状态",
+      "pos": [
+        1030,
+        850
+      ],
+      "size": [
+        160,
+        84
+      ],
+      "sources": [
+        {
+          "path": "compose.yaml",
+          "line": 110,
+          "end_line": 127,
+          "label": "设备群模拟入口"
+        },
+        {
+          "path": "packages/mcp-services/iot_diagnosis/simulator.py",
+          "line": 1,
+          "end_line": 29,
+          "label": "设备遥测与命令模拟"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "packages/backend · 同一后端服务",
+      "wraps": [
+        "platform",
+        "tool-execution"
+      ],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "id": "web-api",
+      "from": "web",
+      "to": "platform",
+      "label": "HTTP / SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agent-tools",
+      "from": "platform",
+      "to": "tool-execution",
+      "label": "平台工具调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "harness-tools",
+      "from": "harness",
+      "to": "tool-execution",
+      "label": "原生工具 API",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mcp-tools",
+      "from": "tool-execution",
+      "to": "iot-mcp",
+      "label": "MCP HTTP",
+      "variant": "emphasis"
+    },
+    {
+      "id": "platform-persistence",
+      "from": "platform",
+      "to": "platform-db",
+      "label": "SQL"
+    },
+    {
+      "id": "platform-inference",
+      "from": "platform",
+      "to": "llm",
+      "label": "配置后推理",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "memory-client",
+      "from": "platform",
+      "to": "retrieval-lib",
+      "label": "记忆向量（可选）",
+      "variant": "dashed"
+    },
+    {
+      "id": "knowledge-client",
+      "from": "iot-mcp",
+      "to": "retrieval-lib",
+      "label": "知识检索 / 库依赖",
+      "variant": "dashed"
+    },
+    {
+      "id": "vector-transport",
+      "from": "retrieval-lib",
+      "to": "vectors",
+      "label": "HTTP"
+    },
+    {
+      "id": "iot-persistence",
+      "from": "iot-mcp",
+      "to": "iot-db",
+      "label": "SQL"
+    },
+    {
+      "id": "human-approval",
+      "from": "platform",
+      "to": "iot-mcp",
+      "label": "管理员审批",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "command-publish",
+      "from": "iot-mcp",
+      "to": "mqtt",
+      "label": "低风险 / 已批准命令",
+      "variant": "security"
+    },
+    {
+      "id": "telemetry-ingest",
+      "from": "mqtt",
+      "to": "iot-mcp",
+      "label": "遥测 / ACK"
+    },
+    {
+      "id": "device-command",
+      "from": "mqtt",
+      "to": "devices",
+      "label": "命令下发",
+      "variant": "security"
+    },
+    {
+      "id": "device-telemetry",
+      "from": "devices",
+      "to": "mqtt",
+      "label": "遥测 / ACK"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两条入口，共用执行层",
+      "items": [
+        "网页由平台 Agent 编排；Harness 使用当前 DeepSeek 模型。",
+        "两个后端适配器共用诊断关联、记忆边界与失败再诊断。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "共享库与业务边界",
+      "items": [
+        "xiaoyi_retrieval 是进程内 Python 库，提供传输和协议基础。",
+        "知识与记忆各自维护集合、用户过滤、版本和生命周期。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Portable 与可选模型档位",
+      "items": [
+        "基础 Compose：知识 hash 384 维 + weighted，记忆默认 SQL 召回。",
+        "可叠加 Qwen3 模型服务 :9010；模型故障回落独立 hash 集合。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "操作条件与源码依据",
+      "items": [
+        "高风险动作须管理员审批；记忆候选须用户确认。",
+        "图中源码绑定本地当前改动快照；可点击节点查看来源。"
+      ]
+    }
+  ]
+}

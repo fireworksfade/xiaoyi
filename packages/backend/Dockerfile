@@ -10,8 +10,9 @@ COPY pyproject.toml alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
 COPY scripts ./scripts
+COPY --from=retrieval / /opt/retrieval
 
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir /opt/retrieval . \
     && addgroup --system xiaoyi \
     && adduser --system --ingroup xiaoyi xiaoyi \
     && mkdir -p /app/data \

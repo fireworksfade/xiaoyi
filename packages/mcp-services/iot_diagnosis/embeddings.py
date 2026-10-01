@@ -9,6 +9,8 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from xiaoyi_retrieval.embeddings import EmbeddingClient, EmbeddingConfig
+
 
 class EmbeddingProvider(Protocol):
     name: str
@@ -72,32 +74,15 @@ class OpenAICompatibleEmbeddingProvider:
     def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         if not texts:
             return []
-        embedding_input = [
-            f"Instruct: {self.query_instruction}\nQuery:{text}"
-            if is_query and self.query_instruction
-            else text
-            for text in texts
-        ]
-        body = json.dumps(
-            {"model": self.model, "input": embedding_input, "dimensions": self.dimensions}
-        ).encode("utf-8")
-        request = Request(
-            f"{self.base_url}/embeddings",
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+        client = EmbeddingClient(
+            EmbeddingConfig(
+                self.base_url, self.model, self.dimensions, self.api_key, self.query_instruction
+            ),
+            timeout_seconds=self.timeout_seconds,
+            opener=urlopen,
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            rows = payload["data"]
-            by_index = {int(row["index"]): row["embedding"] for row in rows}
-            if set(by_index) != set(range(len(texts))) or len(rows) != len(texts):
-                raise ValueError("invalid embedding response indices")
-            vectors = [[float(value) for value in by_index[index]] for index in range(len(texts))]
+            return client.embed_many(texts, is_query=is_query)
         except (
             HTTPError,
             URLError,
@@ -107,10 +92,9 @@ class OpenAICompatibleEmbeddingProvider:
             IndexError,
             TypeError,
         ) as exc:
+            if str(exc) == "EMBEDDING_DIMENSIONS_MISMATCH":
+                raise RuntimeError("EMBEDDING_DIMENSIONS_MISMATCH") from exc
             raise RuntimeError("EMBEDDING_REQUEST_FAILED") from exc
-        if any(len(vector) != self.dimensions for vector in vectors):
-            raise RuntimeError("EMBEDDING_DIMENSIONS_MISMATCH")
-        return vectors
 
 
 class ResilientEmbeddingProvider:
@@ -145,14 +129,25 @@ class ResilientEmbeddingProvider:
 
 def embedding_provider_from_env() -> EmbeddingProvider:
     provider = os.getenv("DIAGNOSIS_EMBEDDING_PROVIDER", "hash").strip().lower()
-    dimensions = int(os.getenv("DIAGNOSIS_EMBEDDING_DIMENSIONS", "384"))
+    dimensions = int(
+        os.getenv("DIAGNOSIS_EMBEDDING_DIMENSIONS")
+        or (
+            os.getenv("RETRIEVAL_EMBEDDING_DIMENSIONS")
+            if provider in {"openai", "openai_compatible"}
+            else None
+        )
+        or "384"
+    )
     if provider == "hash":
         return HashEmbeddingProvider(dimensions)
     if provider in {"openai", "openai_compatible"}:
         return OpenAICompatibleEmbeddingProvider(
-            api_key=os.getenv("DIAGNOSIS_EMBEDDING_API_KEY", ""),
-            base_url=os.getenv("DIAGNOSIS_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
-            model=os.getenv("DIAGNOSIS_EMBEDDING_MODEL", ""),
+            api_key=os.getenv("DIAGNOSIS_EMBEDDING_API_KEY")
+            or os.getenv("RETRIEVAL_EMBEDDING_API_KEY", ""),
+            base_url=os.getenv("DIAGNOSIS_EMBEDDING_BASE_URL")
+            or os.getenv("RETRIEVAL_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
+            model=os.getenv("DIAGNOSIS_EMBEDDING_MODEL")
+            or os.getenv("RETRIEVAL_EMBEDDING_MODEL", ""),
             dimensions=dimensions,
             timeout_seconds=float(os.getenv("DIAGNOSIS_EMBEDDING_TIMEOUT_SECONDS", "20")),
         )

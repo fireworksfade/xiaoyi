@@ -11,7 +11,7 @@ import { MessageComposer } from '@/features/conversation/message-composer';
 import { SettingsSheet } from '@/features/settings/settings-sheet';
 import { KnowledgeDialog } from '@/features/knowledge/knowledge-dialog';
 import { MemoryDialog } from '@/features/memory/memory-dialog';
-import { RunRecordsSheet } from '@/components/run-records-sheet';
+import { RunRecordsSheet } from '@/features/conversation/run-records-sheet';
 import { useConversationMessages } from '@/hooks/use-conversation-messages';
 import { useAttachmentDraft } from '@/hooks/use-attachment-draft';
 import { useConversationList } from '@/hooks/use-conversation-list';

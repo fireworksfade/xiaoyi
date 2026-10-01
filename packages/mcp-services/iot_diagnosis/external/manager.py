@@ -19,7 +19,9 @@ class ExternalStores:
         self.qdrant: QdrantVectorStore | ResilientVectorStore | None = None
         self.qdrant_fallback: QdrantVectorStore | None = None
         self.errors: dict[str, str] = {}
-        self.qdrant_url = os.getenv("DIAGNOSIS_QDRANT_URL", "").strip()
+        self.qdrant_url = (
+            os.getenv("DIAGNOSIS_QDRANT_URL") or os.getenv("RETRIEVAL_QDRANT_URL", "")
+        ).strip()
         self.qdrant_collection = os.getenv("DIAGNOSIS_QDRANT_COLLECTION", "iot_diagnosis_knowledge")
         self.configured = {
             "qdrant": bool(self.qdrant_url),
@@ -39,9 +41,7 @@ class ExternalStores:
             return None
         collection = os.getenv("DIAGNOSIS_QDRANT_FALLBACK_COLLECTION", "iot_diagnosis_portable")
         try:
-            return QdrantVectorStore(
-                self.qdrant_url, collection, HashEmbeddingProvider(dimensions)
-            )
+            return QdrantVectorStore(self.qdrant_url, collection, HashEmbeddingProvider(dimensions))
         except Exception as exc:
             logger.warning("Fallback vector store unavailable: %s", type(exc).__name__)
             return None
@@ -56,7 +56,9 @@ class ExternalStores:
                 primary = QdrantVectorStore(self.qdrant_url, self.qdrant_collection)
                 fallback = self._build_fallback_store(primary)
                 self.qdrant_fallback = fallback
-                self.qdrant = primary if fallback is None else ResilientVectorStore(primary, fallback)
+                self.qdrant = (
+                    primary if fallback is None else ResilientVectorStore(primary, fallback)
+                )
             else:
                 return False
             self.errors.pop(component, None)
@@ -96,4 +98,3 @@ class ExternalStores:
             "qdrant_fallback": fallback_status,
             "errors": self.errors,
         }
-

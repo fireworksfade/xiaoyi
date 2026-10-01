@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RemediationCard } from '@/components/remediation-card';
+import { RemediationCard } from '@/features/conversation/remediation-card';
 import type { RemediationProposal } from '@/lib/api';
 
 function proposal(

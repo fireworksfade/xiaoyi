@@ -9,11 +9,16 @@
 | 前端 | `packages/frontend` | React 19 + Vinext，浏览器通过同源 `/api/backend` 代理访问后端 |
 | 后端 | `packages/backend` | FastAPI、SQLite、Agent 运行、SSE、MCP 工具目录与审批策略 |
 | IoT MCP | `packages/mcp-services/iot_mcp` | 单个 Streamable HTTP 服务，整合诊断与控制工具 |
+| 共享检索库 | `packages/retrieval` | 两个 Python 服务共用的 embedding 与 Qdrant 请求、响应校验；不负责业务数据和权限 |
 | 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
 
 默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载；需要真实语义检索时叠加检索模型档位（Qwen3 主档位，见下文「检索模型档位」），此时 hash + weighted 自动降级为兜底。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
+
+前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天与 Harness 原生工具入口共用 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断；两种入口各自保留认证、传输和运行事件适配。结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
+
+交互式架构图见 [`小忆 IoT 平台 · 简化后的系统架构`](.archify/architecture-xiaoyi-20261001-151153/xiaoyi.html)。这是由 Archify 根据当前源码生成的单文件 HTML；克隆仓库后可直接在浏览器打开，图中节点支持查看源码依据、聚焦入口和追踪上下游关系。架构图的候选 JSON、验证收据和视觉检查结果也保存在同一目录。
 
 ## 快速开始
 
@@ -120,11 +125,13 @@ npm run test:e2e
 后端与 MCP 服务分别在对应目录安装开发依赖后运行：
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ../retrieval -e ".[dev]"
 python -m pytest
 ```
 
 前端测试使用 Vitest 和 Playwright；后端与 MCP 服务测试使用 pytest。Python 需要 3.12 或更高版本。
+
+共享检索库的独立测试：在 `packages/retrieval` 中执行 `python -m pip install -e ".[dev]"` 和 `python -m pytest`。Docker 使用额外构建上下文自动安装共享库，需要支持 `additional_contexts` 的 Compose。直接构建镜像时也需传入 `--build-context retrieval=packages/retrieval`，示例见架构简化说明。
 
 前后端联调冒烟（需先启动后端 8000 与前端 3000）：
 
@@ -184,7 +191,7 @@ IoT MCP 的 SQLite/MySQL 镜像迁移通过 `python -m scripts.migrate upgrade` 
 - REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动/失败任务重试），前端"记忆"入口展示认识、步骤、条件、限制、来源和版本对照，确认的是已查看的具体版本。编辑生成待确认新版本，旧版本继续召回；暂停版本重新确认前不可使用。晚到失败提供“发起后续诊断”入口，失败的记忆任务可手动重试。旧案例不迁入 memory。
 - 旧案例 REST 接口（`/api/v1/fault-cases`、`/api/v1/diagnosis`）与 MCP 案例工具（`list_fault_cases` 等）已删除，调用返回 404；历史工具目录条目保持不可调用。
 - 删除聊天默认保留长期记忆（`memory_policy=keep`）；勾选清除时撤回来源和受影响正文，多来源经验仅保留独立有效证据并重新审核。保留后也可从记忆详情清除已删除聊天的来源。删除的记忆正文按默认 30 天保留期由到期任务和周期扫描清理。
-- 默认记忆检索使用 SQL 关键词降级。`MEMORY_QDRANT_URL` 与 `MEMORY_EMBEDDING_URL` 单独控制后端记忆的向量检索；MCP 的检索模型档位不会自动打开后端记忆向量配置。Docker 地址分别使用 `http://qdrant:6333` 和 `http://retrieval-models:9010`，宿主机运行使用 `127.0.0.1` 对应端口。模型、维度与指纹配置见 [`packages/backend/.env.example`](packages/backend/.env.example)。
+- 默认记忆检索使用 SQL 关键词降级。可通过共享的 `RETRIEVAL_QDRANT_URL`、`RETRIEVAL_EMBEDDING_BASE_URL`、`RETRIEVAL_EMBEDDING_MODEL`、`RETRIEVAL_EMBEDDING_DIMENSIONS` 和可选 API Key 配置模型连接；`MEMORY_*` 与 `DIAGNOSIS_*` 的对应专用配置优先，索引集合、记忆指纹和检索规则仍分别管理。单独启用 MCP 检索模型档位不会自动打开后端记忆向量配置；显式设置共享连接地址才会同时启用记忆向量。embedding 地址支持服务根地址及 `/v1` 基地址。Docker 地址使用 `http://qdrant:6333` 和 `http://retrieval-models:9010/v1`，宿主机使用 `127.0.0.1` 对应端口。共享配置与覆盖规则见 [架构简化说明](docs/architecture-simplification.md)。
 
 ## 常用维护命令
 

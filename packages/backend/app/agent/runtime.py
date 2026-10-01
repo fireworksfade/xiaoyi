@@ -14,6 +14,7 @@ from app.mcp_http import mcp_httpx_client_factory
 from app.observability.metrics import CONTEXT_ARTIFACT_BYTES, CONTEXT_COMPACTIONS
 from app.services.artifacts import LocalArtifactStore, extract_critical_fields, sanitize_artifact
 from app.services.context_compactor import compact_model_input
+from app.services.tool_execution import ToolExecutor, ToolPreparationError
 
 
 @dataclass(slots=True)
@@ -139,9 +140,9 @@ class OpenAIAgentsRuntime:
             ) -> CallToolResult:
                 from app.services.harness import assert_run_enabled
                 await assert_run_enabled(runtime_run_id)
-                correlation.begin_tool_call(tool_name, arguments)
+                executor = ToolExecutor(runtime_run_id, self.backend_server_id, correlation)
                 try:
-                    prepared = correlation.prepare_arguments(tool_name, arguments)
+                    prepared = executor.prepare_arguments(tool_name, arguments)
                 except RemediationCorrelationError as exc:
                     payload = {
                         "ok": False,
@@ -159,27 +160,17 @@ class OpenAIAgentsRuntime:
                         structured_content=payload,
                         is_error=True,
                     )
-                action_link = None
-                if runtime_run_id:
-                    from app.memory.boundary import prepare
-                    try:
-                        prepared, action_link = await prepare(runtime_run_id, self.backend_server_id, tool_name, prepared)
-                    except Exception as exc:
-                        payload = {"ok": False, "error": {"code": getattr(exc, "detail", "MEMORY_BOUNDARY_FAILED"), "retryable": False}}
-                        return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload))], structured_content=payload, is_error=True)
-                result = await super().call_tool(tool_name, prepared, meta)
-                if runtime_run_id and isinstance(result.structured_content, dict):
-                    from app.memory.boundary import finish, rediagnose
-                    link = await finish(runtime_run_id, self.backend_server_id, tool_name, prepared, result.structured_content, action_link)
-                    if link:
-                        async def internal_call(name, args):
-                            return await super(CorrelatedMCPServer, self).call_tool(name, args)
-                        diagnosis = await rediagnose(runtime_run_id, self.backend_server_id, link.id, internal_call)
-                        if diagnosis:
-                            result.structured_content["rediagnosis"] = diagnosis
-                            correlation.record_tool_result("diagnose_fault", {"ok": True, "data": diagnosis["diagnosis"]})
+                async def call(name, args):
+                    return await super(CorrelatedMCPServer, self).call_tool(name, args, meta)
 
-                correlation.record_tool_result(tool_name, result.structured_content)
+                async def internal_call(name, args):
+                    return await super(CorrelatedMCPServer, self).call_tool(name, args)
+
+                try:
+                    result = await executor.execute(tool_name, prepared, call, internal_call=internal_call)
+                except ToolPreparationError as exc:
+                    payload = {"ok": False, "error": {"code": getattr(exc.cause, "detail", "MEMORY_BOUNDARY_FAILED"), "retryable": False}}
+                    return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload))], structured_content=payload, is_error=True)
                 output = result.structured_content
                 if runtime_run_id and isinstance(output, dict):
                     sanitized = sanitize_artifact(output)

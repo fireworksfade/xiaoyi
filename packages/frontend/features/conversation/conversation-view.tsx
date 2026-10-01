@@ -16,7 +16,7 @@ import {
   Wrench,
 } from 'lucide-react';
 
-import { MessageList } from '@/components/message-list';
+import { MessageList } from '@/features/conversation/message-list';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ChatMessage } from '@/hooks/use-conversation-messages';

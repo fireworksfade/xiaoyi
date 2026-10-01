@@ -4,6 +4,8 @@ services:
   backend:
     build:
       context: ./packages/backend
+      additional_contexts:
+        retrieval: ./packages/retrieval
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -22,17 +24,25 @@ services:
       RUN_TOOL_OUTPUT_INLINE_BYTES: "65536"
       RUN_ARTIFACT_ROOT: /app/data/run-artifacts
       RUN_ARTIFACT_RETENTION_HOURS: "168"
+      RETRIEVAL_QDRANT_URL: ${RETRIEVAL_QDRANT_URL:-}
+      RETRIEVAL_EMBEDDING_BASE_URL: ${RETRIEVAL_EMBEDDING_BASE_URL:-}
+      RETRIEVAL_EMBEDDING_API_KEY: ${RETRIEVAL_EMBEDDING_API_KEY:-}
+      RETRIEVAL_EMBEDDING_MODEL: ${RETRIEVAL_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      RETRIEVAL_EMBEDDING_DIMENSIONS: ${RETRIEVAL_EMBEDDING_DIMENSIONS:-512}
     volumes:
       - backend-data:/app/data
       - ./packages/backend/app:/app/app:ro
       - ./packages/backend/migrations:/app/migrations:ro
       - ./packages/backend/alembic.ini:/app/alembic.ini:ro
       - ./packages/backend/scripts:/app/scripts:ro
+      - ./packages/retrieval/xiaoyi_retrieval:/usr/local/lib/python3.12/site-packages/xiaoyi_retrieval:ro
     restart: unless-stopped
 
   iot-mcp:
     build:
       context: ./packages/mcp-services
+      additional_contexts:
+        retrieval: ./packages/retrieval
     command: sh -c "python -m scripts.migrate upgrade --service diagnosis && python -m scripts.migrate upgrade --service control && python -m iot_mcp.server"
     ports:
       - "127.0.0.1:9000:9000"
@@ -47,7 +57,7 @@ services:
       DIAGNOSIS_LLM_MODEL: ${DIAGNOSIS_LLM_MODEL:-}
       DIAGNOSIS_LLM_API_KEY: ${DIAGNOSIS_LLM_API_KEY:-}
       DIAGNOSIS_LLM_TIMEOUT_SECONDS: ${DIAGNOSIS_LLM_TIMEOUT_SECONDS:-20}
-      DIAGNOSIS_QDRANT_URL: http://qdrant:6333
+      DIAGNOSIS_QDRANT_URL: ${DIAGNOSIS_QDRANT_URL:-${RETRIEVAL_QDRANT_URL:-http://qdrant:6333}}
       DIAGNOSIS_QDRANT_COLLECTION: ${DIAGNOSIS_QDRANT_COLLECTION:-iot_diagnosis_portable}
       DIAGNOSIS_SYNC_RETRY_SECONDS: "30"
       DIAGNOSIS_EMBEDDING_PROVIDER: ${DIAGNOSIS_EMBEDDING_PROVIDER:-hash}
@@ -83,6 +93,7 @@ services:
       - ./packages/mcp-services/scripts:/app/scripts:ro
       - ./packages/mcp-services/evals:/app/evals:ro
       - ./packages/mcp-services/knowledge:/app/knowledge:ro
+      - ./packages/retrieval/xiaoyi_retrieval:/usr/local/lib/python3.12/site-packages/xiaoyi_retrieval:ro
     depends_on:
       mqtt:
         condition: service_started
@@ -99,6 +110,8 @@ services:
   iot-simulator-fleet:
     build:
       context: ./packages/mcp-services
+      additional_contexts:
+        retrieval: ./packages/retrieval
     command: python -m iot_diagnosis.simulator --host mqtt --fleet /app/iot_diagnosis/fleet.json
     environment:
       MQTT_HOST: mqtt
