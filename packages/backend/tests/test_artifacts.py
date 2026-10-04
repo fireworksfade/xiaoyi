@@ -360,3 +360,99 @@ def test_retention_preserves_active_snapshot_source(tmp_path: Path) -> None:
             assert Path(artifact.storage_uri).exists()
 
     asyncio.run(check())
+
+
+async def _seed_run_with_login() -> tuple[str, str, str]:
+    """播种独立用户并返回 (run_id, username, password)。
+
+    其他测试可能先创建过用户，lifespan 的 seed_users 会因此跳过 admin，
+    所以这里自建用户，不依赖演示账号。
+    """
+    from app.security import hash_password
+
+    username = f"artifact-reader-{uuid.uuid4().hex[:10]}"
+    password = "artifact-pass-123"
+    async with SessionFactory() as db:
+        user = User(
+            username=username, password_hash=hash_password(password), role=UserRole.ADMIN
+        )
+        db.add(user)
+        await db.flush()
+        conversation = Conversation(user_id=user.id, title="工件读取测试")
+        db.add(conversation)
+        await db.flush()
+        message = Message(conversation_id=conversation.id, role="user", content="hi")
+        db.add(message)
+        await db.flush()
+        run = AgentRun(
+            user_id=user.id,
+            conversation_id=conversation.id,
+            user_message_id=message.id,
+            status=RunStatus.RUNNING,
+        )
+        db.add(run)
+        await db.commit()
+        return run.id, username, password
+
+
+def test_read_run_artifact_returns_stored_content() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    settings = get_settings()
+    store = LocalArtifactStore(settings.run_artifact_root, settings.run_artifact_retention_hours)
+
+    # 用户与 run 在进入 TestClient 后播种：lifespan 已完成迁移与初始化
+    with TestClient(app) as client:
+        run_id, username, password = asyncio.run(_seed_run_with_login())
+        login = client.post("/api/v1/auth/login", json={"username": username, "password": password})
+        assert login.status_code == 200
+        headers = {"X-CSRF-Token": login.json()["data"]["csrf_token"]}
+
+        async def write_artifact() -> str:
+            async with SessionFactory() as db:
+                artifact = await store.write(
+                    db,
+                    run_id=run_id,
+                    kind="tool_output",
+                    content={
+                        "ok": True,
+                        "data": {
+                            "results": [
+                                {
+                                    "title": "MQTT 连接指南",
+                                    "source": "mqtt_docs",
+                                    "id": "mqtt-001",
+                                    "score": 0.87,
+                                }
+                            ]
+                        },
+                    },
+                )
+                await db.commit()
+                return artifact.id
+
+        artifact_id = asyncio.run(write_artifact())
+
+        response = client.get(
+            f"/api/v1/agent-runs/{run_id}/artifacts/{artifact_id}", headers=headers
+        )
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["artifact"]["id"] == artifact_id
+        assert payload["artifact"]["kind"] == "tool_output"
+        assert payload["artifact"]["sha256"]
+        assert payload["content"]["data"]["results"][0]["title"] == "MQTT 连接指南"
+
+        missing = client.get(
+            f"/api/v1/agent-runs/{run_id}/artifacts/does-not-exist", headers=headers
+        )
+        assert missing.status_code == 404
+
+        # 工件与 run 绑定：另一个 run 不能读取别人的工件
+        other_run_id, _, _ = asyncio.run(_seed_run_with_login())
+        cross = client.get(
+            f"/api/v1/agent-runs/{other_run_id}/artifacts/{artifact_id}", headers=headers
+        )
+        assert cross.status_code == 404

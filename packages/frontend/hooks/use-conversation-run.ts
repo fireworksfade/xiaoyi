@@ -182,11 +182,25 @@ export function useConversationRun({
         if (event.type === 'tool.finished') {
           const toolName = displayValue(event.data.tool_name, '工具');
           const result = displayValue(event.data.summary, '已完成');
+          const output =
+            event.data.output && typeof event.data.output === 'object'
+              ? (event.data.output as Record<string, unknown>)
+              : undefined;
+          // 超过内联阈值的输出被后端转存为 run_artifact，只留 artifact_id；
+          // 未转存时 output 就是完整结果，展开时无需再请求。
+          const artifactId =
+            typeof output?.artifact_id === 'string' ? output.artifact_id : undefined;
           updateAssistant((message) => ({
             ...message,
             tools: [
               ...(message.tools ?? []).filter((tool) => tool.name !== toolName),
-              { name: toolName, result },
+              {
+                name: toolName,
+                result,
+                runId,
+                artifactId,
+                output: artifactId ? undefined : output,
+              },
             ],
           }));
         }

@@ -8,7 +8,7 @@ from app.agent.remediation_correlation import (
     RemediationCorrelationError,
     RemediationCorrelationState,
 )
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.db import SessionFactory
 from app.mcp_http import mcp_httpx_client_factory
 from app.observability.metrics import CONTEXT_ARTIFACT_BYTES, CONTEXT_COMPACTIONS
@@ -53,12 +53,82 @@ class MockAgentRuntime:
         mcp_servers: list[RuntimeMCPServer],
     ) -> AsyncIterator[RuntimeEvent]:
         question = messages[-1]["content"] if messages else ""
-        yield RuntimeEvent("tool.started", {"tool_name": "demo__inspect_request"})
+        # 内联输出：未超过阈值，前端展开时直接展示 output
+        yield RuntimeEvent("tool.started", {"tool_name": "demo__search_knowledge"})
         await asyncio.sleep(0.02)
         yield RuntimeEvent(
             "tool.finished",
-            {"tool_name": "demo__inspect_request", "ok": True, "summary": "请求已分类"},
+            {
+                "tool_name": "demo__search_knowledge",
+                "ok": True,
+                "summary": "已检索知识库",
+                "output": {
+                    "ok": True,
+                    "data": {
+                        "query": question,
+                        "selected_sources": ["mqtt_docs", "device_docs"],
+                        "results": [
+                            {
+                                "title": "MQTT 连接抖动排查指南",
+                                "source": "mqtt_docs",
+                                "id": "mqtt-doc-014",
+                                "score": 0.8731,
+                            },
+                            {
+                                "title": "ESP32 WiFi 重连与重试策略",
+                                "source": "device_docs",
+                                "id": "device-doc-007",
+                                "score": 0.7429,
+                            },
+                            {
+                                "title": "传感器数据漂移校准手册",
+                                "source": "sensor_docs",
+                                "id": "sensor-doc-021",
+                                "score": 0.6658,
+                            },
+                        ],
+                    },
+                },
+            },
         )
+        # 超阈值输出：写入 run_artifact，事件里只带 artifact_id 摘要
+        yield RuntimeEvent("tool.started", {"tool_name": "demo__diagnose_fault"})
+        await asyncio.sleep(0.02)
+        archived = await self._archived_diagnosis_output(question)
+        if archived is not None:
+            yield RuntimeEvent(
+                "tool.finished",
+                {
+                    "tool_name": "demo__diagnose_fault",
+                    "ok": True,
+                    "summary": "诊断完成",
+                    "output": archived,
+                },
+            )
+        else:
+            yield RuntimeEvent(
+                "tool.finished",
+                {
+                    "tool_name": "demo__diagnose_fault",
+                    "ok": True,
+                    "summary": "诊断完成",
+                    "output": {
+                        "ok": True,
+                        "data": {
+                            "diagnosis_id": "DIA_DEMO",
+                            "fault_type": "mqtt_connection",
+                            "confidence": 0.87,
+                            "sources": [
+                                {
+                                    "source_type": "mqtt_docs",
+                                    "source_id": "mqtt-doc-014",
+                                    "score": 0.8731,
+                                }
+                            ],
+                        },
+                    },
+                },
+            )
         answer = (
             f"小yi 已收到：{question}\n\n"
             "当前运行在本地联调模式。配置 OPENAI_API_KEY 后将切换到 OpenAI Agents SDK，"
@@ -68,6 +138,52 @@ class MockAgentRuntime:
             await asyncio.sleep(0.01)
             yield RuntimeEvent("answer.delta", {"delta": chunk})
         yield RuntimeEvent("answer.final", {"content": answer})
+
+    async def _archived_diagnosis_output(self, question: str) -> dict[str, Any] | None:
+        """演示真实 Runtime 的工件转存路径：输出超过内联阈值时写入
+        run_artifact，事件只携带 artifact_id 摘要，完整内容由前端按需取回。"""
+        if not self.run_id:
+            return None
+        settings = get_settings()
+        excerpt = f"现场记录：{question}。" + "信号强度波动导致心跳超时，触发自动重连。" * 1200
+        output = {
+            "ok": True,
+            "data": {
+                "diagnosis_id": "DIA_DEMO",
+                "fault_type": "mqtt_connection",
+                "confidence": 0.87,
+                "sources": [
+                    {
+                        "source_type": "mqtt_docs",
+                        "source_id": f"mqtt-doc-{index:03d}",
+                        "score": round(0.9 - index * 0.05, 4),
+                        "excerpt": excerpt,
+                    }
+                    for index in range(4)
+                ],
+            },
+        }
+        sanitized = sanitize_artifact(output)
+        raw = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
+        if len(raw) <= settings.run_tool_output_inline_bytes:
+            return None
+        async with SessionFactory() as db:
+            artifact = await LocalArtifactStore(
+                settings.run_artifact_root,
+                settings.run_artifact_retention_hours,
+            ).write(db, run_id=self.run_id, kind="tool_output", content=sanitized)
+            await db.commit()
+        critical_fields = extract_critical_fields(sanitized)
+        return {
+            "ok": True,
+            "data": critical_fields,
+            "truncated": True,
+            "artifact_id": artifact.id,
+            "original_bytes": artifact.size_bytes,
+            "sha256": artifact.sha256,
+            "critical_fields": critical_fields,
+            "summary": raw[:1024].decode("utf-8", errors="replace"),
+        }
 
 
 class OpenAIAgentsRuntime:
@@ -138,8 +254,6 @@ class OpenAIAgentsRuntime:
                 arguments: dict[str, Any] | None,
                 meta: dict[str, Any] | None = None,
             ) -> CallToolResult:
-                from app.services.harness import assert_run_enabled
-                await assert_run_enabled(runtime_run_id)
                 executor = ToolExecutor(runtime_run_id, self.backend_server_id, correlation)
                 try:
                     prepared = executor.prepare_arguments(tool_name, arguments)

@@ -17,11 +17,22 @@ import {
   listConversationMessages,
 } from '@/lib/api';
 
+export type ToolCallInfo = {
+  name: string;
+  result: string;
+  /** 本次运行 ID；输出转存工件时用于拉取完整内容 */
+  runId?: string;
+  /** 输出超过内联阈值被转存后的 run_artifact ID */
+  artifactId?: string;
+  /** 未转存时的完整工具输出 */
+  output?: unknown;
+};
+
 export type ChatMessage = {
   id: number | string;
   role: 'user' | 'assistant';
   text: string;
-  tools?: { name: string; result: string }[];
+  tools?: ToolCallInfo[];
   citation?: string;
   attachments?: UploadedAttachment[];
   proposals?: RemediationProposal[];

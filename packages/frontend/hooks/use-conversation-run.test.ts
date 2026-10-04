@@ -93,7 +93,7 @@ describe('useConversationRun', () => {
       '完成',
     ]);
     expect(result.current.messages[1].tools).toEqual([
-      { name: 'inspect', result: '正常' },
+      { name: 'inspect', result: '正常', runId: 'run-1' },
     ]);
     expect(result.current.running).toBe(false);
     expect(finished).toHaveBeenCalledWith('c1');

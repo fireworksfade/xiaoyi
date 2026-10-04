@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.observability.metrics import SSE_CONNECTIONS
 from app.services.run_state import is_retryable
+from app.services.artifacts import LocalArtifactStore
 from app.services.runs import process_agent_run
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
@@ -64,6 +65,65 @@ def _remove_run_artifact_files(artifacts: list[RunArtifact]) -> None:
             continue
 
 
+MAX_ARTIFACT_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+@router.get("/{run_id}/artifacts/{artifact_id}")
+async def read_run_artifact(
+    run_id: str,
+    artifact_id: str,
+    request: Request,
+    db: Db,
+    user: CurrentUser,
+) -> dict[str, object]:
+    run = await db.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user.id)
+    )
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
+    artifact = await db.scalar(
+        select(RunArtifact).where(
+            RunArtifact.id == artifact_id, RunArtifact.run_id == run_id
+        )
+    )
+    if not artifact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ARTIFACT_NOT_FOUND")
+    if artifact.size_bytes > MAX_ARTIFACT_RESPONSE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="ARTIFACT_TOO_LARGE",
+        )
+    settings = get_settings()
+    store = LocalArtifactStore(settings.run_artifact_root, settings.run_artifact_retention_hours)
+    try:
+        raw = await store.read(artifact)
+    except ValueError as exc:
+        # 路径越界或 sha256 校验失败都视为工件不可用，不回退磁盘内容。
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from None
+    if artifact.content_type == "application/json":
+        try:
+            content: object = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            content = raw.decode("utf-8", errors="replace")
+    else:
+        content = raw.decode("utf-8", errors="replace")
+    return envelope(
+        request,
+        {
+            "artifact": {
+                "id": artifact.id,
+                "run_id": artifact.run_id,
+                "kind": artifact.kind,
+                "content_type": artifact.content_type,
+                "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+                "created_at": artifact.created_at.isoformat(),
+            },
+            "content": content,
+        },
+    )
+
+
 @router.post("/{run_id}/retry", status_code=status.HTTP_202_ACCEPTED)
 async def retry_run(
     run_id: str,
@@ -80,8 +140,6 @@ async def retry_run(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RUN_NOT_FOUND")
     if original.status != RunStatus.FAILED or not is_retryable(original.error_code):
         raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
-    from app.services.harness import require_enabled
-    await require_enabled(db, user.id, (original.runtime_state or {}).get("harness_instance"))
     source_message = await db.get(Message, original.user_message_id)
     if not source_message:
         raise HTTPException(status_code=422, detail="RUN_NOT_RETRYABLE")
@@ -102,9 +160,7 @@ async def retry_run(
         user_message_id=message.id,
         status=RunStatus.QUEUED,
         queued_at=now,
-        runtime_state={"repair_budget": pinned_budget(), "harness_instance":
-                       request.headers.get("X-Xiaoyi-Harness-Instance") or
-                       (original.runtime_state or {}).get("harness_instance")},
+        runtime_state={"repair_budget": pinned_budget()},
     )
     db.add(retried)
     conversation = await db.get(Conversation, original.conversation_id)

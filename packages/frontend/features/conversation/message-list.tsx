@@ -1,8 +1,6 @@
 'use client';
 
 import {
-  Check,
-  ChevronDown,
   CircleUserRound,
   FileSearch,
   FileText,
@@ -11,6 +9,7 @@ import {
 } from 'lucide-react';
 
 import { RemediationCard } from '@/features/conversation/remediation-card';
+import { ToolChip } from '@/features/conversation/tool-chip';
 import { Button } from '@/components/ui/button';
 import type { ChatMessage } from '@/hooks/use-conversation-messages';
 
@@ -74,22 +73,7 @@ export function MessageList({
               {message.tools ? (
                 <div className="mb-4 space-y-1.5">
                   {message.tools.map((tool) => (
-                    <button
-                      key={tool.name}
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs"
-                    >
-                      <span className="grid size-5 place-items-center rounded bg-emerald-100 text-emerald-700">
-                        <Check className="size-3" />
-                      </span>
-                      <span className="font-medium text-slate-700">
-                        {tool.name}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-slate-400">
-                        {tool.result}
-                      </span>
-                      <ChevronDown className="size-3.5 text-slate-400" />
-                    </button>
+                    <ToolChip key={tool.name} tool={tool} />
                   ))}
                 </div>
               ) : null}

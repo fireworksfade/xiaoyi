@@ -66,6 +66,25 @@ export async function stopAgentRun(runId: string) {
   );
 }
 
+export type RunArtifactDetail = {
+  artifact: {
+    id: string;
+    run_id: string;
+    kind: string;
+    content_type: string;
+    size_bytes: number;
+    sha256: string;
+    created_at: string;
+  };
+  content: unknown;
+};
+
+export async function getRunArtifact(runId: string, artifactId: string) {
+  return request<RunArtifactDetail>(
+    `/agent-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
+  );
+}
+
 export async function streamAgentRun(
   runId: string,
   onEvent: (event: AgentEvent) => void,
