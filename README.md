@@ -16,7 +16,7 @@
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
 
-前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天与 Harness 原生工具入口共用 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断；两种入口各自保留认证、传输和运行事件适配。目录与维护入口见 [项目结构](docs/project-structure.md)，结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
+前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天通过 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断。目录与维护入口见 [项目结构](docs/project-structure.md)，结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
 
 交互式架构图见 [`小忆 IoT 平台 · 详细架构与运行闭环`](.archify/architecture-xiaoyi-detailed-20261001-155101/xiaoyi-detailed.html)，由 Archify 根据源码生成，展开 27 个组件、32 条关系与 5 个重点视图：会话调度、双入口工具执行、用户记忆、混合检索、审批与设备闭环。克隆仓库后可直接在浏览器打开单文件 HTML，查看源码依据和追踪上下游关系。
 
@@ -97,25 +97,6 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 IoT MCP 的 SQLite 迁移通过 `python -m scripts.migrate upgrade --service diagnosis` 和 `python -m scripts.migrate upgrade --service control` 执行，基础 Compose 启动时自动运行。升级时直接删除旧故障案例与反馈表，并取消旧案例向量重试任务；官方文档、诊断和设备数据保留。向量重建使用 `rebuild_vector_index` 工具；旧 `scripts.rebuild_external` 命令已移除。
 
 Compose 使用命名卷持久化业务数据库、MQTT 和 Qdrant 数据。普通 `docker compose down` 保留这些卷；`docker compose down -v` 会删除卷及其中的数据。
-
-## 可选扩展：DeepSeek Harness Desktop 插件
-
-小忆平台可以独立运行。需要在 DeepSeek Harness Desktop 中使用时，可额外安装 [`packages/harness-plugin`](packages/harness-plugin/README.md) 中的插件；插件 **0.2.0** 当前适配 Desktop **0.2.0-rc.2**。
-
-插件登录小忆平台后，把后端已启用的设备、知识、诊断和记忆工具注册到 **Harness 主对话**。主对话使用 Harness 当前配置的 DeepSeek 模型选择工具并回答，工具调用不会启动小忆后端的聊天 Agent；诊断工具内部的专业诊断服务仍按 IoT MCP 的独立配置运行。平台的数据、权限、修复预算、记忆和审计继续由原服务负责。
-
-在仓库根目录构建安装包：
-
-```bash
-npm ci
-npm run plugin:build
-npm run plugin:test
-npm run plugin:pack
-```
-
-安装包输出到 `output/xiaoyi-dsh-iot-0.2.0.tgz`。在 Desktop 插件页安装并开启“小忆 IoT”，从侧栏连接小忆账号，然后回到 Harness 主对话发送消息，例如“用小忆查询 ESP32_05 的 MQTT 状态，只做查询”。默认主对话接入不需要运行前端；查看数据、上传知识或处理人工审批时，再启动前端并打开可选的数据与审批面板。
-
-插件支持 Desktop 原生开关。关闭会撤销工具和连接、停止关联任务，并保留平台数据；重新开启需再次登录。高风险提案与记忆候选仍由用户确认。安装路径、地址和生命周期详见 [插件说明](packages/harness-plugin/README.md) 与 [接入说明](docs/harness-plugin.md)。已完成 Windows 主对话设备查询、知识／记忆检索和开关验证，范围见 [验证记录](docs/harness-plugin-validation.md)。
 
 ## 检索模型档位
 
@@ -234,7 +215,7 @@ docker compose ps
 docker compose up -d --build backend iot-mcp
 ```
 
-如果使用检索模型档位，维护命令继续带上原先使用的 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。插件接入要求后端迁移至少为 `0010_harness_connections`，可在 `/docs` 核对 `/api/v1/harness/native/*` 接口。设备、知识和记忆数据保存在命名卷中。
+如果使用检索模型档位，维护命令继续带上原先使用的 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。设备、知识和记忆数据保存在命名卷中。
 
 ### 前端重启、日志与停止
 

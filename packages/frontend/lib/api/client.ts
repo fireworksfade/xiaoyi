@@ -1,9 +1,7 @@
-import { bridgeFetch, harnessBridge } from './harness-bridge';
-
 const API_ROOT = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api/backend/api/v1';
 
 export function backendFetch(path: string, init: RequestInit = {}) {
-  return harnessBridge() ? bridgeFetch(path, init) : fetch(`${API_ROOT}${path}`, init);
+  return fetch(`${API_ROOT}${path}`, init);
 }
 
 const CSRF_STORAGE_KEY = 'xiaoyi.csrf-token';

@@ -3,8 +3,6 @@ from fastapi import APIRouter
 from app.api.attachments import router as attachments_router
 from app.api.auth import router as auth_router
 from app.api.conversations import router as conversations_router
-from app.api.harness import router as harness_router
-from app.api.harness_native import router as harness_native_router
 from app.api.knowledge import router as knowledge_router
 from app.api.mcp import router as mcp_router
 from app.api.memories import router as memories_router
@@ -24,5 +22,3 @@ router.include_router(attachments_router)
 router.include_router(knowledge_router)
 router.include_router(remediation_router)
 router.include_router(memories_router)
-router.include_router(harness_router)
-router.include_router(harness_native_router)

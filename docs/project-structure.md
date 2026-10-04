@@ -8,7 +8,6 @@
 | `packages/backend` | 认证、Agent 运行、审批、记忆、审计 | `app/main.py`，`app/cli.py`，`app/services/runs/` |
 | `packages/mcp-services` | 设备诊断与控制、知识检索、模拟器、可选模型服务 | `iot_mcp/server.py`，`iot_diagnosis/simulator/__main__.py` |
 | `packages/retrieval` | 共用 embedding 与 Qdrant HTTP 客户端 | `xiaoyi_retrieval/` |
-| `packages/harness-plugin` | Harness 主对话原生工具和可选数据面板 | `src/index.ts`，`src/client/index.tsx` |
 | `deploy` | MQTT Broker 配置 | `mosquitto.conf` |
 | `docs` | 当前设计、操作说明和注明日期的验收记录 | 本文、架构简化说明、memory 规格及验收报告 |
 | `.archify` | README 链接的交互式架构图、可编辑源文件与验证收据 | 图内源码证据固定于生成时的提交 |
@@ -19,11 +18,11 @@
 
 诊断与控制只运行一个 IoT MCP 服务，默认端口 9000。`external/` 和 `simulator/` 是实际实现；已删除同名 `.py` 兼容文件，原包导入和 `python -m iot_diagnosis.simulator` 命令仍可使用。
 
-根 `.env`、各包的本地 `.env*`、运行数据库和 `data/` 属于本机状态，不随源码提交。`node_modules/` 与 `.venv/` 属于运行依赖；`output/`、`tmp/` 和 `.tmp/` 还包含安装包、个人资料、备份和验收产物，不能作为缓存统一删除。
+根 `.env`、各包的本地 `.env*`、运行数据库和 `data/` 属于本机状态，不随源码提交。`node_modules/` 与 `.venv/` 属于运行依赖；`output/`、`tmp/` 和 `.tmp/` 还包含个人资料、备份和验收产物，不能作为缓存统一删除。
 
 ## 构建与验证
 
-在根目录执行 `npm ci`，前端使用 `npm run typecheck`、`npm run lint`、`npm test`、`npm run build`；插件使用 `npm run plugin:build` 和 `npm run plugin:test`。
+在根目录执行 `npm ci`，前端使用 `npm run typecheck`、`npm run lint`、`npm test`、`npm run build`。
 
 在 backend 或 mcp-services 目录执行 `python -m pip install -e ../retrieval -e ".[dev]"`，再执行 `python -m pytest`。共享检索库的独立测试位于 `packages/retrieval/tests`。
 

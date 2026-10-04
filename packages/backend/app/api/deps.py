@@ -31,8 +31,6 @@ async def current_user(request: Request, db: Db, session: Annotated[Session, Dep
     user = await db.get(User, session.user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_DISABLED")
-    from app.services.harness import HEADER, instance_id, require_enabled
-    await require_enabled(db, user.id, instance_id(request.headers.get(HEADER)))
     return user
 
 

@@ -1,4 +1,4 @@
-"""Shared tool execution for platform chat and native Harness adapters."""
+"""Shared tool execution for platform chat tool calls."""
 
 from app.agent.remediation_correlation import RemediationCorrelationState
 from app.memory.boundary import finish, prepare, rediagnose

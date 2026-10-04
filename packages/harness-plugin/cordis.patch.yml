@@ -1,8 +1,0 @@
-- insert:
-    - id: xiaoyi-iot
-      name: '@xiaoyi/dsh-iot'
-      config:
-        backendUrl: http://127.0.0.1:8000
-        frontendUrl: http://127.0.0.1:3000
-        instanceId: xiaoyi-desktop
-        requestTimeoutMs: 30000

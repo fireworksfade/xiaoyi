@@ -75,15 +75,6 @@ class Session(Base):
     user: Mapped[User] = relationship()
 
 
-class HarnessConnection(Base):
-    """User-owned Desktop plugin lease."""
-    __tablename__ = "harness_connections"
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
-    instance_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    lease_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
 class ModelConfiguration(Base):
     __tablename__ = "model_configurations"
 

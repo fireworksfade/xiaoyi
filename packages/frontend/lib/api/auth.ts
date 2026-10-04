@@ -1,12 +1,6 @@
 import { csrfToken, request, setCsrfToken, ApiError } from './client';
-import { harnessBridge } from './harness-bridge';
 
 export async function ensureDemoSession() {
-  if (harnessBridge()) {
-    await request('/auth/me');
-    setCsrfToken('harness-host-managed');
-    return;
-  }
   const token = csrfToken();
   if (token) {
     try {

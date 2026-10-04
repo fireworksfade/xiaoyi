@@ -80,10 +80,10 @@ async def test_shared_execution_records_rediagnosis_and_preserves_transport_resu
     prepared = executor.prepare_arguments(
         "execute_device_action",
         {"device_id": "d1", "issued_by": "forged"},
-        issued_by="harness:admin",
+        issued_by="test:admin",
     )
     assert prepared["diagnosis_id"] == "D-new"
-    assert prepared["issued_by"] == "harness:admin"
+    assert prepared["issued_by"] == "test:admin"
 
 
 async def test_transport_failure_is_not_wrapped_or_retried(monkeypatch):
