@@ -10,7 +10,6 @@
 | `packages/retrieval` | 共用 embedding 与 Qdrant HTTP 客户端 | `xiaoyi_retrieval/` |
 | `deploy` | MQTT Broker 配置 | `mosquitto.conf` |
 | `docs` | 当前设计、操作说明和注明日期的验收记录 | 本文、架构简化说明、memory 规格及验收报告 |
-| `.archify` | README 链接的交互式架构图、可编辑源文件与验证收据 | 图内源码证据固定于生成时的提交 |
 
 ## 数据与配置
 

@@ -18,10 +18,6 @@
 
 前端业务组件统一放在 `features/`，`components/ui/` 保留基础 UI。平台聊天通过 `ToolExecutor` 完成诊断关联、记忆边界、结果处理与失败后再诊断。目录与维护入口见 [项目结构](docs/project-structure.md)，结构与配置说明见 [架构简化说明](docs/architecture-simplification.md)。
 
-交互式架构图见 [`小忆 IoT 平台 · 详细架构与运行闭环`](.archify/architecture-xiaoyi-detailed-20261001-155101/xiaoyi-detailed.html)，由 Archify 根据源码生成，展开 27 个组件、32 条关系与 5 个重点视图：会话调度、双入口工具执行、用户记忆、混合检索、审批与设备闭环。克隆仓库后可直接在浏览器打开单文件 HTML，查看源码依据和追踪上下游关系。
-
-图的可编辑源文件为同目录的 `candidate.json`，[验收记录](.archify/architecture-xiaoyi-detailed-20261001-155101/verification.md)包含源码版本、内容校验值和验证结果；最终机器收据保存在 `review-4/`。架构图已按 2026-10-01 清理后的代码重新验收，源码依据固定于提交 `ea1f5757f9813476279faa51f58ac21ca9dc42a3`。旧版架构图、布局备份、重复收据与预览截图已清理。
-
 ## 快速开始
 
 需要 Docker Compose 和 Node.js 22.13 或更高版本。基础 Compose **不启动前端**，因此按下面两步分别启动。
