@@ -32,6 +32,7 @@ class DeviceState:
         self.mqtt_timeout = scenario == "mqtt_timeout"
         self.wifi_weak = scenario == "wifi_weak"
         self.sensor_error = scenario == "sensor_error"
+        self.sensor_calibrated = False
         self.unstable = scenario == "unstable"
         self.memory_leak = scenario == "memory_leak"
         self.watchdog_reset = scenario == "watchdog_reset"
@@ -49,6 +50,7 @@ class DeviceState:
                 "mqtt_timeout": self.mqtt_timeout,
                 "wifi_weak": self.wifi_weak,
                 "sensor_error": self.sensor_error,
+                "sensor_calibrated": self.sensor_calibrated,
                 "unstable": self.unstable,
                 "memory_leak": self.memory_leak,
                 "watchdog_reset": self.watchdog_reset,

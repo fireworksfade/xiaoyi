@@ -16,6 +16,7 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   verifying: '恢复验证中',
   succeeded: '已恢复',
   failed: '恢复验证失败',
+  inconclusive: '验证证据不足',
 };
 
 const PROPOSAL_STATUS_LABEL: Record<string, string> = {
@@ -127,6 +128,7 @@ export function RemediationCard({
       : PROPOSAL_STATUS_LABEL[proposal.status];
   const succeeded = proposal.task_status === 'succeeded';
   const failed = proposal.task_status === 'failed';
+  const inconclusive = proposal.task_status === 'inconclusive';
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 bg-white p-4">
@@ -136,7 +138,7 @@ export function RemediationCard({
         />
         <p className="text-sm font-semibold text-slate-900">修复提案待审批</p>
         <span className="ml-auto inline-flex items-center gap-1 text-xs text-slate-500">
-          {proposal.status === 'approved' && !succeeded && !failed ? (
+          {proposal.status === 'approved' && !succeeded && !failed && !inconclusive ? (
             <Loader2 className="size-3 animate-spin" />
           ) : null}
           {statusLabel}
@@ -195,6 +197,9 @@ export function RemediationCard({
         <p className="mt-2 flex items-center gap-1 text-xs text-red-600">
           <XCircle className="size-3.5" /> 恢复验证未通过，请人工跟进
         </p>
+      ) : null}
+      {inconclusive ? (
+        <p className="mt-2 text-xs text-amber-600">验证证据不足，请检查设备状态后跟进</p>
       ) : null}
       {proposal.status === 'rejected' ? (
         <p className="mt-2 text-xs text-slate-500">

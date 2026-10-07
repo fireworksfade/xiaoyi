@@ -61,8 +61,8 @@ def test_low_risk_command_lifecycle_with_recovery(repo: ControlRepository) -> No
     )
     assert acked is not None and acked["status"] == "applied"
 
-    # 验证窗口内收到在线状态且无错误日志 => 恢复成功
-    repo.record_status_sample("ESP32_05", True)
+    # 在线不足以证明 MQTT 修复；需要新的连接状态证据。
+    repo.record_status_sample("ESP32_05", {"online": True, "mqtt_status": "connected"})
     repo.record_log_sample("ESP32_05", "INFO")
     finalized = repo.finalize_watches(utc_now() + timedelta(seconds=120))
     assert len(finalized) == 1
@@ -95,6 +95,8 @@ def test_command_timeout_marks_pending_only(repo: ControlRepository) -> None:
             "UPDATE device_command SET created_at = ? WHERE command_id = ?",
             (past, command["command_id"]),
         )
+        db.execute("UPDATE command_outbox SET delivery_status = 'broker_confirmed', confirmed_at = ? "
+                   "WHERE command_id = ?", (past, command["command_id"]))
     assert repo.mark_timed_out_commands() == [command["command_id"]]
     stored = repo.get_command(command["command_id"])
     assert stored is not None and stored["status"] == "timeout"
@@ -164,7 +166,7 @@ def test_proposal_task_status_follows_command_verification(
     )
     assert command is not None
     repo.mark_command_ack(command["command_id"], "applied", {})
-    repo.record_status_sample("ESP32_07", True)
+    repo.record_status_sample("ESP32_07", {"online": True, "firmware_version": "1.3.0"})
     repo.finalize_watches(utc_now() + timedelta(seconds=120))
     stored = repo.get_proposal(proposal["proposal_id"])
     assert stored is not None and stored["task_status"] == "succeeded"
@@ -228,10 +230,11 @@ def _finalize_command(repo: ControlRepository, **kwargs) -> dict:
         action="restart_device",
         risk_level=actions.HIGH_RISK,
         diagnosis_id=diagnosis_id,
+        verification_baseline={"uptime": 86400},
         **kwargs,
     )
     repo.mark_command_ack(command["command_id"], "applied", {"detail": "设备已重启"})
-    repo.record_status_sample("ESP32_06", True)
+    repo.record_status_sample("ESP32_06", {"online": True, "uptime": 5})
     repo.finalize_watches(utc_now() + timedelta(seconds=120))
     return repo.get_command(command["command_id"])
 

@@ -36,7 +36,8 @@ class KnowledgeDocumentMixin:
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        query = "SELECT * FROM knowledge_document"
+        if not 1 <= limit <= 200 or not 0 <= offset <= 100_000:
+            raise ValueError("INVALID_PAGINATION")
         clauses: list[str] = []
         params: list[Any] = []
         if source:
@@ -45,15 +46,36 @@ class KnowledgeDocumentMixin:
         if device_type:
             clauses.append("device_type = ?")
             params.append(device_type)
-        if clauses:
-            query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY source, document_id, chunk_index, source_id"
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        # Aggregate in SQLite; only one metadata row per paginated document crosses the boundary.
+        cte = f"""WITH chunks AS (
+            SELECT source, COALESCE(NULLIF(document_id, ''),
+                CASE WHEN instr(source_id, '#') > 0
+                    THEN substr(source_id, 1, instr(source_id, '#') - 1)
+                    ELSE source_id END) AS doc_id,
+                title, device_type, metadata_json, created_at, length(content) AS chars,
+                chunk_index, source_id FROM knowledge_document{where}
+        ), ranked AS (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY source, doc_id
+                ORDER BY chunk_index, source_id) AS rn FROM chunks
+        ), documents AS (
+            SELECT source, doc_id, COUNT(*) AS chunk_count, SUM(chars) AS content_chars,
+                MAX(created_at) AS created_at,
+                MAX(CASE WHEN rn = 1 THEN title END) AS title,
+                MAX(CASE WHEN rn = 1 THEN device_type END) AS device_type,
+                MAX(CASE WHEN rn = 1 THEN metadata_json END) AS metadata_json
+            FROM ranked GROUP BY source, doc_id
+        )"""
         with self._connect() as db:
-            rows = [dict(row) for row in db.execute(query, params).fetchall()]
+            db.execute("BEGIN")
+            total = db.execute(f"{cte} SELECT COUNT(*) FROM documents", params).fetchone()[0]
+            rows = [dict(row) for row in db.execute(
+                f"{cte} SELECT * FROM documents ORDER BY source, doc_id LIMIT ? OFFSET ?",
+                [*params, limit, offset]).fetchall()]
 
         documents: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
-            document_id = row.get("document_id") or row["source_id"].split("#", 1)[0]
+            document_id = row["doc_id"]
             key = (row["source"], document_id)
             if key not in documents:
                 try:
@@ -68,8 +90,8 @@ class KnowledgeDocumentMixin:
                     "document_id": document_id,
                     "title": re.sub(r" \(\d+/\d+\)$", "", row["title"]),
                     "device_type": row.get("device_type"),
-                    "chunk_count": 0,
-                    "content_chars": 0,
+                    "chunk_count": row["chunk_count"],
+                    "content_chars": row["content_chars"],
                     "created_at": row["created_at"],
                     **default_document_metadata(row["source"], document_id),
                     **{
@@ -83,16 +105,10 @@ class KnowledgeDocumentMixin:
                         if isinstance(metadata.get(field), str) and metadata[field]
                     },
                 }
-            item = documents[key]
-            item["chunk_count"] += 1
-            item["content_chars"] += len(row["content"])
-            if row["created_at"] > item["created_at"]:
-                item["created_at"] = row["created_at"]
 
         items = list(documents.values())
-        total = len(items)
         return {
-            "items": items[offset : offset + limit],
+            "items": items,
             "total": total,
             "limit": limit,
             "offset": offset,

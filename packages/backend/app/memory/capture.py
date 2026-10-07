@@ -19,6 +19,8 @@ def normalize_result(data, *, expired=False):
         return "succeeded"
     if verify == "failed" or status == "failed":
         return "failed"
+    if verify == "inconclusive":
+        return "inconclusive"
     if not command and proposal.get("status") in {"rejected", "expired"}:
         return "not_executed"
     if status in {"timed_out", "timeout"} or expired:

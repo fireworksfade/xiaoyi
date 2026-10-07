@@ -36,7 +36,7 @@ def test_empty_db_upgrade_creates_schema(tmp_path: Path, service: str) -> None:
     result = runner.upgrade(db_path)
     expected = {
         "diagnosis": [1, 2, 3, 4, 5, 6],
-        "control": [1, 2, 3, 4],
+        "control": [1, 2, 3, 4, 5],
     }[service]
     assert result["applied"] == expected
     assert result["head"] == result["applied"][-1]

@@ -6,7 +6,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+from iot_control.verification import ACCEPTANCE_CRITERIA
+
+ActionName = Literal[
+    "reconnect_mqtt", "reconnect_wifi", "calibrate_sensor", "set_reporting_interval",
+    "restart_device", "update_firmware",
+]
 
 LOW_RISK = "low"
 HIGH_RISK = "high"
@@ -102,7 +109,10 @@ def validate_parameters(action: str, parameters: dict[str, Any] | None) -> str |
     return None
 
 
-def action_catalog() -> list[dict[str, Any]]:
+def action_catalog(device: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    # This service currently implements the ESP32 command protocol only.
+    if device is not None and device.get("device_type") != "ESP32":
+        return []
     return [
         {
             "action": action,
@@ -110,6 +120,18 @@ def action_catalog() -> list[dict[str, Any]]:
             "description": item["description"],
             "parameters": item["parameters"],
             "applicable_fault_types": item["applicable_fault_types"],
+            "compatible_device_types": ["ESP32"],
+            "acceptance_criteria": ACCEPTANCE_CRITERIA[action],
+            "parameter_schema": {
+                "type": "object",
+                "properties": {
+                    name: {("maxLength" if key == "max_length" else key): value
+                           for key, value in rule.items() if key != "required"}
+                    for name, rule in item["parameters"].items()
+                },
+                "required": [name for name, rule in item["parameters"].items() if rule.get("required")],
+                "additionalProperties": False,
+            },
         }
         for action, item in sorted(ACTIONS.items())
     ]

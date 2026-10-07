@@ -76,6 +76,8 @@ npm run dev
 
 MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务及工具。注册脚本将查询与诊断工具设为只读策略、可发起的动作设为提案策略、需人工审批的写入与删除工具设为审批策略；未列入策略的工具保持禁用。
 
+设备控制采用持久投递队列和按动作验收的恢复验证；缺少证据返回 `inconclusive`。命令投递状态、设备验收字段及工具 schema 升级步骤见 [IoT 工具可靠性说明](docs/iot-tool-reliability.md)。
+
 ## 配置
 
 - Embedding / Reranker 的 API 配置统一放在仓库根目录 `.env`，模板见 [`.env.example`](.env.example)，字段与切换步骤见 [API 检索配置](docs/retrieval-api.md)。
@@ -189,7 +191,9 @@ Remove-Item Env:E2E_MEMORY_LIVE, Env:E2E_PYTHON
 
 macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bin/python" npm run test:e2e`。测试会禁用 Wrangler 对 `.env.local` 的覆盖，并在发送消息前核验临时后端标记；不拦截或 mock 记忆 API 响应。运行前关闭同一前端目录已有的 dev 服务，Vinext 同一目录只允许一个 dev 实例。临时测试服务在结束后退出。
 
-2026-10-07 Text2SQL 与 API 检索联调验证：前端 54 passed，后端 158 passed、1 skipped，MCP 263 passed，浏览器基础流程 1 passed、真实 IoT / 知识库流程 2 passed；类型检查、lint 和构建通过。真实调用验证了 API、本地 Qwen、hash/weighted 及 API 恢复四条检索路径，知识文档新增、替换、删除同步到三套索引。启动步骤与验收细节见 [前后端联调说明](docs/integration-testing.md)。
+2026-10-07 IoT 工具可靠性修复后的验证：MCP 305 passed，后端 158 passed、1 skipped，前端 55 passed；类型检查、lint、构建和真实 MQTT 冒烟通过。后端、IoT MCP、模拟机群及前端已重启，控制库迁移到版本 5，工具目录与既定风险策略已刷新；前端页面、同源代理及两个服务的就绪检查均返回 HTTP 200。在线 MCP 调用验证了新动作枚举、六类动作验收说明、实时设备状态和 SQL 分页。测试边界与升级说明见 [IoT 工具可靠性说明](docs/iot-tool-reliability.md)。
+
+2026-10-07 较早的 Text2SQL 与 API 检索联调验证：前端 54 passed，后端 158 passed、1 skipped，MCP 263 passed，浏览器基础流程 1 passed、真实 IoT / 知识库流程 2 passed；类型检查、lint 和构建通过。真实调用验证了 API、本地 Qwen、hash/weighted 及 API 恢复四条检索路径，知识文档新增、替换、删除同步到三套索引。启动步骤与验收细节见 [前后端联调说明](docs/integration-testing.md)。
 
 真实 IoT 浏览器测试需要已启动的服务及有效模型配置，会调用外部模型 API。Windows PowerShell 在根目录运行：
 
@@ -213,6 +217,16 @@ Remove-Item Env:E2E_IOT_LIVE
 | 前端回归 | typecheck、lint、34 项 Vitest、build 全通过 |
 
 首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。详细记忆验证与小样本在线语义评估见 [修复报告](docs/memory-repair-report-20260930.md)。
+
+## 设备控制与恢复验证
+
+低风险动作通过 `execute_device_action` 受理，高风险动作通过 `create_remediation_proposal` 提交并由人工审批。动作与提案均须关联真实诊断；`list_device_actions` 按服务已实现的 ESP32 设备协议筛选，并返回风险、参数 schema 和验收条件。
+
+命令、审批与待投递记录原子落库。`ok=true` 表示请求已受理；`delivery_status` 区分待投递、发送中、Broker 确认、设备回执和结果未知。MQTT 暂时不可用时保留命令，通道恢复后继续发送；结果未知时不自动重发，队列有效期为 30 分钟。通过 `get_action_result` 查询设备执行及恢复验证结果。
+
+恢复观察窗口按命令持久保存，服务重启后继续验证。MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级分别检查对应状态字段；仅设备在线不能证明修复成功。证据不足时返回 `verify_status=inconclusive`，前端显示“验证证据不足”，记忆模块按结果不明处理。真实设备需实现验收字段与过期命令拒绝，具体协议见 [可靠性与验收说明](docs/iot-tool-reliability.md)。
+
+本次更新包含控制库迁移 0005 与工具参数 schema 变更。开发 Compose 启动时自动迁移；更新源码后重启后端、IoT MCP 和模拟机群，再运行 `bootstrap_local_mcp.py` 刷新工具与策略。宿主机前端单独重启，检索模型档位继续使用原有 Compose 覆盖文件。
 
 ## RAG + Text2SQL
 

@@ -54,23 +54,27 @@ class ControlMQTT:
         try:
             payload = json.loads(message.payload.decode("utf-8"))
             parts = message.topic.split("/")
-            if len(parts) != 3 or parts[0] != "iot" or not isinstance(payload, dict):
+            if len(parts) != 3 or parts[0] != "iot" or not isinstance(payload, (dict, list)):
                 return
             device_id, kind = parts[1], parts[2]
             if kind == "cmd_ack":
+                if not isinstance(payload, dict):
+                    return
                 command_id = payload.get("command_id")
                 if command_id:
                     self.repository.mark_command_ack(
-                        command_id, str(payload.get("status", "failed")), payload
+                        command_id, str(payload.get("status", "failed")), payload, device_id=device_id
                     )
             elif kind == "status":
-                self.repository.record_status_sample(device_id, payload.get("online"))
+                if isinstance(payload, dict) and not getattr(message, "retain", False):
+                    self.repository.record_status_sample(device_id, payload)
             elif kind in ("logs", "fault"):
                 entries = payload if isinstance(payload, list) else [payload]
                 for entry in entries:
                     if isinstance(entry, dict):
                         level = entry.get("level", "ERROR" if kind == "fault" else "INFO")
-                        self.repository.record_log_sample(device_id, level)
+                        if not getattr(message, "retain", False):
+                            self.repository.record_log_sample(device_id, level, entry)
         except Exception:
             logger.exception("Failed to process MQTT message from %s", message.topic)
 
@@ -87,8 +91,10 @@ class ControlMQTT:
         self,
         device_id: str,
         command: dict,
-    ) -> bool:
-        """QoS1 下发命令；返回是否成功交予 Broker（不保证设备已收到）。"""
+    ) -> str:
+        """Confirm QoS1 PUBACK. An uncertain publish must never be blindly retried."""
+        if not self.client.is_connected():
+            return "pending"
         topic = COMMAND_TOPIC.format(device_id=device_id)
         payload = json.dumps(
             {
@@ -98,15 +104,20 @@ class ControlMQTT:
                 "reason": command.get("reason", ""),
                 "issued_by": command.get("issued_by", ""),
                 "issued_at": command["created_at"],
+                "expires_at": command.get("expires_at"),
             },
             ensure_ascii=False,
         )
         try:
             info = self.client.publish(topic, payload, qos=1)
-            return info.rc == mqtt.MQTT_ERR_SUCCESS
+            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                # Paho may queue QoS1 messages even when rc is NO_CONN.
+                return "unknown"
+            info.wait_for_publish(timeout=2)
+            return "broker_confirmed" if info.is_published() else "unknown"
         except Exception:
             logger.exception("Failed to publish command to %s", topic)
-            return False
+            return "unknown"
 
     def start(self) -> None:
         self.client.connect_async(

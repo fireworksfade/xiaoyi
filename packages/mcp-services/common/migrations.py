@@ -15,6 +15,8 @@ import importlib.util
 import inspect
 import logging
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,11 +99,16 @@ class SQLiteMigrationRunner:
         self.service = service
         self.head = ordered[-1].version if ordered else 0
 
-    def _connect(self, path: str) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self, path: str) -> Iterator[sqlite3.Connection]:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path, timeout=30)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _applied(self, db: sqlite3.Connection) -> dict[int, str]:
         self._ensure_table(db)

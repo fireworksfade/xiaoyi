@@ -9,12 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -27,7 +28,7 @@ from iot_control.repository import ControlRepository
 
 # Diagnosis imports
 from iot_diagnosis.auth import auth_configuration as diagnosis_auth_configuration
-from iot_diagnosis.diagnosis import diagnose
+from iot_diagnosis.diagnosis import DiagnosisStageError, diagnose
 from iot_diagnosis.ingestion import ingest_text
 from iot_diagnosis.mqtt import MQTTIngestor
 from iot_diagnosis.repository import DiagnosisRepository
@@ -37,6 +38,33 @@ from iot_diagnosis.text2sql import Text2SQLError
 from iot_diagnosis.text2sql import query_iot_data as query_structured_data
 
 logger = logging.getLogger("xiaoyi.iot_mcp.server")
+
+KnowledgeSource = Literal["mqtt_docs", "wifi_docs", "sensor_docs", "device_docs"]
+SearchSource = Literal["mqtt_docs", "wifi_docs", "sensor_docs", "device_docs", "realtime_db"]
+PageLimit = Annotated[int, Field(ge=1, le=200, description="每页最多返回 200 条")]
+PageOffset = Annotated[int, Field(ge=0, le=100_000, description="分页起始位置")]
+
+
+def validate_parameter_count(value: Any) -> Any:
+    if isinstance(value, dict) and len(value) > 10:
+        raise ValueError("动作参数最多允许 10 个字段")
+    return value
+
+
+ActionParameters = Annotated[
+    dict[str, Any], BeforeValidator(validate_parameter_count),
+    Field(json_schema_extra={"maxProperties": 10}),
+]
+
+
+def diagnosis_failure(code: str, device_id: str, query: str, message: str) -> dict[str, Any]:
+    logger.exception(message)
+    try:
+        trace = diagnosis_repository.save_diagnosis_error(device_id, query, code, message)
+    except Exception:
+        logger.exception("Failed to persist diagnosis error")
+        trace = {}
+    return failure(code, message, retryable=True, details=trace)
 
 # Initialize repositories
 diagnosis_repository = DiagnosisRepository(
@@ -65,6 +93,7 @@ async def service_lifespan(_server):
     diagnosis_retention_task = None
     control_mqtt = None
     control_watchdog = None
+    control_repository.recover_delivery()
 
     # Start diagnosis MQTT ingestor
     if os.getenv("MQTT_ENABLED", "false").lower() == "true":
@@ -104,33 +133,33 @@ async def service_lifespan(_server):
         control_mqtt.start()
         logger.info("Control MQTT started")
 
-        async def background_worker() -> None:
-            while True:
-                await asyncio.sleep(2)
-                try:
-                    await asyncio.to_thread(control_repository.process_timeouts)
-                except Exception:
-                    logger.exception("Timeout processing failed")
+    async def background_worker() -> None:
+        while True:
+            await asyncio.sleep(2)
+            try:
+                await asyncio.to_thread(control_repository.process_timeouts)
+                mqtt_client = control_mqtt
+                if mqtt_client:
+                    await asyncio.to_thread(control_repository.dispatch_pending, mqtt_client.send_command)
+            except Exception:
+                logger.exception("Command delivery/timeout processing failed")
 
-        control_watchdog = asyncio.create_task(background_worker())
-        logger.info("Control timeout processor started")
+    control_watchdog = asyncio.create_task(background_worker())
 
-    yield
-
-    # Cleanup
-    if diagnosis_sync_task:
-        diagnosis_sync_task.cancel()
-    if diagnosis_retention_task:
-        diagnosis_retention_task.cancel()
-    if control_watchdog:
-        control_watchdog.cancel()
-    if diagnosis_ingestor:
-        diagnosis_ingestor.stop()
-    if control_mqtt:
-        control_mqtt.stop()
-        control_mqtt = None
-
-    logger.info("Unified IoT MCP server shutdown complete")
+    try:
+        yield
+    finally:
+        tasks = [task for task in (diagnosis_sync_task, diagnosis_retention_task, control_watchdog)
+                 if task]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if diagnosis_ingestor:
+            diagnosis_ingestor.stop()
+        if control_mqtt:
+            control_mqtt.stop()
+            control_mqtt = None
+        logger.info("Unified IoT MCP server shutdown complete")
 
 
 mcp = MCPServer(
@@ -154,9 +183,9 @@ mcp = MCPServer(
 def diagnose_fault(
     device_id: Annotated[str, Field(min_length=1, max_length=120)],
     query: Annotated[str, Field(min_length=1, max_length=2000)],
-    logs: Annotated[list[str] | None, Field(max_length=100)] = None,
+    logs: Annotated[list[Annotated[str, Field(max_length=2000)]] | None, Field(max_length=100)] = None,
     use_realtime_state: bool = True,
-    memory_context: list[dict[str, Any]] | None = None,
+    memory_context: Annotated[list[dict[str, Any]] | None, Field(max_length=6)] = None,
     repair_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行设备状态、日志、自适应多源检索、重排和结构化故障诊断。"""
@@ -165,10 +194,14 @@ def diagnose_fault(
     except LookupError:
         message = f"Device {device_id} does not exist"
         return failure("DEVICE_NOT_FOUND", message)
+    except ValueError as exc:
+        return failure("INVALID_REQUEST", "诊断上下文参数无效", details={"reason": str(exc)})
+    except sqlite3.Error:
+        return diagnosis_failure("DATABASE_ERROR", device_id, query, "诊断数据库不可用")
+    except DiagnosisStageError as exc:
+        return diagnosis_failure(exc.code, device_id, query, "诊断检索流程失败")
     except Exception:
-        message = "诊断流程执行失败"
-        logger.exception(message)
-        return failure("LLM_ERROR", message, retryable=True)
+        return diagnosis_failure("DIAGNOSIS_FAILED", device_id, query, "诊断流程执行失败")
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
@@ -191,10 +224,10 @@ def get_device_status(
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
 def list_devices(
-    device_type: str | None = None,
+    device_type: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
     online: bool | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: PageLimit = 100,
+    offset: PageOffset = 0,
 ) -> dict[str, Any]:
     """列出已发现设备及其最新状态，可按设备类型和当前在线状态过滤。"""
     return success(diagnosis_repository.list_devices(device_type, online, limit, offset))
@@ -203,8 +236,8 @@ def list_devices(
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
 def get_device_logs(
     device_id: Annotated[str, Field(min_length=1, max_length=120)],
-    limit: int = 50,
-    level: str | None = None,
+    limit: PageLimit = 50,
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = None,
 ) -> dict[str, Any]:
     """读取指定设备最近日志，可按日志级别过滤。"""
     items = diagnosis_repository.get_device_logs(device_id, limit, level)
@@ -215,16 +248,17 @@ def get_device_logs(
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
 def search_knowledge(
-    query: str,
-    sources: list[str] | None = None,
-    top_k: int = 5,
-    strategy: str | None = None,
+    query: Annotated[str, Field(min_length=1, max_length=2000, description="需要查找的技术问题")],
+    sources: Annotated[list[SearchSource] | None, Field(max_length=5)] = None,
+    top_k: Annotated[int, Field(ge=1, le=20, description="返回的知识片段数量")] = 5,
+    strategy: Literal["dense", "sparse", "hybrid"] | None = None,
 ) -> dict[str, Any]:
     """按指定来源或 Adaptive Router 的选择执行多源知识检索和统一重排。"""
     try:
-        return success(retrieve_knowledge(diagnosis_repository, query, sources, top_k, strategy=strategy))
-    except ValueError:
-        return failure("INVALID_REQUEST", "包含不支持的知识源")
+        selected = [str(source) for source in sources] if sources is not None else None
+        return success(retrieve_knowledge(diagnosis_repository, query, selected, top_k, strategy=strategy))
+    except ValueError as exc:
+        return failure("INVALID_REQUEST", "知识检索参数无效", details={"reason": str(exc)})
     except Exception:
         logger.exception("知识检索失败")
         return failure("RETRIEVAL_FAILED", "知识检索失败", retryable=True)
@@ -262,10 +296,10 @@ def query_iot_data(
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
 def list_knowledge_documents(
-    source: str | None = None,
-    device_type: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    source: KnowledgeSource | None = None,
+    device_type: Annotated[str | None, Field(min_length=1, max_length=120)] = None,
+    limit: PageLimit = 100,
+    offset: PageOffset = 0,
 ) -> dict[str, Any]:
     """列出已摄取知识文档及分块数量，不返回大段正文。"""
     return success(diagnosis_repository.list_knowledge_documents(source, device_type, limit, offset))
@@ -292,7 +326,7 @@ def list_diagnoses(
     )
 )
 def ingest_knowledge_text(
-    source: str,
+    source: KnowledgeSource,
     document_id: Annotated[str, Field(min_length=1, max_length=120)],
     title: Annotated[str, Field(min_length=1, max_length=300)],
     content: Annotated[str, Field(min_length=1, max_length=200_000)],
@@ -338,7 +372,7 @@ def ingest_knowledge_text(
     )
 )
 def delete_knowledge_document(
-    source: str,
+    source: KnowledgeSource,
     document_id: Annotated[str, Field(min_length=1, max_length=120)],
 ) -> dict[str, Any]:
     """从 SQLite 和 Qdrant 向量索引中删除整个知识文档。"""
@@ -360,11 +394,12 @@ def delete_knowledge_document(
     )
 )
 def rebuild_vector_index(
-    sources: Annotated[list[str] | None, Field(max_length=5)] = None,
+    sources: Annotated[list[KnowledgeSource] | None, Field(max_length=4)] = None,
 ) -> dict[str, Any]:
-    """以 SQLite 中的知识分块和已确认案例为准，批量重建 Qdrant 向量索引。"""
+    """以 SQLite 中的知识分块为准，批量重建 Qdrant 向量索引。"""
     try:
-        return success(diagnosis_repository.rebuild_vector_index(sources))
+        selected = [str(source) for source in sources] if sources is not None else None
+        return success(diagnosis_repository.rebuild_vector_index(selected))
     except ValueError:
         return failure("INVALID_REQUEST", "包含不支持的知识源")
     except Exception:
@@ -382,7 +417,10 @@ def list_device_actions(
     device_id: Annotated[str, Field(min_length=1, max_length=120)] | None = None,
 ) -> dict[str, Any]:
     """列出可下发的设备修复动作、风险级别、参数与适用故障类型。"""
-    return success({"actions": actions.action_catalog()})
+    device = diagnosis_repository.get_device_status(device_id) if device_id else None
+    if device_id and not device:
+        return failure("DEVICE_NOT_FOUND", f"Device {device_id} does not exist")
+    return success({"device_id": device_id, "actions": actions.action_catalog(device)})
 
 
 @mcp.tool(
@@ -395,15 +433,19 @@ def list_device_actions(
 )
 def execute_device_action(
     device_id: Annotated[str, Field(min_length=1, max_length=120)],
-    action: Annotated[str, Field(min_length=1, max_length=120)],
+    action: actions.ActionName,
     reason: Annotated[str, Field(min_length=1, max_length=2000)],
     diagnosis_id: Annotated[str, Field(min_length=21, max_length=21, pattern=r"^DIA_\d{8}_[A-F0-9]{8}$")],
-    parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
+    parameters: ActionParameters | None = None,
     issued_by: Annotated[str, Field(max_length=160)] = "agent",
     correlation_key: Annotated[str | None, Field(max_length=120)] = None,
     applied_memory_refs: Annotated[list[dict[str, Any]] | None, Field(max_length=6)] = None,
 ) -> dict[str, Any]:
-    """下发低风险修复动作。若实际采用经验，在 applied_memory_refs 指定 memory_id/revision；后端校验，检索命中不算采用。"""
+    """受理低风险修复动作并持久入队。ok 表示受理；delivery_status 表示投递阶段。
+
+    通过 get_action_result 查询回执与 verify_status，仅 succeeded 表示验证通过。
+    实际采用经验时在 applied_memory_refs 指定 memory_id/revision；检索命中不算采用。
+    """
     item = actions.get_action(action)
     if not item:
         return failure("UNKNOWN_ACTION", f"Action {action} is not supported")
@@ -423,28 +465,33 @@ def execute_device_action(
     if diagnosis.get("device_id") != device_id:
         return failure("DIAGNOSIS_DEVICE_MISMATCH", "诊断记录与设备 ID 不匹配", retryable=False)
 
-    command = control_repository.create_command(
-        device_id=device_id,
-        action=action,
-        risk_level=item["risk_level"],
-        parameters=parameters,
-        reason=reason,
-        issued_by=issued_by,
-        diagnosis_id=diagnosis_id,
-        correlation_key=correlation_key,
-    )
+    state = diagnosis_repository.get_device_status(device_id)
+    if state and action not in {item["action"] for item in actions.action_catalog(state)}:
+        return failure("ACTION_NOT_SUPPORTED_BY_DEVICE", "该设备不支持此动作")
+    try:
+        command = control_repository.create_command(
+            device_id=device_id,
+            action=action,
+            risk_level=item["risk_level"],
+            parameters=parameters,
+            reason=reason,
+            issued_by=issued_by,
+            diagnosis_id=diagnosis_id,
+            correlation_key=correlation_key,
+            verification_baseline=state,
+        )
+    except ValueError as exc:
+        return failure(str(exc), "动作请求与已有请求冲突")
+    except sqlite3.Error:
+        logger.exception("命令创建失败")
+        return failure("DATABASE_ERROR", "命令创建失败", retryable=True)
 
     if command.get("replayed"):
         return success(command)
 
-    # Send via MQTT if available
     if control_mqtt:
-        delivered = control_mqtt.send_command(device_id, command)
-        if correlation_key:
-            control_repository.set_correlation_delivery(correlation_key, delivered)
-        return success({**command, "delivered": delivered})
-    else:
-        return success({**command, "delivered": False, "delivery_status": "unknown"})
+        command = control_repository.dispatch_command(command["command_id"], control_mqtt.send_command)
+    return success({**command, "delivered": command["delivery_status"] in {"broker_confirmed", "device_acked"}})
 
 
 @mcp.tool(
@@ -457,11 +504,11 @@ def execute_device_action(
 )
 def create_remediation_proposal(
     device_id: Annotated[str, Field(min_length=1, max_length=120)],
-    action: Annotated[str, Field(min_length=1, max_length=120)],
+    action: actions.ActionName,
     reason: Annotated[str, Field(min_length=1, max_length=4000)],
     impact: Annotated[str, Field(min_length=1, max_length=4000)],
     diagnosis_id: Annotated[str, Field(min_length=21, max_length=21, pattern=r"^DIA_\d{8}_[A-F0-9]{8}$")],
-    parameters: Annotated[dict[str, Any] | None, Field(max_properties=10)] = None,
+    parameters: ActionParameters | None = None,
     correlation_key: Annotated[str | None, Field(max_length=120)] = None,
     applied_memory_refs: Annotated[list[dict[str, Any]] | None, Field(max_length=6)] = None,
 ) -> dict[str, Any]:
@@ -485,15 +532,24 @@ def create_remediation_proposal(
     if diagnosis.get("device_id") != device_id:
         return failure("DIAGNOSIS_DEVICE_MISMATCH", "诊断记录与设备 ID 不匹配", retryable=False)
 
-    proposal = control_repository.create_proposal(
-        device_id=device_id,
-        action=action,
-        parameters=parameters,
-        reason=reason,
-        impact=impact,
-        diagnosis_id=diagnosis_id,
-        correlation_key=correlation_key,
-    )
+    state = diagnosis_repository.get_device_status(device_id)
+    if state and action not in {item["action"] for item in actions.action_catalog(state)}:
+        return failure("ACTION_NOT_SUPPORTED_BY_DEVICE", "该设备不支持此动作")
+    try:
+        proposal = control_repository.create_proposal(
+            device_id=device_id,
+            action=action,
+            parameters=parameters,
+            reason=reason,
+            impact=impact,
+            diagnosis_id=diagnosis_id,
+            correlation_key=correlation_key,
+        )
+    except ValueError as exc:
+        return failure(str(exc), "提案请求与已有请求冲突")
+    except sqlite3.Error:
+        logger.exception("提案创建失败")
+        return failure("DATABASE_ERROR", "提案创建失败", retryable=True)
     return success(proposal)
 
 
@@ -519,7 +575,9 @@ def get_action_result(
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False))
-def get_action_by_correlation(correlation_key: str) -> dict[str, Any]:
+def get_action_by_correlation(
+    correlation_key: Annotated[str, Field(min_length=1, max_length=120)],
+) -> dict[str, Any]:
     """Backend recovery only; excluded from the Agent tool catalog."""
     result = control_repository.get_action_by_correlation(correlation_key)
     return success(result) if result else failure("ACTION_CORRELATION_NOT_FOUND", "No action found")
@@ -549,7 +607,7 @@ def decide_remediation_proposal(
     decided_by: Annotated[str, Field(min_length=1, max_length=160)],
     expected_version: Annotated[int, Field(ge=1)],
 ) -> dict[str, Any]:
-    """人工决策修复提案；批准后立即下发命令并进入恢复验证（仅限已授权后端调用）。"""
+    """人工决策修复提案；批准后命令进入持久投递队列，回执后验证（仅限已授权后端调用）。"""
     proposal = control_repository.get_proposal(proposal_id)
     if proposal is None:
         return failure("PROPOSAL_NOT_FOUND", f"Proposal {proposal_id} does not exist")
@@ -569,20 +627,26 @@ def decide_remediation_proposal(
             decided_by,
             expected_version,
             risk_level_of=actions.risk_level,
+            verification_baseline=diagnosis_repository.get_device_status(proposal["device_id"]),
         )
     except LookupError:
         return failure("PROPOSAL_NOT_FOUND", f"Proposal {proposal_id} does not exist")
     except ValueError as exc:
         return failure(str(exc), "提案决策被拒绝")
+    except sqlite3.Error:
+        logger.exception("提案审批数据库不可用")
+        return failure("DATABASE_ERROR", "提案审批数据库不可用", retryable=True)
 
-    delivered = None
     if command is not None:
         if control_mqtt:
-            delivered = control_mqtt.send_command(proposal["device_id"], command)
-        else:
-            return failure("MQTT_UNAVAILABLE", "设备控制通道未启用", retryable=True)
+            command = control_repository.dispatch_command(command["command_id"], control_mqtt.send_command)
+        # A device ACK may have arrived while waiting for the Broker's confirmation.
+        latest = control_repository.get_proposal(proposal_id)
+        if latest is not None:
+            proposal = latest
 
-    return success({**proposal, "command": command, "delivered": delivered})
+    return success({**proposal, "command": command,
+                    "delivered": bool(command and command["delivery_status"] in {"broker_confirmed", "device_acked"})})
 
 
 @mcp.custom_route("/ready", methods=["GET"])

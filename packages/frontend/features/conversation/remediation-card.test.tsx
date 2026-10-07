@@ -65,4 +65,16 @@ describe('RemediationCard refresh recovery', () => {
     expect(screen.queryByText(/故障案例/)).not.toBeInTheDocument();
     expect(screen.queryByText('批准执行')).not.toBeInTheDocument();
   });
+
+  it('shows missing verification evidence as inconclusive and stops the spinner', async () => {
+    const inconclusive = proposal({ status: 'approved', task_status: 'inconclusive', version: 2 });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      data: { proposal: inconclusive, command: null }, request_id: 'r',
+    })));
+    const { container } = render(<RemediationCard proposal={inconclusive} />);
+    expect(screen.getByText('验证证据不足')).toBeInTheDocument();
+    expect(screen.getByText('验证证据不足，请检查设备状态后跟进')).toBeInTheDocument();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  });
 });

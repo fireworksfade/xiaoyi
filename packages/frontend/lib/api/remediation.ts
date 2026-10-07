@@ -10,7 +10,7 @@ export type RemediationProposal = {
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   version: number;
   expires_at: string;
-  task_status: 'running' | 'verifying' | 'succeeded' | 'failed' | null;
+  task_status: 'running' | 'verifying' | 'succeeded' | 'failed' | 'inconclusive' | null;
   command_id: string | null;
   decided_by: string | null;
   decided_at: string | null;
@@ -23,7 +23,7 @@ export type RemediationProposalDetail = {
   command: {
     command_id: string;
     status: 'pending' | 'acked' | 'applied' | 'failed' | 'timeout';
-    verify_status: 'succeeded' | 'failed' | null;
+    verify_status: 'succeeded' | 'failed' | 'inconclusive' | null;
     ack: Record<string, unknown> | null;
     delivery_status?: string | null;
   } | null;

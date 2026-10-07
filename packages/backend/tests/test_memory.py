@@ -143,6 +143,7 @@ def test_normalize_result_mapping_table() -> None:
     assert capture.normalize_result({"proposal": {"status": "rejected"}}) == "not_executed"
     assert capture.normalize_result({"command": {"status": "applied"}}) == "pending"
     assert capture.normalize_result({"command": {"status": "timed_out"}}) == "inconclusive"
+    assert capture.normalize_result({"command": {"status": "applied", "verify_status": "inconclusive"}}) == "inconclusive"
     # ACK 成功但没有恢复验证不等同恢复
     assert capture.normalize_result({"command": {"status": "acked"}}) == "pending"
 

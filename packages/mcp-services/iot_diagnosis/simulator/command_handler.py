@@ -41,6 +41,13 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
 
     if not command_id or not action:
         return ack("failed", "command_id 与 action 不能为空")
+    if payload.get("expires_at"):
+        try:
+            expires = datetime.fromisoformat(payload["expires_at"].replace("Z", "+00:00"))
+            if expires <= datetime.now(timezone.utc):
+                return ack("failed", "命令已过期")
+        except (ValueError, TypeError):
+            return ack("failed", "命令有效期无效")
 
     with state.lock:
         if action == "reconnect_mqtt":
@@ -51,6 +58,7 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
             return ack("applied", "WiFi 已重新连接")
         if action == "calibrate_sensor":
             state.sensor_error = False
+            state.sensor_calibrated = True
             return ack("applied", "传感器校准完成")
         if action == "set_reporting_interval":
             seconds = parameters.get("seconds")

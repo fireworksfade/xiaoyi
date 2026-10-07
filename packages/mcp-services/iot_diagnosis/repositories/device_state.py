@@ -45,27 +45,39 @@ class DeviceStateMixin:
         offset: int = 0,
     ) -> dict[str, Any]:
         """集合查询（LEFT JOIN current state），避免逐设备 N+1 查询。"""
+        if not 1 <= limit <= 200 or not 0 <= offset <= 100_000:
+            raise ValueError("INVALID_PAGINATION")
+        observed_at = utc_now()
         where = ["1 = 1"]
         params: list[Any] = []
         if device_type:
             where.append("d.device_type = ?")
             params.append(device_type)
+        if online is not None:
+            # Normalize ISO timestamps in SQLite so differing timezone offsets compare correctly.
+            where.append("""(COALESCE(cs.online, 0) != 0 AND
+                COALESCE(julianday(cs.received_at) >= julianday(?), 0)) = ?""")
+            params.extend([(observed_at - timedelta(seconds=self.offline_after_seconds)).isoformat(),
+                           int(online)])
+        joined = ("FROM device d LEFT JOIN device_current_state cs "
+                  "ON cs.device_id = d.device_id " + f"WHERE {' AND '.join(where)}")
         query = (
             "SELECT d.device_id, d.device_type, d.name, d.firmware_version, "
             "cs.online, cs.wifi_status, cs.rssi, cs.mqtt_status, cs.temperature, "
             "cs.uptime, cs.device_timestamp, cs.received_at "
-            "FROM device d LEFT JOIN device_current_state cs ON cs.device_id = d.device_id "
-            f"WHERE {' AND '.join(where)} ORDER BY d.device_id"
+            f"{joined} ORDER BY d.device_id LIMIT ? OFFSET ?"
         )
         with self._connect() as db:
-            rows = [dict(row) for row in db.execute(query, params).fetchall()]
+            db.execute("BEGIN")
+            total = db.execute(f"SELECT COUNT(*) {joined}", params).fetchone()[0]
+            rows = [dict(row) for row in db.execute(query, [*params, limit, offset]).fetchall()]
 
         items = []
         for row in rows:
             received_at = self._parse_datetime(row.get("received_at"))
             fresh = bool(
                 received_at
-                and utc_now() - received_at <= timedelta(seconds=self.offline_after_seconds)
+                and observed_at - received_at <= timedelta(seconds=self.offline_after_seconds)
             )
             reported_online = bool(row.get("online"))
             effective = reported_online and fresh
@@ -88,9 +100,8 @@ class DeviceStateMixin:
                     "last_seen": row.get("device_timestamp") or row.get("received_at"),
                 }
             )
-        total = len(items)
         return {
-            "items": items[offset : offset + limit],
+            "items": items,
             "total": total,
             "limit": limit,
             "offset": offset,
@@ -99,6 +110,8 @@ class DeviceStateMixin:
     def get_device_logs(
         self, device_id: str, limit: int = 50, level: str | None = None
     ) -> list[dict[str, Any]] | None:
+        if not 1 <= limit <= 200:
+            raise ValueError("INVALID_PAGINATION")
         with self._connect() as db:
             known = db.execute("SELECT 1 FROM device WHERE device_id = ?", (device_id,)).fetchone()
         if not known:

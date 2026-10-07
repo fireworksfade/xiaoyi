@@ -110,6 +110,8 @@ def search_knowledge(
     strategy: str | None = None,
     debug: bool | None = None,
 ) -> dict[str, Any]:
+    if not query.strip() or len(query) > 2000 or not 1 <= top_k <= 20:
+        raise ValueError("RETRIEVAL_REQUEST_INVALID")
     config = RetrievalConfig.from_env(strategy)
     if debug is None:
         debug = config.debug

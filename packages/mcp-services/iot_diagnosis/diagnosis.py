@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,12 @@ from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
 from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retrieval import search_knowledge
 from iot_diagnosis.router import RouteDecision, route_query
+
+
+class DiagnosisStageError(RuntimeError):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 def _realtime_answer(query: str, state: dict[str, Any]) -> str:
@@ -207,14 +214,19 @@ def diagnose(
 
     retrieval_started = time.perf_counter()
     if route.need_retrieval:
-        retrieval = search_knowledge(
-            repository,
-            query,
-            route.sources,
-            route.top_k,
-            state=state if use_realtime_state else None,
-            logs=logs,
-        )
+        try:
+            retrieval = search_knowledge(
+                repository,
+                query,
+                route.sources,
+                route.top_k,
+                state=state if use_realtime_state else None,
+                logs=logs,
+            )
+        except (ValueError, sqlite3.Error):
+            raise
+        except Exception as exc:
+            raise DiagnosisStageError("RETRIEVAL_FAILED") from exc
     else:
         realtime_content = _realtime_answer(query, state)
         retrieval = {
