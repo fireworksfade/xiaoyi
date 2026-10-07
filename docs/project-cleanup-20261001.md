@@ -2,7 +2,7 @@
 
 ## 审查范围
 
-审查前端、主后端、统一 IoT MCP、共享检索库、Harness 插件、Compose、维护脚本、依赖声明、文档和本机生成目录。使用 Python 语法树、TypeScript 模块解析与全库引用搜索区分实际调用、框架入口、类型引用、CSS 依赖和历史升级需求。
+审查前端、主后端、统一 IoT MCP、共享检索库、Compose、维护脚本、依赖声明、文档和本机生成目录。使用 Python 语法树、TypeScript 模块解析与全库引用搜索区分实际调用、框架入口、类型引用、CSS 依赖和历史升级需求。
 
 ## 已删除与收敛
 
@@ -26,7 +26,7 @@
 
 ## 保留范围
 
-实际使用的 UI 组件、CSS 与构建依赖、平台聊天和 Harness 功能、模拟器、知识文档、检索模型与离线档位均保留。SQLite 与 Alembic 历史迁移保持原样，避免破坏已有库升级或 checksum 校验。
+实际使用的 UI 组件、CSS 与构建依赖、平台聊天、模拟器、知识文档、检索模型与离线档位均保留。SQLite 与 Alembic 历史迁移保持原样，避免破坏已有库升级或 checksum 校验。
 
 未更改运行数据库、密钥、用户资料、安装包、备份或既有验收产物。`.archify` 中 README 引用的图和验证依据保留。`node_modules`、`.venv` 仍用于运行；`output`、`tmp`、`.tmp` 含个人产物与历史验证数据，未当作缓存删除。
 
@@ -42,7 +42,6 @@
 | 前端 Vitest | 37 passed |
 | 浏览器完整会话与真实记忆 worker 流程 | 2 passed，使用一次性后端及数据库 |
 | 前端类型检查、lint、生产构建 | 通过 |
-| Harness 插件构建、类型检查与测试 | 通过，9 passed |
 | Python 全应用、维护脚本和测试 Ruff | 通过 |
 | 新增测试格式检查、Git whitespace 检查 | 通过 |
 | 基础 Compose + 检索模型 + 离线覆盖配置 | config --quiet 通过 |

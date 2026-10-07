@@ -30,7 +30,6 @@ out/
 coverage/
 playwright-report/
 test-results/
-/packages/harness-plugin/lib/
 packages/backend/build/
 packages/retrieval/build/
 

@@ -1,6 +1,6 @@
 # 架构简化（2026-10-01）
 
-保留前端、后端和统一 IoT MCP 三个应用边界。平台独立聊天是唯一的对话入口；原 DeepSeek Harness Desktop 插件及其后端接入已于本次清理移除。
+保留前端、后端和统一 IoT MCP 三个应用边界。平台独立聊天是唯一的对话入口。
 
 ## 前端组件
 
@@ -85,7 +85,6 @@ docker build --build-context retrieval=packages/retrieval -f packages/mcp-servic
 | 平台后端完整回归 | 160 passed、1 skipped；新增配置覆盖测试另有 2 passed |
 | IoT MCP 完整回归 | 155 passed、5 skipped；新增配置覆盖与 Portable 维度保护测试另有 2 passed，相关降级回归 16 passed |
 | 共享检索库 | 10 passed，含同步/异步请求一致性、异常向量拒绝与过滤条件保留 |
-| Harness 插件 | 9 passed |
 | 普通会话浏览器流程 | 1 passed；未启用的独立记忆流程跳过 |
 | 隔离后端＋前端代理的记忆浏览器联调 | 2 passed，覆盖会话和真实记忆 worker 流程 |
 | 修改文件的 Ruff 和前端格式检查 | 通过 |

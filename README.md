@@ -203,7 +203,7 @@ npm run test:e2e -- --workers=1 e2e/iot-live.spec.ts
 Remove-Item Env:E2E_IOT_LIVE
 ```
 
-2026-10-01 全项目清理后的验证（历史记录）：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，Harness 插件 9 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
+2026-10-01 全项目清理后的验证（历史记录）：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
 
 2026-09-30 联调结果（历史记录）：
 
