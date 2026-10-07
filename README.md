@@ -222,6 +222,19 @@ Remove-Item Env:E2E_IOT_LIVE
 
 低风险动作通过 `execute_device_action` 受理，高风险动作通过 `create_remediation_proposal` 提交并由人工审批。动作与提案均须关联真实诊断；`list_device_actions` 按服务已实现的 ESP32 设备协议筛选，并返回风险、参数 schema 和验收条件。
 
+当前支持以下六种修复动作，定义见 [`actions.py`](packages/mcp-services/iot_control/actions.py)。动作通过上述 MCP 工具的 `action` 参数选择。
+
+| 动作 | 用途 | 风险级别 | 执行方式 |
+| --- | --- | --- | --- |
+| `reconnect_mqtt` | 重连 MQTT | 低风险 | 可直接执行 |
+| `reconnect_wifi` | 重连 WiFi | 低风险 | 可直接执行 |
+| `calibrate_sensor` | 传感器零点校准 | 低风险 | 可直接执行 |
+| `set_reporting_interval` | 调整上报间隔，`seconds` 为 1–3600 秒的整数 | 低风险 | 可直接执行 |
+| `restart_device` | 重启设备，会短暂中断服务 | 高风险 | 需要人工审批 |
+| `update_firmware` | 升级到 `version` 指定的固件版本并自动重启 | 高风险 | 需要人工审批 |
+
+2026-10-08 六种动作的前后端端到端联调全部通过，覆盖真实 Agent、MCP、MQTT 与独立模拟设备的执行回执、完整观察窗口和刷新恢复；重启与升级同时覆盖页面人工审批。真实 ESP32 固件、物理传感器校准与 OTA 安装需单独验收。复现步骤见 [前后端联调说明](docs/integration-testing.md#六种修复动作联调)。
+
 命令、审批与待投递记录原子落库。`ok=true` 表示请求已受理；`delivery_status` 区分待投递、发送中、Broker 确认、设备回执和结果未知。MQTT 暂时不可用时保留命令，通道恢复后继续发送；结果未知时不自动重发，队列有效期为 30 分钟。通过 `get_action_result` 查询设备执行及恢复验证结果。
 
 恢复观察窗口按命令持久保存，服务重启后继续验证。MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级分别检查对应状态字段；仅设备在线不能证明修复成功。证据不足时返回 `verify_status=inconclusive`，前端显示“验证证据不足”，记忆模块按结果不明处理。真实设备需实现验收字段与过期命令拒绝，具体协议见 [可靠性与验收说明](docs/iot-tool-reliability.md)。

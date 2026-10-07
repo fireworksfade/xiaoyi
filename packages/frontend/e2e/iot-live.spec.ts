@@ -43,6 +43,7 @@ test('real IoT: SQL history, knowledge retrieval, clarification and refresh reco
   const response = await submitted;
   expect(response.status()).toBe(202);
   const { run_id: runId } = (await response.json()).data;
+  const conversationId = new URL(response.url()).pathname.split('/').at(-2)!;
   const root = '/api/backend/api/v1';
   await expect
     .poll(
@@ -52,6 +53,18 @@ test('real IoT: SQL history, knowledge retrieval, clarification and refresh reco
       { timeout: 240_000, intervals: [1000, 3000] },
     )
     .toBe('completed');
+  const conversationTitle = `IoT 查询联调 ${Date.now()}`;
+  const csrf = await page.evaluate(() =>
+    sessionStorage.getItem('xiaoyi.csrf-token'),
+  );
+  const renamed = await page.request.patch(
+    `${root}/conversations/${conversationId}`,
+    {
+      headers: { 'X-CSRF-Token': csrf! },
+      data: { title: conversationTitle },
+    },
+  );
+  expect(renamed.ok()).toBeTruthy();
   const sqlChip = page
     .getByRole('button', { name: /query_iot_data.*已完成/ })
     .first();
@@ -67,6 +80,11 @@ test('real IoT: SQL history, knowledge retrieval, clarification and refresh reco
   );
   await page.reload();
   await recovered;
+  // Other live test processes may create newer conversations for this account.
+  await page
+    .getByRole('navigation', { name: '对话历史' })
+    .getByRole('button', { name: conversationTitle, exact: true })
+    .click();
   await page
     .getByRole('button', { name: /query_iot_data.*已完成/ })
     .first()

@@ -39,6 +39,53 @@ Text2SQL 计划格式错误（包括无法解析的模型 JSON）最多纠正一
 
 本地模型写入失败后，hash 仍继续更新；本地恢复后的索引补齐沿用 [重建说明](retrieval-api.md)，不会由前端自动触发重建。
 
+## 六种修复动作联调
+
+`e2e/iot-actions-live.spec.ts` 覆盖 MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级。需要上述服务及有效聊天/诊断模型配置，还需要本机 Python 已安装 `packages/mcp-services` 的依赖；测试会调用已配置的模型 API。
+
+在仓库根目录执行：
+
+```powershell
+$env:E2E_IOT_ACTIONS_LIVE='1'
+$env:E2E_IOT_PYTHON=(Resolve-Path 'packages/mcp-services/.venv/Scripts/python.exe').Path
+npm run test:e2e -- --workers=1 e2e/iot-actions-live.spec.ts
+Remove-Item Env:E2E_IOT_ACTIONS_LIVE
+Remove-Item Env:E2E_IOT_PYTHON
+```
+
+每项测试启动一台唯一命名的临时模拟设备，通过真实页面发送请求，让 Agent 调用诊断与修复 MCP 工具。四种低风险动作直接执行；两个高风险动作先检查待审批时没有命令，再点击页面“批准执行”。随后确认设备回执、`device_acked` 和最终 `verify_status=succeeded`，并验证刷新后的工具输出与审批卡片恢复。
+
+测试使用真实 MQTT Broker 和服务的完整观察窗口，通过只读查询控制库核对结果；不伪造回执或验证状态，也不提前推进验证时间。测试结束停止自己启动的模拟设备，保留联调对话、诊断和命令记录。截图、工具输出、命令证据与模拟器日志保存在 Playwright 输出目录中。这些结果验证的是模拟设备链路，真实 ESP32 固件、物理传感器校准与 OTA 安装需要单独验收。
+
+## 2026-10-08 验证结果
+
+本轮恢复既有 Docker 服务与宿主机前端，刷新 MCP 工具目录，使用已配置的真实聊天/诊断模型和检索服务完成联调。六种动作分别使用独立临时模拟设备，未操作既有机群设备。
+
+| 检查 | 结果 |
+| --- | --- |
+| 六种修复动作浏览器端到端测试 | 6 通过，约 21 分钟，包含模型请求与完整观察窗口 |
+| `reconnect_mqtt` | 设备回执 `applied`、投递 `device_acked`、验证 `succeeded` |
+| `reconnect_wifi` | 设备回执 `applied`、投递 `device_acked`、验证 `succeeded` |
+| `calibrate_sensor` | 设备回执 `applied`、投递 `device_acked`、验证 `succeeded` |
+| `set_reporting_interval` | `seconds=3`，设备状态确认 3 秒，最终验证 `succeeded` |
+| `restart_device` | 审批前无命令；页面批准后执行，运行时长降低，最终验证 `succeeded` |
+| `update_firmware` | 审批前无命令；页面批准后执行，目标版本 `1.3.9`，最终验证 `succeeded` |
+| 高风险审批卡片刷新恢复 | 两项均显示“设备已恢复，验证通过”，批准按钮不再出现 |
+| 真实历史查询、知识检索、澄清及刷新恢复 | 1 通过 |
+| 真实知识文档上传、替换、删除 | 1 通过，API/Qwen/hash 三套索引同步，临时文档已删除 |
+| 基础聊天浏览器流程 | 1 通过，使用模拟网络 |
+| 前端单元测试 | 55 通过 |
+| 后端审批、诊断关联、工具执行、结果状态和能力路由测试 | 独立 Docker 测试容器内 20 通过 |
+| MCP 控制、验收、模拟器、工具 schema 与参数校验测试 | 75 通过 |
+| 前端类型检查、lint、生产构建 | 通过 |
+| 前端、后端 `/ready`、MCP `/ready`、同源代理 `/api/backend/ready` | 均为 HTTP 200 |
+
+历史查询首次刷新检查受到同账号另一联调进程新建对话的影响。测试已改为给自身对话设置唯一名称，并在刷新后明确重新选择该对话；重新运行通过。
+
+本机验证证据保存在 `output/integration-20261008/`：`action-evidence.json` 包含六个命令、诊断关联与运行工具事件；六张按动作命名的 PNG 包含工具详情或已恢复的审批卡片。前端保留六个“2026-10-08 联调验证”对话供查看。该输出目录属于本机产物，不提交到 Git。
+
+验证范围为真实软件服务与模拟设备的端到端链路。固件升级在模拟器中更新版本字段，传感器校准更新模拟状态；真实 ESP32 固件的命令执行、物理校准与 OTA 镜像下载安装仍需硬件验收。
+
 ## 2026-10-07 验证结果
 
 | 检查 | 结果 |
