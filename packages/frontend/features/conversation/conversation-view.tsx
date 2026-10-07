@@ -25,8 +25,8 @@ import type { Conversation } from '@/lib/api';
 const suggestions = [
   {
     icon: FileSearch,
-    label: '整理一份文档',
-    prompt: '帮我整理工作区里的规格文档',
+    label: '查询节点历史数据',
+    prompt: '统计过去24小时各节点的平均温度和有效样本数',
   },
   {
     icon: Wrench,

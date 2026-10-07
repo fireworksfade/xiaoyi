@@ -24,6 +24,7 @@ READ_ONLY_TOOLS = {
     "list_diagnoses",
     "list_knowledge_documents",
     "search_knowledge",
+    "query_iot_data",
     # IoT Control MCP：查询类工具
     "list_device_actions",
     "get_action_result",

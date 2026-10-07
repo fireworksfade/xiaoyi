@@ -6,12 +6,38 @@ from sqlalchemy import and_, func, or_, select
 from app.api.common import SettingsDep, envelope, message_view, owned_conversation
 from app.api.deps import CsrfProtected, CurrentUser, Db
 from app.memory.actions import pinned_budget
-from app.models import AgentRun, Attachment, Message, RunStatus
+from app.models import AgentRun, Attachment, Message, RunEvent, RunStatus
 from app.pagination import decode_cursor, encode_cursor
 from app.schemas import MessageCreate
 from app.services.runs import process_agent_run
 
 router = APIRouter(tags=["messages"])
+
+
+async def messages_with_tools(db: Db, items: list[Message]) -> list[dict[str, object]]:
+    """Restore redacted tool outputs from events without duplicating artifact contents."""
+    views = [message_view(item) for item in items]
+    if not items:
+        return views
+    events = (
+        await db.execute(
+            select(AgentRun.final_message_id, RunEvent)
+            .join(RunEvent, RunEvent.run_id == AgentRun.id)
+            .where(
+                AgentRun.final_message_id.in_([item.id for item in items]),
+                AgentRun.conversation_id == items[0].conversation_id,
+                RunEvent.event_type == "tool.finished",
+            )
+            .order_by(RunEvent.id)
+        )
+    ).all()
+    tools: dict[str, list[dict[str, object]]] = {}
+    for message_id, event in events:
+        tools.setdefault(message_id, []).append({**event.data, "run_id": event.run_id})
+    for item, view in zip(items, views, strict=True):
+        if item.role == "assistant" and item.id in tools:
+            view["metadata"] = {**item.metadata_json, "tool_calls": tools[item.id]}
+    return views
 
 
 @router.get("/conversations/{conversation_id}/messages")
@@ -39,7 +65,7 @@ async def list_messages(
         return envelope(
             request,
             {
-                "items": [message_view(item) for item in items],
+                "items": await messages_with_tools(db, items),
                 "next_cursor": None,
                 "has_more": False,
             },
@@ -105,7 +131,7 @@ async def list_messages(
     return envelope(
         request,
         {
-            "items": [message_view(item) for item in rows],
+            "items": await messages_with_tools(db, rows),
             "next_cursor": next_cursor if has_more else None,
             "has_more": has_more,
         },

@@ -72,8 +72,11 @@ export function MessageList({
               </p>
               {message.tools ? (
                 <div className="mb-4 space-y-1.5">
-                  {message.tools.map((tool) => (
-                    <ToolChip key={tool.name} tool={tool} />
+                  {message.tools.map((tool, index) => (
+                    <ToolChip
+                      key={tool.callId ?? `${tool.name}-${index}`}
+                      tool={tool}
+                    />
                   ))}
                 </div>
               ) : null}

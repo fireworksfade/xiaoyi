@@ -75,7 +75,9 @@ def build_wrapper() -> tuple[ResilientVectorStore, FakeStore, FakeStore]:
 
 
 def test_resilient_embedding_uses_primary_when_available():
-    provider = ResilientEmbeddingProvider(FakeProvider("openai_compatible", 512), FakeProvider("hash", 384))
+    provider = ResilientEmbeddingProvider(
+        FakeProvider("openai_compatible", 512), FakeProvider("hash", 384)
+    )
     vector = provider.embed("MQTT 心跳超时", is_query=True)
     assert len(vector) == 512
     assert provider.name == "openai_compatible"
@@ -90,9 +92,33 @@ def test_resilient_embedding_falls_back_when_primary_fails():
     assert all(len(vector) == 384 for vector in vectors)
 
 
+def test_api_recovers_as_primary_after_embedding_failure():
+    primary = FakeProvider("dashscope", 1024, fail=True)
+    provider = ResilientEmbeddingProvider(primary, FakeProvider("hash", 384))
+    assert len(provider.embed("mqtt", is_query=True)) == 384
+    primary.fail = False
+    assert len(provider.embed("mqtt", is_query=True)) == 1024
+
+
+def test_search_returns_to_primary_after_api_recovers():
+    wrapper, primary, fallback = build_wrapper()
+    primary.embedding_provider.fail = True
+    failed_vector = wrapper.embedding_provider.embed("mqtt", is_query=True)
+    wrapper.search("mqtt", ["mqtt_docs"], 3, query_vector=failed_vector)
+    assert len(fallback.searches) == 1
+    assert not primary.searches
+    primary.embedding_provider.fail = False
+    recovered_vector = wrapper.embedding_provider.embed("mqtt", is_query=True)
+    wrapper.search("mqtt", ["mqtt_docs"], 3, query_vector=recovered_vector)
+    assert len(primary.searches) == 1
+    assert len(fallback.searches) == 1
+
+
 def test_resilient_embedding_rejects_equal_dimensions():
     try:
-        ResilientEmbeddingProvider(FakeProvider("openai_compatible", 512), FakeProvider("hash", 512))
+        ResilientEmbeddingProvider(
+            FakeProvider("openai_compatible", 512), FakeProvider("hash", 512)
+        )
     except ValueError as exc:
         assert str(exc) == "EMBEDDING_FALLBACK_DIMENSIONS_CONFLICT"
     else:
@@ -229,7 +255,12 @@ def test_remote_reranker_falls_back_to_weighted_when_unreachable(monkeypatch):
     monkeypatch.setattr("iot_diagnosis.reranker.urlopen", raise_url_error)
     reranker = RemoteReranker("http://retrieval-models:9010/rerank")
     candidates = [
-        {"source": "mqtt_docs", "id": "a", "content": "MQTT keep alive 超时", "retrieval_score": 0.9},
+        {
+            "source": "mqtt_docs",
+            "id": "a",
+            "content": "MQTT keep alive 超时",
+            "retrieval_score": 0.9,
+        },
         {"source": "wifi_docs", "id": "b", "content": "RSSI 信号弱", "retrieval_score": 0.5},
     ]
 
@@ -243,3 +274,96 @@ def test_hash_fallback_provider_matches_portable_dimensions():
     vector = provider.embed("设备离线", is_query=True)
     assert len(vector) == 384
     assert max(abs(value) for value in vector) <= 1.0
+
+
+def build_three_tiers():
+    api = FakeStore("dashscope", 1024, "api_1024")
+    local = FakeStore("qwen3_local", 512, "local_512")
+    portable = FakeStore("hash", 384, "portable_384")
+    wrapper = ResilientVectorStore(api, ResilientVectorStore(local, portable))
+    return wrapper, api, local, portable
+
+
+def test_three_tiers_follow_priority_and_recover_to_api():
+    wrapper, api, local, portable = build_three_tiers()
+
+    def retrieve(expected_dimensions, expected_provider, expected_collection):
+        vector = wrapper.embedding_provider.embed("mqtt", is_query=True)
+        assert len(vector) == expected_dimensions
+        assert wrapper.search("mqtt", ["mqtt_docs"], 3, query_vector=vector)
+        assert wrapper.active_provider == expected_provider
+        assert wrapper.active_collection == expected_collection
+
+    retrieve(1024, "dashscope", "api_1024")
+    assert len(api.searches) == 1 and not local.searches and not portable.searches
+    api.embedding_provider.fail = True
+    retrieve(512, "qwen3_local", "local_512")
+    assert len(local.searches) == 1 and not portable.searches
+    local.embedding_provider.fail = True
+    retrieve(384, "hash", "portable_384")
+    assert len(portable.searches) == 1
+    local.embedding_provider.fail = False
+    retrieve(512, "qwen3_local", "local_512")
+    api.embedding_provider.fail = False
+    retrieve(1024, "dashscope", "api_1024")
+    assert len(api.searches) == 2
+
+
+def test_three_tier_writes_maintain_local_and_portable_indexes():
+    wrapper, api, local, portable = build_three_tiers()
+    items = [{"source": "mqtt_docs", "id": "guide", "content": "keep alive"}]
+    assert wrapper.upsert_many(items)
+    assert api.upserts == local.upserts == portable.upserts == [items]
+    api.fail_upsert = local.fail_upsert = True
+    try:
+        wrapper.upsert_many(items)
+    except RuntimeError as exc:
+        assert str(exc) == "QDRANT_UNAVAILABLE"
+    else:
+        raise AssertionError("API failure must propagate to the outbox")
+    assert portable.upserts == [items, items]
+
+
+def test_active_tier_metadata_is_isolated_between_request_contexts():
+    from contextvars import copy_context
+
+    wrapper, api, _local, _portable = build_three_tiers()
+    first, second = copy_context(), copy_context()
+    first.run(wrapper.search, "mqtt", ["mqtt_docs"], 3, [0.1] * 512)
+    second.run(wrapper.search, "mqtt", ["mqtt_docs"], 3, [0.1] * 1024)
+    assert first.run(lambda: wrapper.active_provider) == "qwen3_local"
+    assert second.run(lambda: wrapper.active_provider) == "dashscope"
+
+
+def test_manager_builds_local_qwen_between_api_and_hash(monkeypatch):
+    _configure_qwen_env(monkeypatch, provider="dashscope")
+    monkeypatch.setenv("DIAGNOSIS_EMBEDDING_DIMENSIONS", "1024")
+    monkeypatch.setenv("DIAGNOSIS_QDRANT_COLLECTION", "api_1024")
+    monkeypatch.setenv("DIAGNOSIS_LOCAL_EMBEDDING_FALLBACK", "true")
+    monkeypatch.setenv("DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION", "")
+    monkeypatch.setattr("iot_diagnosis.external.manager.QdrantVectorStore", FakeManagerStore)
+    stores = ExternalStores()
+    assert isinstance(stores.qdrant, ResilientVectorStore)
+    assert isinstance(stores.qdrant.fallback, ResilientVectorStore)
+    assert stores.qdrant.fallback.primary.dimensions == 512
+    assert stores.qdrant.fallback.primary.embedding_provider.name == "qwen3_local"
+    assert stores.qdrant.fallback.fallback.dimensions == 384
+    assert stores.qdrant_local_fallback is stores.qdrant.fallback.primary
+    assert stores.qdrant_fallback is stores.qdrant.fallback.fallback
+
+
+def test_local_fallback_initialization_failure_keeps_api_and_hash(monkeypatch):
+    _configure_qwen_env(monkeypatch, provider="dashscope")
+    monkeypatch.setenv("DIAGNOSIS_EMBEDDING_DIMENSIONS", "1024")
+    monkeypatch.setenv("DIAGNOSIS_QDRANT_COLLECTION", "api_1024")
+    monkeypatch.setenv("DIAGNOSIS_LOCAL_EMBEDDING_FALLBACK", "true")
+
+    def build_store(url, collection, provider=None):
+        if collection == "iot_diagnosis_qwen3_512":
+            raise URLError("local index unavailable")
+        return FakeManagerStore(url, collection, provider)
+
+    monkeypatch.setattr("iot_diagnosis.external.manager.QdrantVectorStore", build_store)
+    stores = ExternalStores()
+    assert stores.qdrant.primary.dimensions == 1024
+    assert stores.qdrant.fallback.dimensions == 384

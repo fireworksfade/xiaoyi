@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from typing import Any
 
 from iot_diagnosis.embeddings import ResilientEmbeddingProvider
@@ -25,6 +26,17 @@ class ResilientVectorStore:
         )
         self.dimensions = primary.dimensions
         self.collection = primary.collection
+        self._active_store: ContextVar[Any] = ContextVar("retrieval_active_store", default=primary)
+
+    @property
+    def active_provider(self) -> str:
+        store = self._active_store.get()
+        return getattr(store, "active_provider", store.embedding_provider.name)
+
+    @property
+    def active_collection(self) -> str:
+        store = self._active_store.get()
+        return getattr(store, "active_collection", store.collection)
 
     def upsert(self, item: dict[str, Any]) -> bool:
         return self.upsert_many([item])
@@ -61,12 +73,15 @@ class ResilientVectorStore:
         top_k: int,
         query_vector: list[float] | None = None,
     ) -> list[dict[str, Any]]:
+        self._active_store.set(self.primary)
         if query_vector is not None and len(query_vector) != self.primary.dimensions:
+            self._active_store.set(self.fallback)
             return self.fallback.search(query, sources, top_k, query_vector=query_vector)
         try:
             return self.primary.search(query, sources, top_k, query_vector=query_vector)
         except Exception:
             # 主集合不可用：用兜底 provider 现算查询向量检索兜底集合
+            self._active_store.set(self.fallback)
             return self.fallback.search(query, sources, top_k)
 
     def ping(self) -> bool:

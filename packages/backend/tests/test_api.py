@@ -159,6 +159,17 @@ def test_conversation_run_flow() -> None:
         messages = client.get(f"/api/v1/conversations/{conversation_id}/messages")
         assert messages.status_code == 200
         assert [item["role"] for item in messages.json()["data"]["items"]] == ["user", "assistant"]
+        tools = messages.json()["data"]["items"][-1]["metadata"]["tool_calls"]
+        assert [item["tool_name"] for item in tools] == [
+            "demo__search_knowledge", "demo__diagnose_fault"
+        ]
+        assert all(item["run_id"] == run_id for item in tools)
+        assert tools[0]["output"]["data"]["results"]
+        assert tools[1]["output"]["artifact_id"]
+        paged = client.get(
+            f"/api/v1/conversations/{conversation_id}/messages?limit=1"
+        ).json()["data"]
+        assert paged["items"][0]["metadata"]["tool_calls"] == tools
 
         replay = client.post(
             f"/api/v1/conversations/{conversation_id}/messages",
@@ -174,6 +185,10 @@ def test_conversation_run_flow() -> None:
         assert deleted.status_code == 200
         assert deleted.json()["data"] == {"deleted": True, "run_id": run_id}
         assert client.get(f"/api/v1/agent-runs/{run_id}").status_code == 404
+        after_delete = client.get(
+            f"/api/v1/conversations/{conversation_id}/messages"
+        ).json()["data"]["items"][-1]
+        assert "tool_calls" not in after_delete["metadata"]
 
 
 def test_conversation_can_be_renamed_and_removed_from_history() -> None:

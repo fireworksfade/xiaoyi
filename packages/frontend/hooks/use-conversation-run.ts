@@ -2,7 +2,10 @@
 
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react';
 
-import type { ChatMessage } from '@/hooks/use-conversation-messages';
+import {
+  toToolCall,
+  type ChatMessage,
+} from '@/hooks/use-conversation-messages';
 import {
   ApiError,
   createConversation,
@@ -171,36 +174,37 @@ export function useConversationRun({
         }
         if (event.type === 'tool.started') {
           const toolName = displayValue(event.data.tool_name, '工具');
+          const callId = displayValue(event.data.call_id) || undefined;
           updateAssistant((message) => ({
             ...message,
             tools: [
-              ...(message.tools ?? []).filter((tool) => tool.name !== toolName),
-              { name: toolName, result: '正在运行…' },
+              ...(message.tools ?? []).filter((tool) =>
+                callId ? tool.callId !== callId : tool.name !== toolName,
+              ),
+              {
+                name: toolName,
+                callId,
+                result: '正在运行…',
+                status: 'running',
+              },
             ],
           }));
         }
         if (event.type === 'tool.finished') {
           const toolName = displayValue(event.data.tool_name, '工具');
-          const result = displayValue(event.data.summary, '已完成');
-          const output =
-            event.data.output && typeof event.data.output === 'object'
-              ? (event.data.output as Record<string, unknown>)
-              : undefined;
-          // 超过内联阈值的输出被后端转存为 run_artifact，只留 artifact_id；
-          // 未转存时 output 就是完整结果，展开时无需再请求。
-          const artifactId =
-            typeof output?.artifact_id === 'string' ? output.artifact_id : undefined;
+          const completedTool = toToolCall(
+            { ...event.data, tool_name: toolName },
+            runId,
+          )!;
           updateAssistant((message) => ({
             ...message,
             tools: [
-              ...(message.tools ?? []).filter((tool) => tool.name !== toolName),
-              {
-                name: toolName,
-                result,
-                runId,
-                artifactId,
-                output: artifactId ? undefined : output,
-              },
+              ...(message.tools ?? []).filter((tool) =>
+                completedTool.callId
+                  ? tool.callId !== completedTool.callId
+                  : tool.name !== toolName,
+              ),
+              completedTool,
             ],
           }));
         }
@@ -268,7 +272,7 @@ export function useConversationRun({
             text: current.text ? `${current.text}\n\n已停止生成` : '已停止生成',
             tools: current.tools?.map((tool) =>
               tool.result === '正在运行…'
-                ? { ...tool, result: '未完成' }
+                ? { ...tool, result: '未完成', status: 'incomplete' }
                 : tool,
             ),
           }));
@@ -279,7 +283,9 @@ export function useConversationRun({
           ...current,
           text: `小yi运行失败：${message}${error.code ? `（${error.code}）` : ''}`,
           tools: current.tools?.map((tool) =>
-            tool.result === '正在运行…' ? { ...tool, result: '未完成' } : tool,
+            tool.result === '正在运行…'
+              ? { ...tool, result: '未完成', status: 'incomplete' }
+              : tool,
           ),
         }));
       } else {

@@ -26,6 +26,8 @@ export type ToolCallInfo = {
   artifactId?: string;
   /** 未转存时的完整工具输出 */
   output?: unknown;
+  status?: 'running' | 'success' | 'error' | 'incomplete';
+  callId?: string;
 };
 
 export type ChatMessage = {
@@ -44,9 +46,40 @@ export function toChatMessage(message: ConversationMessage): ChatMessage {
     id: message.id,
     role: message.role,
     text: message.content,
+    tools: Array.isArray(message.metadata?.tool_calls)
+      ? message.metadata.tool_calls
+          .map((value) => toToolCall(value))
+          .filter((value): value is ToolCallInfo => value !== null)
+      : undefined,
     proposals: Array.isArray(message.metadata?.remediation_proposals)
       ? (message.metadata.remediation_proposals as RemediationProposal[])
       : undefined,
+  };
+}
+
+export function toToolCall(
+  value: unknown,
+  runId?: string,
+): ToolCallInfo | null {
+  if (!value || typeof value !== 'object') return null;
+  const event = value as Record<string, unknown>;
+  if (typeof event.tool_name !== 'string') return null;
+  const output = event.output;
+  const record =
+    output && typeof output === 'object'
+      ? (output as Record<string, unknown>)
+      : null;
+  const artifactId =
+    typeof record?.artifact_id === 'string' ? record.artifact_id : undefined;
+  return {
+    name: event.tool_name,
+    result: typeof event.summary === 'string' ? event.summary : '已完成',
+    runId:
+      runId ?? (typeof event.run_id === 'string' ? event.run_id : undefined),
+    callId: typeof event.call_id === 'string' ? event.call_id : undefined,
+    status: event.ok === false || record?.ok === false ? 'error' : 'success',
+    artifactId,
+    output: artifactId ? undefined : output,
   };
 }
 

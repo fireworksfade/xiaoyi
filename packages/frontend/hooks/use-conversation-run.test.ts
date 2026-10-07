@@ -93,10 +93,65 @@ describe('useConversationRun', () => {
       '完成',
     ]);
     expect(result.current.messages[1].tools).toEqual([
-      { name: 'inspect', result: '正常', runId: 'run-1' },
+      { name: 'inspect', result: '正常', runId: 'run-1', status: 'success' },
     ]);
     expect(result.current.running).toBe(false);
     expect(finished).toHaveBeenCalledWith('c1');
+  });
+
+  it('keeps separate outputs when the same SQL tool is called twice', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) => {
+        if (input.endsWith('/auth/me'))
+          return Response.json({ data: { id: 'u1' } });
+        if (input.includes('/messages'))
+          return Response.json({ data: { run_id: 'r1' } });
+        const events: [string, Record<string, unknown>][] = [
+          ['tool.started', { tool_name: 'query_iot_data', call_id: 'c1' }],
+          [
+            'tool.finished',
+            {
+              tool_name: 'query_iot_data',
+              call_id: 'c1',
+              ok: false,
+              output: { ok: false },
+            },
+          ],
+          ['tool.started', { tool_name: 'query_iot_data', call_id: 'c2' }],
+          [
+            'tool.finished',
+            {
+              tool_name: 'query_iot_data',
+              call_id: 'c2',
+              ok: true,
+              output: { ok: true, data: { rows: [] } },
+            },
+          ],
+        ];
+        return sse(
+          events
+            .map(
+              ([type, data], i) =>
+                `event: ${type}\ndata: ${JSON.stringify({ id: i + 1, data })}\n\n`,
+            )
+            .join(''),
+        );
+      }),
+    );
+    const { result } = setupHook();
+    await act(async () => {
+      await result.current.submit('分别查询温度和日志');
+    });
+    expect(
+      result.current.messages[1].tools?.map((tool) => [
+        tool.callId,
+        tool.status,
+      ]),
+    ).toEqual([
+      ['c1', 'error'],
+      ['c2', 'success'],
+    ]);
   });
 
   it.each(['MCP_CAPABILITY_AMBIGUOUS', 'MCP_CAPABILITY_UNAVAILABLE'])(
@@ -151,7 +206,7 @@ describe('useConversationRun', () => {
     );
     expect(result.current.messages.at(-1)?.text).not.toContain('连接后端失败');
     expect(result.current.messages.at(-1)?.tools).toEqual([
-      { name: 'get_action_result', result: '未完成' },
+      { name: 'get_action_result', result: '未完成', status: 'incomplete' },
     ]);
   });
 

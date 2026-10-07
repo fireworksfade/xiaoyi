@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from xiaoyi_retrieval.embeddings import EmbeddingClient, EmbeddingConfig
+from xiaoyi_retrieval.http import JsonClient
 
 
 class EmbeddingProvider(Protocol):
@@ -54,6 +55,11 @@ class OpenAICompatibleEmbeddingProvider:
         model: str,
         dimensions: int,
         timeout_seconds: float = 20,
+        max_batch_size: int | None = None,
+        query_instruction: str | None = None,
+        default_query_instruction: str = (
+            "Given an IoT fault diagnosis query, retrieve relevant technical passages and verified cases"
+        ),
     ):
         if not api_key or not model:
             raise ValueError("EMBEDDING_PROVIDER_NOT_CONFIGURED")
@@ -62,17 +68,17 @@ class OpenAICompatibleEmbeddingProvider:
         self.model = model
         self.dimensions = dimensions
         self.timeout_seconds = timeout_seconds
-        self.query_instruction = os.getenv(
-            "DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION",
-            "Given an IoT fault diagnosis query, retrieve relevant technical passages and verified cases",
+        self.max_batch_size = max_batch_size
+        self.query_instruction = (
+            query_instruction
+            if query_instruction is not None
+            else os.getenv("DIAGNOSIS_EMBEDDING_QUERY_INSTRUCTION", default_query_instruction)
         ).strip()
 
     def embed(self, text: str, *, is_query: bool = False) -> list[float]:
         return self.embed_many([text], is_query=is_query)[0]
 
-    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
-        if not texts:
-            return []
+    def _embed_batch(self, texts: list[str], *, is_query: bool) -> list[list[float]]:
         client = EmbeddingClient(
             EmbeddingConfig(
                 self.base_url, self.model, self.dimensions, self.api_key, self.query_instruction
@@ -80,8 +86,20 @@ class OpenAICompatibleEmbeddingProvider:
             timeout_seconds=self.timeout_seconds,
             opener=urlopen,
         )
+        return client.embed_many(texts, is_query=is_query)
+
+    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
+        if not texts:
+            return []
         try:
-            return client.embed_many(texts, is_query=is_query)
+            batch_size = self.max_batch_size or len(texts)
+            return [
+                vector
+                for start in range(0, len(texts), batch_size)
+                for vector in self._embed_batch(
+                    texts[start : start + batch_size], is_query=is_query
+                )
+            ]
         except (
             HTTPError,
             URLError,
@@ -94,6 +112,49 @@ class OpenAICompatibleEmbeddingProvider:
             if str(exc) == "EMBEDDING_DIMENSIONS_MISMATCH":
                 raise RuntimeError("EMBEDDING_DIMENSIONS_MISMATCH") from exc
             raise RuntimeError("EMBEDDING_REQUEST_FAILED") from exc
+
+
+class DashScopeEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
+    """Native batch API preserves input indices and query/document roles."""
+
+    name = "dashscope"
+
+    def _embed_batch(self, texts: list[str], *, is_query: bool) -> list[list[float]]:
+        base = self.base_url
+        endpoint = "/services/embeddings/text-embedding/text-embedding"
+        if base.endswith("/compatible-mode/v1"):
+            base = base.removesuffix("/compatible-mode/v1") + "/api/v1"
+        elif base.endswith(endpoint):
+            base = base.removesuffix(endpoint)
+        elif not base.endswith("/api/v1"):
+            base += "/api/v1"
+        parameters: dict[str, str | int] = {
+            "dimension": self.dimensions,
+            "text_type": "query" if is_query else "document",
+            "output_type": "dense",
+        }
+        if is_query and self.query_instruction:
+            parameters["instruct"] = self.query_instruction
+        response = JsonClient(
+            base, timeout_seconds=self.timeout_seconds, api_key=self.api_key, opener=urlopen
+        ).request(
+            "POST",
+            endpoint,
+            {"model": self.model, "input": {"texts": texts}, "parameters": parameters},
+        )
+        rows = response["output"]["embeddings"]
+        normalized = {
+            "data": [
+                {
+                    "index": row["text_index"] if "text_index" in row else row["index"],
+                    "embedding": row["embedding"],
+                }
+                for row in rows
+            ]
+        }
+        return EmbeddingConfig(self.base_url, self.model, self.dimensions).vectors(
+            normalized, len(texts)
+        )
 
 
 class ResilientEmbeddingProvider:
@@ -132,22 +193,37 @@ def embedding_provider_from_env() -> EmbeddingProvider:
         os.getenv("DIAGNOSIS_EMBEDDING_DIMENSIONS")
         or (
             os.getenv("RETRIEVAL_EMBEDDING_DIMENSIONS")
-            if provider in {"openai", "openai_compatible"}
+            if provider in {"openai", "openai_compatible", "dashscope"}
             else None
         )
         or "384"
     )
     if provider == "hash":
         return HashEmbeddingProvider(dimensions)
-    if provider in {"openai", "openai_compatible"}:
-        return OpenAICompatibleEmbeddingProvider(
+    if provider in {"openai", "openai_compatible", "dashscope"}:
+        provider_class = (
+            DashScopeEmbeddingProvider
+            if provider == "dashscope"
+            else OpenAICompatibleEmbeddingProvider
+        )
+        return provider_class(
             api_key=os.getenv("DIAGNOSIS_EMBEDDING_API_KEY")
-            or os.getenv("RETRIEVAL_EMBEDDING_API_KEY", ""),
+            or os.getenv("RETRIEVAL_EMBEDDING_API_KEY")
+            or "",
             base_url=os.getenv("DIAGNOSIS_EMBEDDING_BASE_URL")
-            or os.getenv("RETRIEVAL_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
+            or os.getenv("RETRIEVAL_EMBEDDING_BASE_URL")
+            or "https://api.openai.com/v1",
             model=os.getenv("DIAGNOSIS_EMBEDDING_MODEL")
-            or os.getenv("RETRIEVAL_EMBEDDING_MODEL", ""),
+            or os.getenv("RETRIEVAL_EMBEDDING_MODEL")
+            or "",
             dimensions=dimensions,
             timeout_seconds=float(os.getenv("DIAGNOSIS_EMBEDDING_TIMEOUT_SECONDS", "20")),
+            # 百炼部分模型每批最多 10 条；切批不改变上层同步批次或结果顺序。
+            max_batch_size=10 if provider == "dashscope" else None,
+            default_query_instruction=(
+                ""
+                if provider == "dashscope"
+                else "Given an IoT fault diagnosis query, retrieve relevant technical passages and verified cases"
+            ),
         )
     raise ValueError("EMBEDDING_PROVIDER_INVALID")

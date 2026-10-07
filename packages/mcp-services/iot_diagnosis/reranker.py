@@ -70,7 +70,7 @@ class WeightedReranker:
 
 
 class RemoteReranker:
-    """Cross-encoder reranker served by the local Qwen model service.
+    """Cross-encoder reranker served by a local service or compatible API.
 
     Qwen 的相关性概率在技术文档候选上经常集中在 0.99 附近，直接按微小的
     浮点差异排序会破坏已经可靠的 RRF 次序。最终排序因此使用 rank-level
@@ -79,11 +79,28 @@ class RemoteReranker:
 
     name = "qwen3_remote"
 
-    def __init__(self, url: str, timeout_seconds: float = 30):
+    def __init__(
+        self,
+        url: str,
+        timeout_seconds: float = 30,
+        *,
+        api_key: str = "",
+        model: str = "",
+        api_format: str = "compatible",
+        fallback: Reranker | None = None,
+    ):
         self.url = url
         self.timeout_seconds = timeout_seconds
-        self.fallback = WeightedReranker()
+        self.api_key = api_key
+        self.model = model
+        if api_format not in {"compatible", "dashscope"}:
+            raise ValueError("RERANKER_API_FORMAT_INVALID")
+        self.api_format = api_format
+        if api_format == "dashscope":
+            self.name = "dashscope_remote"
+        self.fallback = fallback if fallback is not None else WeightedReranker()
         self.used_fallback = False
+        self.active_provider = self.name
         self.rank_fusion_k = int(os.getenv("RAG_RERANKER_RANK_FUSION_K", "60"))
         self.reranker_rank_weight = float(os.getenv("RAG_RERANKER_RANK_WEIGHT", "2.0"))
         if self.rank_fusion_k <= 0 or self.reranker_rank_weight <= 0:
@@ -97,32 +114,63 @@ class RemoteReranker:
         expected_source: str,
         top_k: int,
     ) -> list[dict[str, Any]]:
+        self.used_fallback = False
+        self.active_provider = self.name
         if not candidates:
             return []
+        request_body: dict[str, Any] = {
+            "query": query,
+            "documents": [str(item.get("content") or "") for item in candidates],
+            # 排名融合需要取得全部候选的模型排名。
+            "top_n": len(candidates),
+        }
+        if self.model:
+            request_body["model"] = self.model
+        if self.api_format == "dashscope":
+            request_body = {
+                "model": self.model,
+                "input": {"query": query, "documents": request_body["documents"]},
+                "parameters": {"top_n": len(candidates), "return_documents": False},
+            }
         payload = json.dumps(
-            {
-                "query": query,
-                "documents": [str(item.get("content") or "") for item in candidates],
-                # 稳定化排序可能把 retrieval rank 较高但刚好落在模型 Top-K
-                # 外的候选带回最终 Top-K，因此必须取得全部候选的模型排名。
-                "top_n": len(candidates),
-            },
+            request_body,
             ensure_ascii=False,
         ).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request = Request(
             self.url,
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 result = json.loads(response.read().decode("utf-8"))
+            results = (
+                result["output"]["results"] if self.api_format == "dashscope" else result["results"]
+            )
+            if not isinstance(results, list) or len(results) != len(candidates):
+                raise ValueError("RERANKER_RESULTS_INCOMPLETE")
             ranked = []
-            for reranker_rank, item in enumerate(result["results"], 1):
-                retrieval_index = int(item["index"])
+            seen = set()
+            for reranker_rank, item in enumerate(results, 1):
+                retrieval_index = item["index"]
+                if (
+                    type(retrieval_index) is not int
+                    or not 0 <= retrieval_index < len(candidates)
+                    or retrieval_index in seen
+                ):
+                    raise ValueError("RERANKER_INDEX_INVALID")
+                seen.add(retrieval_index)
+                score = float(
+                    item["relevance_score"] if "relevance_score" in item else item["score"]
+                )
+                if not math.isfinite(score):
+                    raise ValueError("RERANKER_SCORE_INVALID")
                 candidate = dict(candidates[retrieval_index])
-                candidate["score"] = round(float(item["score"]), 4)
+                candidate["score"] = round(score, 4)
                 candidate.pop("retrieval_score", None)
                 candidate["_rerank_fusion_score"] = self.reranker_rank_weight / (
                     self.rank_fusion_k + reranker_rank
@@ -142,24 +190,50 @@ class RemoteReranker:
             TypeError,
         ):
             self.used_fallback = True
-            return self.fallback.rerank(
+            ranked = self.fallback.rerank(
                 query,
                 candidates,
                 expected_source=expected_source,
                 top_k=top_k,
             )
+            self.active_provider = getattr(
+                self.fallback, "active_provider", getattr(self.fallback, "name", "weighted")
+            )
+            return ranked
 
 
 def reranker_from_env() -> Reranker:
     provider = os.getenv("DIAGNOSIS_RERANKER_PROVIDER", "weighted").strip().lower()
     if provider == "weighted":
         return WeightedReranker()
-    if provider in {"remote", "qwen3"}:
+    if provider in {"remote", "qwen3", "dashscope"}:
         url = os.getenv("DIAGNOSIS_RERANKER_URL", "").strip()
-        if not url:
+        api_key = os.getenv("DIAGNOSIS_RERANKER_API_KEY", "").strip()
+        model = os.getenv("DIAGNOSIS_RERANKER_MODEL", "").strip()
+        if not url or (provider == "dashscope" and (not api_key or not model)):
             raise ValueError("RERANKER_PROVIDER_NOT_CONFIGURED")
+        fallback = None
+        local_enabled = os.getenv("DIAGNOSIS_LOCAL_RERANKER_FALLBACK", "false").strip().lower()
+        if local_enabled in {"1", "true", "yes"}:
+            local_url = os.getenv(
+                "DIAGNOSIS_LOCAL_RERANKER_URL", "http://retrieval-models:9010/rerank"
+            ).strip()
+            if local_url != url:
+                fallback = RemoteReranker(
+                    local_url,
+                    float(os.getenv("DIAGNOSIS_LOCAL_RERANKER_TIMEOUT_SECONDS", "30")),
+                    api_key=os.getenv("DIAGNOSIS_LOCAL_RERANKER_API_KEY", "").strip(),
+                    model=os.getenv(
+                        "DIAGNOSIS_LOCAL_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B"
+                    ).strip(),
+                )
+                fallback.name = "qwen3_local"
         return RemoteReranker(
             url,
             float(os.getenv("DIAGNOSIS_RERANKER_TIMEOUT_SECONDS", "30")),
+            api_key=api_key,
+            model=model,
+            api_format="dashscope" if provider == "dashscope" else "compatible",
+            fallback=fallback,
         )
     raise ValueError("RERANKER_PROVIDER_INVALID")

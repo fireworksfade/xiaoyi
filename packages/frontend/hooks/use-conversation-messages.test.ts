@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   useConversationMessages,
+  toChatMessage,
   type ChatMessage,
 } from '@/hooks/use-conversation-messages';
 
@@ -45,6 +46,48 @@ function fakeContainer(heights: number[]) {
 }
 
 describe('useConversationMessages', () => {
+  it('restores inline results, artifact links and errors from historical messages', () => {
+    const restored = toChatMessage({
+      id: 'a1',
+      role: 'assistant',
+      content: '已查询',
+      created_at: '',
+      metadata: {
+        tool_calls: [
+          {
+            tool_name: 'query_iot_data',
+            run_id: 'r1',
+            ok: true,
+            output: { ok: true, data: { rows: [] } },
+          },
+          {
+            tool_name: 'search_knowledge',
+            run_id: 'r1',
+            ok: true,
+            output: { artifact_id: 'a1' },
+          },
+          {
+            tool_name: 'query_iot_data',
+            run_id: 'r1',
+            ok: false,
+            output: { ok: false },
+          },
+          null,
+        ],
+      },
+    });
+    expect(restored.tools).toHaveLength(3);
+    expect(restored.tools?.[0].output).toEqual({
+      ok: true,
+      data: { rows: [] },
+    });
+    expect(restored.tools?.[1]).toMatchObject({
+      runId: 'r1',
+      artifactId: 'a1',
+    });
+    expect(restored.tools?.[1].output).toBeUndefined();
+    expect(restored.tools?.[2].status).toBe('error');
+  });
   beforeEach(() => {
     window.sessionStorage.setItem('xiaoyi.csrf-token', 'test-csrf');
   });

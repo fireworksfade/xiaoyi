@@ -222,7 +222,9 @@ def search_knowledge(
         ranked = reranker.rerank(rewritten, pool, expected_source=expected_source, top_k=top_k)
         latency["rerank"] = (time.perf_counter() - started) * 1000
         reranker_meta = {
-            "provider": getattr(reranker, "name", type(reranker).__name__),
+            "provider": getattr(
+                reranker, "active_provider", getattr(reranker, "name", type(reranker).__name__)
+            ),
             "fallback": bool(getattr(reranker, "used_fallback", False)),
         }
     else:
@@ -252,7 +254,11 @@ def search_knowledge(
         results.append(clean)
 
     qdrant = getattr(getattr(repository, "external", None), "qdrant", None)
-    embedding_provider = getattr(getattr(qdrant, "embedding_provider", None), "name", None)
+    embedding_provider = getattr(
+        qdrant,
+        "active_provider",
+        getattr(getattr(qdrant, "embedding_provider", None), "name", None),
+    )
     return {
         "query": query,
         "rewritten_query": rewritten,
@@ -265,6 +271,9 @@ def search_knowledge(
         "rerank_candidates": len(pool),
         "returned": len(results),
         "embedding_provider": embedding_provider or "local_lexical",
+        "embedding_collection": getattr(
+            qdrant, "active_collection", getattr(qdrant, "collection", None)
+        ),
         "reranker": reranker_meta,
         "latency_ms": {
             **{key: round(value, 3) for key, value in latency.items()},

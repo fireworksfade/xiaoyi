@@ -1,20 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, ChevronDown, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Loader2 } from 'lucide-react';
 
 import { getRunArtifact } from '@/lib/api';
 import type { ToolCallInfo } from '@/hooks/use-conversation-messages';
+import {
+  asRecord,
+  queryData,
+  QueryResult,
+  RetrievalStatus,
+} from './query-result';
 
 type Citation = { title: string; source: string; score: number | null };
 
 const JSON_PREVIEW_LIMIT = 4000;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function toCitation(item: unknown): Citation | null {
   const record = asRecord(item);
@@ -24,7 +24,9 @@ function toCitation(item: unknown): Citation | null {
   const id = typeof record.id === 'string' ? record.id : '';
   const sourceId = typeof record.source_id === 'string' ? record.source_id : '';
   const title =
-    typeof record.title === 'string' && record.title ? record.title : id || sourceId;
+    typeof record.title === 'string' && record.title
+      ? record.title
+      : id || sourceId;
   if (!title) return null;
   return {
     title,
@@ -95,6 +97,11 @@ export function ToolChip({ tool }: { tool: ToolCallInfo }) {
   // 已加载的工件内容优先；未转存的 inline 输出直接展示
   const displayContent = content !== undefined ? content : tool.output;
   const citations = expandable ? extractCitations(displayContent) : null;
+  const sqlData = queryData(displayContent);
+  const toolError = asRecord(asRecord(displayContent)?.error);
+  const failed =
+    tool.status === 'error' || asRecord(displayContent)?.ok === false;
+  const inProgress = tool.status === 'running';
 
   return (
     <div>
@@ -106,8 +113,16 @@ export function ToolChip({ tool }: { tool: ToolCallInfo }) {
           expandable ? 'cursor-pointer hover:bg-slate-100' : 'cursor-default'
         }`}
       >
-        <span className="grid size-5 place-items-center rounded bg-emerald-100 text-emerald-700">
-          <Check className="size-3" />
+        <span
+          className={`grid size-5 place-items-center rounded ${failed || tool.status === 'incomplete' ? 'bg-amber-100 text-amber-700' : inProgress ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}
+        >
+          {inProgress ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : failed || tool.status === 'incomplete' ? (
+            <AlertCircle className="size-3" />
+          ) : (
+            <Check className="size-3" />
+          )}
         </span>
         <span className="font-medium text-slate-700">{tool.name}</span>
         <span className="min-w-0 flex-1 truncate text-slate-400">
@@ -130,8 +145,25 @@ export function ToolChip({ tool }: { tool: ToolCallInfo }) {
             </p>
           ) : error ? (
             <p className="text-red-600">{error}</p>
+          ) : failed ? (
+            <div role="alert" className="space-y-1 text-amber-700">
+              <p>
+                {typeof toolError?.code === 'string' &&
+                toolError.code === 'TEXT2SQL_CLARIFICATION_REQUIRED'
+                  ? '需要补充查询条件'
+                  : '工具调用失败'}
+              </p>
+              <p>
+                {typeof toolError?.message === 'string'
+                  ? toolError.message
+                  : tool.result}
+              </p>
+            </div>
+          ) : sqlData ? (
+            <QueryResult data={sqlData} />
           ) : citations?.length ? (
             <div className="space-y-1.5">
+              <RetrievalStatus content={displayContent} />
               <p className="text-slate-400">引用来源</p>
               <ul className="space-y-1">
                 {citations.map((item, index) => (

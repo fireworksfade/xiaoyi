@@ -1,6 +1,6 @@
 # Xiaoyi IoT 平台
 
-基于智能体和 MCP 的 IoT 设备诊断与控制平台。前端提供对话、知识文档和记忆管理界面；FastAPI 后端负责认证、对话、Agent 运行、工具策略与记忆管理；统一 IoT MCP 服务提供设备诊断、知识检索和设备控制能力。
+基于智能体和 MCP 的 IoT 设备诊断与控制平台。前端提供对话、知识文档和记忆管理界面；FastAPI 后端负责认证、对话、Agent 运行、工具策略与记忆管理；统一 IoT MCP 服务提供设备诊断、知识检索、Text2SQL 历史数据查询和设备控制能力。
 
 ## 当前架构
 
@@ -12,7 +12,7 @@
 | 共享检索库 | `packages/retrieval` | 两个 Python 服务共用的 embedding 与 Qdrant 请求、响应校验；不负责业务数据和权限 |
 | 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
 
-默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载；需要真实语义检索时叠加检索模型档位（Qwen3 主档位，见下文「检索模型档位」），此时 hash + weighted 自动降级为兜底。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。默认不启动 Qwen3 模型服务，是为了让开发环境无需 GPU、模型下载或较长的冷启动等待即可运行。
+未配置外部检索 API 时，默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载。可在根目录 `.env` 配置 API 作为主 Embedding / Reranker，再叠加本地 Qwen 0.6B 兜底；也可选择本地 Qwen 主档位，见下文「检索模型档位」。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。默认不启动 Qwen3 模型服务，是为了让开发环境无需 GPU、模型下载或较长的冷启动等待即可运行。
 
 运行状态由 Agent Run、运行事件和 SSE 事件流统一管理。平台不再维护独立的 IoT operation workflow 状态机、完成门或工作流详情接口；已有数据库升级到最新迁移时会自动删除旧的 workflow 数据表。
 
@@ -78,13 +78,27 @@ MCP 服务连接成功后，前端“设置 → MCP 服务”中可查看服务�
 
 ## 配置
 
+- Embedding / Reranker 的 API 配置统一放在仓库根目录 `.env`，模板见 [`.env.example`](.env.example)，字段与切换步骤见 [API 检索配置](docs/retrieval-api.md)。
+- API 主模型 + 本地 Qwen 0.6B 兜底使用 `compose.retrieval-api-fallback.yaml`；两者均不可用时回退 hash / weighted，每次新请求继续优先 API。
 - 后端本地运行配置参见 [`packages/backend/.env.example`](packages/backend/.env.example)。`AGENT_RUNTIME=mock` 可用于无模型密钥的联调；使用真实模型时配置模型 API 或相应环境变量。`FRONTEND_ORIGINS` 支持逗号分隔多来源，默认允许 `http://localhost:3000` 与 `http://127.0.0.1:3000`。
-- IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)，本地运行示例见 [`packages/mcp-services/.env.example`](packages/mcp-services/.env.example)。诊断与控制共用 `IOT_MCP_HOST` / `IOT_MCP_PORT`（默认 9000）；配置 `DIAGNOSIS_MCP_BEARER_TOKEN` 后，所有 MCP 工具请求均须携带该令牌，`/ready` 保持可用于健康检查。`DIAGNOSIS_LLM_API_KEY` 为可选项；默认 Portable 检索不依赖外部模型。
+- IoT MCP 的 Compose 环境变量位于 [`compose.yaml`](compose.yaml)，本地运行示例见 [`packages/mcp-services/.env.example`](packages/mcp-services/.env.example)。诊断与控制共用 `IOT_MCP_HOST` / `IOT_MCP_PORT`（默认 9000）；配置 `DIAGNOSIS_MCP_BEARER_TOKEN` 后，所有 MCP 工具请求均须携带该令牌，`/ready` 保持可用于健康检查。默认 Portable 检索不依赖外部模型；Text2SQL 则需要有效的 `DIAGNOSIS_LLM_*` 模型配置。
 - 当前 `compose.yaml` 使用开发密钥、演示账号和本地端口绑定。生产部署须另行配置密钥、账号、数据库和 Cookie 策略，参见 [`packages/backend/.env.example`](packages/backend/.env.example)。
 
 ## 数据存储与迁移
 
 当前业务数据库均为 SQLite：主后端使用 `xiaoyi.db`，IoT 诊断使用 `iot_diagnosis.db`，IoT 控制使用 `iot_control.db`。知识向量同步到 Qdrant。项目不再提供 MySQL 连接、镜像同步、迁移或重建入口。
+
+默认 Compose 项目名为 `last-work` 时，数据库位置如下；自定义项目名时，卷名前缀随之变化：
+
+| 数据 | Compose 服务 | 容器内文件 | Docker 命名卷 |
+| --- | --- | --- | --- |
+| 用户、对话、模型配置与记忆 | `backend` | `/app/data/xiaoyi.db` | `last-work_backend-data` |
+| 设备、历史遥测、日志、诊断与知识文档 | `iot-mcp` | `/app/data/iot_diagnosis.db` | `last-work_iot-mcp-data` |
+| 控制命令、审批与执行结果 | `iot-mcp` | `/app/data/iot_control.db` | `last-work_iot-mcp-data` |
+
+这些 SQLite 文件保存在 Docker 数据卷中，不在宿主机仓库目录下。Docker Desktop 可在对应容器的 **Files → app → data** 中查看，或在 **Volumes** 中查看命名卷。`/var/lib/docker/volumes/.../_data` 属于 Docker Desktop 的 Linux 环境，并非 Windows 文件路径。
+
+Docker Desktop 中若仍显示已停止的 `last-work-mysql-1`，它是旧部署遗留容器，当前 Compose 和应用均不使用它；原有 `last-work_mysql-data` 卷不会自动迁入 SQLite。
 
 主后端已启用 SQLite WAL 和写入等待超时；IoT 诊断与控制使用各自的 SQLite 连接配置，未显式开启 WAL。当前单机部署可继续使用 SQLite，多实例部署或持续写入竞争需要另行评估数据库方案。
 
@@ -95,6 +109,27 @@ IoT MCP 的 SQLite 迁移通过 `python -m scripts.migrate upgrade --service dia
 Compose 使用命名卷持久化业务数据库、MQTT 和 Qdrant 数据。普通 `docker compose down` 保留这些卷；`docker compose down -v` 会删除卷及其中的数据。
 
 ## 检索模型档位
+
+### API 主模型 + 本地 Qwen 兜底
+
+在根目录 `.env` 中配置主 Embedding / Reranker 的 provider、地址、模型、密钥及向量维度，并将 `DIAGNOSIS_LOCAL_EMBEDDING_FALLBACK` 和 `DIAGNOSIS_LOCAL_RERANKER_FALLBACK` 设为 `true`。字段模板见 [`.env.example`](.env.example)，协议与完整配置见 [API 检索配置](docs/retrieval-api.md)。已有 `.env` 时保留并修改其中配置。
+
+```bash
+docker compose -f compose.yaml -f compose.retrieval-api-fallback.yaml up -d --build
+docker compose exec -T backend python scripts/bootstrap_local_mcp.py
+```
+
+Embedding 优先使用 API，失败后依次使用本地 Qwen3-Embedding-0.6B、hash；Reranker 按 API、本地 Qwen3-Reranker-0.6B、weighted 的顺序降级。每次新请求仍优先尝试 API，前端工具详情显示实际使用的模型与兜底状态。
+
+API、本地和 hash 使用独立的 Qdrant 集合，不能混用向量。当前已验证的配置分别为 1024、512、384 维，API 维度须与实际模型输出一致。知识文档新增、替换和删除会同步维护各层索引；API 写入失败进入 outbox，恢复后自动补齐。本地模型写入失败期间 hash 仍更新，但本地索引需在服务恢复后手动补齐：
+
+```bash
+docker compose -f compose.yaml -f compose.retrieval-api-fallback.yaml exec -T iot-mcp python -m scripts.rebuild_fallback_indexes --target local
+```
+
+首次启用本地兜底也执行上述命令；`--target hash` 可重建 hash 索引，无需重复调用主 Embedding API。此档位默认从完整缓存离线加载本地模型，首次下载需在 `.env` 设置 `LOCAL_MODEL_CACHE_MODE=download`。更换主 Embedding 模型时使用新集合并调用 `rebuild_vector_index`；仅更换 Reranker 无需重建向量。
+
+### 本地 Qwen 主模型 + Portable 兜底
 
 Qwen3 模型服务没有放在默认 Compose 中，因为首次启动需要下载约 2.5 GiB 模型缓存，并占用约 2.6 GiB 显存；模型加载通常还需要 5–20 分钟。默认 Portable 档位使用 384 维 hash embedding，适合无 GPU、离线或快速开发环境。需要更强的语义检索时，再按下面的命令显式叠加模型档位。
 
@@ -154,7 +189,17 @@ Remove-Item Env:E2E_MEMORY_LIVE, Env:E2E_PYTHON
 
 macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bin/python" npm run test:e2e`。测试会禁用 Wrangler 对 `.env.local` 的覆盖，并在发送消息前核验临时后端标记；不拦截或 mock 记忆 API 响应。运行前关闭同一前端目录已有的 dev 服务，Vinext 同一目录只允许一个 dev 实例。临时测试服务在结束后退出。
 
-2026-10-01 全项目清理后的验证：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，Harness 插件 9 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
+2026-10-07 Text2SQL 与 API 检索联调验证：前端 54 passed，后端 158 passed、1 skipped，MCP 263 passed，浏览器基础流程 1 passed、真实 IoT / 知识库流程 2 passed；类型检查、lint 和构建通过。真实调用验证了 API、本地 Qwen、hash/weighted 及 API 恢复四条检索路径，知识文档新增、替换、删除同步到三套索引。启动步骤与验收细节见 [前后端联调说明](docs/integration-testing.md)。
+
+真实 IoT 浏览器测试需要已启动的服务及有效模型配置，会调用外部模型 API。Windows PowerShell 在根目录运行：
+
+```powershell
+$env:E2E_IOT_LIVE = '1'
+npm run test:e2e -- --workers=1 e2e/iot-live.spec.ts
+Remove-Item Env:E2E_IOT_LIVE
+```
+
+2026-10-01 全项目清理后的验证（历史记录）：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，Harness 插件 9 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
 
 2026-09-30 联调结果（历史记录）：
 
@@ -168,6 +213,16 @@ macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bi
 | 前端回归 | typecheck、lint、34 项 Vitest、build 全通过 |
 
 首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。详细记忆验证与小样本在线语义评估见 [修复报告](docs/memory-repair-report-20260930.md)。
+
+## RAG + Text2SQL
+
+聊天 Agent 现支持通过只读 MCP 工具 `query_iot_data`，用自然语言查询设备、历史遥测、日志和诊断摘要的统计、趋势、排名、明细及设备元数据关联。模型输出结构化查询计划，后端严格检查指标、聚合、时间与分组，并按固定模板生成 SQL；统计日志条数与去重设备数量使用各自的业务口径。技术资料继续使用现有文档 RAG；同时需要数据与解释时，Agent 先查 SQL 再检索文档，结合两类证据回答。
+
+Text2SQL 复用 IoT MCP 的 `DIAGNOSIS_LLM_*` 配置，默认按北京时间解释日期，支持设备范围、只读视图、查询超时和结果截断。配置模型并更新服务后，重新运行 `bootstrap_local_mcp.py` 刷新工具及只读策略。仅配置前端聊天模型不会自动配置 MCP 的 SQL 生成模型。启用步骤、数据口径、执行边界和测试见 [Text2SQL 说明](docs/text2sql.md)。
+
+例如在聊天中输入“统计过去 24 小时各节点平均温度和有效样本数”，展开 `query_iot_data` 查看结果表格、设备范围、时间窗口、SQL 和绑定参数。模型计划格式错误最多纠正一次；指标白名单、固定 SQL 模板、只读连接、超时和行数限制共同约束执行。设备范围冲突或业务口径不明确时要求澄清，不执行查询。
+
+前端支持历史查询表格、检索 API/兜底状态及刷新后的工具结果恢复；启动方式和真实浏览器联调见 [前后端联调说明](docs/integration-testing.md)。
 
 ## 知识库分类
 
@@ -211,7 +266,7 @@ docker compose ps
 docker compose up -d --build backend iot-mcp
 ```
 
-如果使用检索模型档位，维护命令继续带上原先使用的 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。设备、知识和记忆数据保存在命名卷中。
+如果使用检索模型档位，维护命令继续带上原先使用的覆盖文件：API 主模型与本地兜底为 `-f compose.yaml -f compose.retrieval-api-fallback.yaml`，本地主模型为 `-f compose.yaml -f compose.retrieval-models.yaml`；离线档位也保留对应覆盖文件。修改 `.env` 或 Compose 配置后使用 `up -d` 重建容器配置，单纯 `restart` 不会更新环境变量。源码挂载加重启更新的是运行代码，不会改变镜像的构建时间。设备、知识和记忆数据保存在命名卷中。
 
 ### 前端重启、日志与停止
 

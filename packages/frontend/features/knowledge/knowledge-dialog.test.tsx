@@ -49,6 +49,21 @@ const docs: KnowledgeDocumentSummary[] = [
 ];
 
 describe('KnowledgeDialog organization', () => {
+  it('keeps the selected file on the native required input until upload succeeds', async () => {
+    vi.mocked(listKnowledgeDocuments).mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+    });
+    render(<KnowledgeDialog open onOpenChange={vi.fn()} />);
+    const input = screen.getByLabelText('文档文件') as HTMLInputElement;
+    const file = new File(['设备指南'], 'device.md', { type: 'text/markdown' });
+    await userEvent.setup().upload(input, file);
+    expect(screen.getByLabelText('文档文件')).toBe(input);
+    expect(input.files?.[0]).toBe(file);
+    expect(input.isConnected).toBe(true);
+  });
   beforeEach(() => {
     vi.mocked(listKnowledgeDocuments).mockResolvedValue({
       items: docs,

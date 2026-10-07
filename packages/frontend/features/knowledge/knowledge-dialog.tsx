@@ -123,6 +123,7 @@ export function KnowledgeDialog(props: {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [fileInputVersion, setFileInputVersion] = useState(0);
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<UploadForm>({
     category: 'hardware',
@@ -230,6 +231,7 @@ export function KnowledgeDialog(props: {
         `${form.title.trim() || file.name} 已加入知识库${result.vector_indexed ? '，可用于诊断检索。' : '，检索索引正在同步。'}`,
       );
       setFile(null);
+      setFileInputVersion((version) => version + 1);
       await refresh();
     } catch (cause) {
       setError(describeError(cause, '文档摄取失败'));
@@ -437,7 +439,7 @@ export function KnowledgeDialog(props: {
                   accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
                   className="mt-1.5"
                   onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                  key={file ? file.name : 'empty'}
+                  key={fileInputVersion}
                 />
               </div>
               <TagSelect

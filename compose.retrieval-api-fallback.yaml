@@ -1,0 +1,16 @@
+# API 保持主模型；本地 Qwen 0.6B 作为第一层兜底，hash/weighted 为最后一层。
+# docker compose -f compose.yaml -f compose.retrieval-api-fallback.yaml up -d
+services:
+  retrieval-models:
+    extends:
+      file: compose.retrieval-models.yaml
+      service: retrieval-models
+    environment:
+      MODEL_CACHE_MODE: ${LOCAL_MODEL_CACHE_MODE:-offline}
+  iot-mcp:
+    environment:
+      DIAGNOSIS_LOCAL_EMBEDDING_FALLBACK: ${DIAGNOSIS_LOCAL_EMBEDDING_FALLBACK:-true}
+      DIAGNOSIS_LOCAL_RERANKER_FALLBACK: ${DIAGNOSIS_LOCAL_RERANKER_FALLBACK:-true}
+    # 不添加模型健康依赖：本地模型冷启动或不可用时，API 主链路仍可启动。
+volumes:
+  retrieval-model-cache:
