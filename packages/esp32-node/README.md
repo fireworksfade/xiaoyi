@@ -47,6 +47,7 @@ QEMU 不模拟 WiFi 射频和传感器外设。QEMU 节点不上报 RSSI，也�
 - 容器的标准输出就是串口控制台：`docker compose logs -f esp32-08` 可以看到 `Guru Meditation`、看门狗输出和回溯。
 - `docker compose restart esp32-02` 等于断电重启；`docker compose stop esp32-02` 等于断电，Broker 会在 1.5 倍 Keep Alive 后发布遗嘱。
 - 设备自己重启（`restart_device`、OTA、panic、看门狗）时，QEMU 以 `-no-reboot` 运行并退出，入口脚本在同一个容器里重新上电。这样做的原因是 Espressif QEMU 在软件复位（`SW_CPU_RESET`）后外设状态不干净，下一次启动会在 `esp_timer_init` 中崩溃。重新上电会丢失 RTC 里的复位原因，所以 QEMU 构建开启了 `CONFIG_XIAOYI_EMULATED_POWER_CYCLE`，由固件从 flash 里真实留下的证据恢复复位原因：有 core dump 时，按其中的 panic 原因判定为 `TASK_WDT`、`INT_WDT` 或 `PANIC`；主动重启前写入的 NVS 标记对应 `SW`。
+- QEMU 构建把任务看门狗超时放宽到 15 秒，真机和 Wokwi 仍为 5 秒。原因是 QEMU 模拟 flash 很慢：整个机群同时上电时，单是 `nvs_flash_init` 就可能占住 CPU0 超过 5 秒，误触发 `TASK_WDT`。看门狗演练照样会触发，只是晚一些。重新部署机群时也最好逐台启动。
 - flash 镜像保存在 `esp32-flash` 卷中，NVS、OTA 分区和 core dump 在重启后保留。修改 `FIRMWARE_VERSION`、`BOOT_FAULT` 等出厂参数后，需要先停机并重新烧录（等于恢复出厂）：
 
 ```bash

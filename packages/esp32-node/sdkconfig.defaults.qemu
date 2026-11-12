@@ -6,3 +6,8 @@ CONFIG_ETH_USE_OPENETH=y
 CONFIG_ETH_USE_ESP32_EMAC=n
 CONFIG_XIAOYI_DEFAULT_BROKER_URI="mqtt://mqtt:1883"
 CONFIG_XIAOYI_DEFAULT_OTA_BASE_URL="http://esp32-ota:8070"
+# QEMU emulates SPI flash slowly: with the whole fleet booting at once, nvs_flash_init alone can
+# hold CPU0 for more than 5 s and trip the task watchdog (a false TASK_WDT reset seen 2026-11-12).
+# Real modules read NVS in milliseconds, so only the QEMU build gets the longer timeout; the
+# watchdog drill still fires, just later.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
