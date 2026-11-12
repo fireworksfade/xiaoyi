@@ -1,5 +1,5 @@
 {
-  "description": "运维记忆种子：情景记忆来自 2026-11-12 在 QEMU 仿真节点上真实复现的运维问题（诊断 ID、命令 ID 均可在平台中查到）；经验记忆从这些经历总结，并链接回对应情景。知识库只放官方文档，项目自己的经验放在这里。",
+  "description": "运维记忆种子：情景记忆来自 2026-11-12 在 QEMU 与 Wokwi 仿真节点上真实复现的运维问题（诊断 ID、命令 ID 均可在平台中查到）；经验记忆从这些经历总结，并链接回对应情景。知识库只放官方文档，项目自己的经验放在这里。",
   "episodes": [
     {
       "slug": "ep-wdt-after-upgrade",
@@ -402,6 +402,81 @@
         "unresolved_items": []
       },
       "applicability": {"environment": "Compose 机群 9 台 QEMU 设备与 Mosquitto 2.1", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-wokwi-ntc-open",
+      "title": "ESP32_06（Wokwi）· NTC 开路，ADC 原始值恒为 0，校准无效",
+      "summary": "Wokwi 节点 ESP32_06 的 GPIO34 接地，模拟热敏电阻开路。每 10 秒报 NTC reading at rail (raw=0)，sensor_valid=false，平台收到 sensor_read_failed。诊断判定 NTC 开路或短路；calibrate_sensor 回执 failed（重新初始化后仍无法读取），需要现场处理。",
+      "content": {
+        "observations": [
+          "日志每 10 秒一条 NTC reading at rail (raw=0): open or short circuit，每分钟一条 sensor read failed: ESP_ERR_INVALID_RESPONSE",
+          "故障主题 sensor_read_failed：传感器读取失败：ESP_ERR_INVALID_RESPONSE（ntc_adc）",
+          "status 中 sensor_valid=false，固件不再上报 temperature；平台原先沿用上一次的 26.0 °C，已修正为清空",
+          "WiFi、MQTT、心跳正常，uptime 持续增长，没有复位",
+          "Wokwi 中 RSSI 会在 -69 到 -98 dBm 之间自行波动，诊断据此提示“信号偏弱”，这是仿真器行为，与本故障无关"
+        ],
+        "actions": [
+          {
+            "action": "calibrate_sensor",
+            "diagnosis_id": "DIA_20261112_B614B370",
+            "command_id": "CMD_20261112_5129ACAF",
+            "ack": "failed：重新初始化传感器后仍无法读取：ESP_ERR_INVALID_RESPONSE",
+            "verify_status": null
+          }
+        ],
+        "outcome": "failed",
+        "root_cause_status": "接线故障（仿真中 GPIO34 接地），软件动作无法恢复",
+        "unresolved_items": ["真机上需要用万用表确认是探头开路还是 ADC 引脚对地短路"]
+      },
+      "applicability": {"environment": "Wokwi 仿真节点 ESP32_06（wokwi/ntc-open）", "firmware_versions": ["1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-wokwi-ntc-short",
+      "title": "ESP32_06（Wokwi）· NTC 短路，ADC 原始值恒为 4095，校准无效",
+      "summary": "Wokwi 节点 ESP32_06 的 GPIO34 接 3V3，模拟热敏电阻短路。每 10 秒报 NTC reading at rail (raw=4095)，sensor_valid=false。诊断判定 ADC 读数触顶；calibrate_sensor 回执 failed。",
+      "content": {
+        "observations": [
+          "上电 2 秒后开始报 NTC reading at rail (raw=4095): open or short circuit，之后每 10 秒一条",
+          "故障主题 sensor_read_failed，status 中 sensor_valid=false、temperature 为空",
+          "Wokwi 中 RSSI 会在 -69 到 -98 dBm 之间自行波动，诊断据此提示“信号偏弱”，这是仿真器行为，与本故障无关"
+        ],
+        "actions": [
+          {
+            "action": "calibrate_sensor",
+            "diagnosis_id": "DIA_20261112_B433C8A8",
+            "command_id": "CMD_20261112_2F95C6A3",
+            "ack": "failed：重新初始化传感器后仍无法读取：ESP_ERR_INVALID_RESPONSE",
+            "verify_status": null
+          }
+        ],
+        "outcome": "failed",
+        "root_cause_status": "接线故障（仿真中 GPIO34 接电源），软件动作无法恢复",
+        "unresolved_items": ["真机上需要确认是探头短路还是 ADC 引脚碰到电源"]
+      },
+      "applicability": {"environment": "Wokwi 仿真节点 ESP32_06（wokwi/ntc-short）", "firmware_versions": ["1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-wokwi-no-ap",
+      "title": "ESP32_06（Wokwi）· SSID 配错，WiFi 报 201 NO_AP_FOUND，平台只看到离线",
+      "summary": "Wokwi 节点 ESP32_06 的固件 SSID 写成不存在的 Wokwi-MISSING。串口每次重试都报 wifi disconnected, reason=201 (NO_AP_FOUND), rssi=-128，重试间隔从 1 秒翻倍到 32 秒封顶；30 秒拿不到 IP 后 MQTT 开始重试，反复报 getaddrinfo() returns 202。设备一条数据也发不出去，平台只看到遗嘱 client_lost，原因码只能从串口拿到。",
+      "content": {
+        "observations": [
+          "串口：wifi station started, connecting to \"Wokwi-MISSING\"，之后每次重试 wifi disconnected, reason=201 (NO_AP_FOUND), rssi=-128",
+          "rssi=-128 表示根本没收到这个 SSID，不是信号弱",
+          "重试间隔 1、2、4、8、16、32 秒，之后一直 32 秒；2 分钟内 WiFi 重试 8 次",
+          "30 秒后 no IP address after 30 s, MQTT will keep retrying，随后 2 分钟内 12 次 couldn't get hostname（getaddrinfo() returns 202, ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME），这是没有 IP 的连带结果",
+          "平台：online=false、offline_reason=client_lost、心跳过期，收不到任何日志",
+          "第一次诊断时平台还保留着断线前的 WiFi/MQTT=connected，诊断无法判断；修正为离线后 MQTT 记断开、WiFi 记未知，第二次诊断判断为 WiFi/MQTT 连接未建立，并提示到串口查原因码"
+        ],
+        "actions": [
+          {"action": "diagnose_fault", "diagnosis_id": "DIA_20261112_7FAEDB06", "result": "终端离线（心跳失效），证据不足以判断根因"},
+          {"action": "diagnose_fault", "diagnosis_id": "DIA_20261112_4547EAA1", "result": "环境终端离线，WiFi/MQTT 连接未建立；建议查串口原因码、核对 SSID 与密码"}
+        ],
+        "outcome": "not_executed",
+        "root_cause_status": "固件中的 SSID 配置错误，需要现场改配置或重新烧录；设备离线时平台动作无法送达",
+        "unresolved_items": ["reconnect_wifi 等远程动作在设备离线时不会送达，本次没有下发"]
+      },
+      "applicability": {"environment": "Wokwi 仿真节点 ESP32_06（wokwi/no-ap，构建 build-wokwi-noap）", "firmware_versions": ["1.3.1"], "occurred_on": "2026-11-12"}
     }
   ],
   "experiences": [
@@ -669,41 +744,47 @@
     },
     {
       "slug": "xp-wifi-reason-codes",
-      "episodes": [],
-      "confirm": false,
-      "title": "（待 Wokwi 验证）WiFi 断线按原因码分类处理",
-      "summary": "WiFi 节点日志 wifi disconnected, reason=N 中，201 NO_AP_FOUND、202 AUTH_FAIL、15 4WAY_HANDSHAKE_TIMEOUT 多为配置问题，重连无效；200 BEACON_TIMEOUT、2 AUTH_EXPIRE 与信号有关，要结合 RSSI。reconnect_wifi 只适合驱动状态异常、AP 正常的情况。尚未在 Wokwi 中实际验证。",
+      "episodes": ["ep-wokwi-no-ap"],
+      "title": "WiFi 连不上：先看串口原因码，201 NO_AP_FOUND 是 SSID 配置问题，重连无效",
+      "summary": "WiFi 节点连不上 AP 时平台只看到 client_lost 离线，原因码只在串口里：wifi disconnected, reason=N。201 NO_AP_FOUND 且 rssi=-128 表示根本找不到这个 SSID，要核对 SSID，重连没用；202 AUTH_FAIL、15 4WAY_HANDSHAKE_TIMEOUT 多为密码或加密方式问题；200 BEACON_TIMEOUT、2 AUTH_EXPIRE 与信号有关，要看 RSSI。没有 IP 时串口里的 getaddrinfo 202 / CANNOT_RESOLVE_HOSTNAME 是连带结果，不要当成 Broker 或 DNS 故障。",
       "content": {
         "claims": [
-          {"text": "原因码含义来自 ESP-IDF Wi-Fi 驱动官方文档；按原因码区分配置类与信号类问题的处理方法尚未在本项目中验证", "epistemic_status": "hypothesis", "evidence_refs": ["ESP_WIFI_DRIVER"]}
+          {"text": "SSID 不存在时每次重试都报 reason=201 (NO_AP_FOUND)，rssi=-128，重试间隔翻倍到 32 秒", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wokwi-no-ap"]},
+          {"text": "设备连不上 WiFi 时平台只收到遗嘱 client_lost，原因码要从串口获取", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wokwi-no-ap", "DIA_20261112_7FAEDB06", "DIA_20261112_4547EAA1"]},
+          {"text": "没有 IP 时 MQTT 报 getaddrinfo() returns 202（ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME），这是断网的连带结果", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wokwi-no-ap", "ESP_TLS"]},
+          {"text": "202、15 多为密码或加密方式问题，200、2 与信号有关；这几类原因码的含义来自 ESP-IDF Wi-Fi 驱动官方文档，本项目只复现了 201", "epistemic_status": "hypothesis", "evidence_refs": ["ESP_WIFI_DRIVER"]}
         ],
         "procedure": [
-          "从日志读 reason 与 rssi",
-          "配置类原因：核对 SSID、密码、加密方式",
-          "信号类原因：看 RSSI 是否低于 -75 dBm",
-          "AP 正常且长时间重连失败时再用 reconnect_wifi"
+          "平台显示离线且 offline_reason=client_lost 时，先区分断电、断网和 WiFi 配置问题：现场取串口日志",
+          "找 wifi disconnected, reason=N 与 rssi：201 且 rssi=-128 说明找不到 SSID，核对 SSID 与 AP 是否在线",
+          "202/15 核对密码与加密方式；200/2 看 RSSI 是否低于 -75 dBm",
+          "忽略随后出现的 getaddrinfo 202 / CANNOT_RESOLVE_HOSTNAME，它们会在拿到 IP 后消失",
+          "设备离线时不要下发 reconnect_wifi，命令送不到；改好配置后确认设备重新上线"
         ],
-        "limitations": ["只适用于 Wokwi 或真机 WiFi 节点；QEMU 节点没有 WiFi"]
+        "limitations": ["只适用于 Wokwi 或真机 WiFi 节点；QEMU 节点没有 WiFi", "只复现了 201，其他原因码的处理来自官方文档"]
       },
-      "applicability": {"fault_types": ["wifi_connection"], "actions": ["reconnect_wifi"], "verification": "待在 Wokwi 中复现后确认"}
+      "applicability": {"fault_types": ["wifi_connection", "offline"], "actions": ["reconnect_wifi"], "environment": "Wokwi 复现（wokwi/no-ap）"}
     },
     {
       "slug": "xp-ntc-open-short",
-      "episodes": [],
-      "confirm": false,
-      "title": "（待 Wokwi 验证）NTC 读数贴近满量程两端是开路或短路",
-      "summary": "Wokwi 节点 NTC 接 ADC1，固件在原始值 ≤8 或 ≥4087 时记录 NTC reading at rail: open or short circuit 并把读数判为无效。这是接线问题，calibrate_sensor 无效，需要现场检查。尚未在 Wokwi 中实际验证。",
+      "episodes": ["ep-wokwi-ntc-open", "ep-wokwi-ntc-short"],
+      "title": "NTC 读数贴在量程两端是开路或短路，校准无效，要现场处理",
+      "summary": "ntc_adc 节点日志出现 NTC reading at rail，原始值为 0 或 4095，sensor_valid=false。热敏电阻接在电源一侧时，0 表示开路（或引脚对地），4095 表示短路（或引脚碰电源）。calibrate_sensor 会回执 failed，不要反复下发，安排现场检查探头和接线。",
       "content": {
         "claims": [
-          {"text": "判定逻辑来自固件 sensor.c 与 ESP-IDF ADC 官方文档，尚未在 Wokwi 中复现", "epistemic_status": "hypothesis", "evidence_refs": ["packages/esp32-node/main/sensor.c", "ESP_ADC_ONESHOT"]}
+          {"text": "原始值恒为 0 或 4095 时固件判定读数无效，平台收到 sensor_read_failed", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wokwi-ntc-open", "episode:ep-wokwi-ntc-short"]},
+          {"text": "calibrate_sensor 无法恢复接线故障，回执 failed：重新初始化传感器后仍无法读取", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wokwi-ntc-open", "episode:ep-wokwi-ntc-short", "CMD_20261112_5129ACAF", "CMD_20261112_2F95C6A3"]},
+          {"text": "0 对应开路、4095 对应短路，取决于热敏电阻接在分压的哪一侧；Wokwi 的 NTC 模块接在电源一侧", "epistemic_status": "hypothesis", "evidence_refs": ["episode:ep-wokwi-ntc-open", "episode:ep-wokwi-ntc-short", "ESP_ADC_ONESHOT"]}
         ],
         "procedure": [
-          "日志出现 NTC reading at rail 时，不要下发校准",
-          "现场检查 NTC 与分压电阻的连接"
+          "看日志里 raw 的值是 0 还是 4095",
+          "最多试一次 calibrate_sensor 排除驱动问题；回执 failed 就不要再下发",
+          "安排现场断电后用万用表量探头电阻，检查分压电阻、接插件和 ADC 引脚",
+          "修好后确认 sensor_valid=true、温度重新出现，再执行一次校准"
         ],
-        "limitations": ["只适用于 sensor_backend=ntc_adc 的节点"]
+        "limitations": ["只适用于 sensor_backend=ntc_adc 的节点（Wokwi 或真机）", "Wokwi 节点的 RSSI 会自行波动，不能据此判断弱信号"]
       },
-      "applicability": {"fault_types": ["sensor_anomaly"], "verification": "待在 Wokwi 中复现后确认"}
+      "applicability": {"fault_types": ["sensor_anomaly"], "actions": ["calibrate_sensor"], "environment": "Wokwi 复现（wokwi/ntc-open、wokwi/ntc-short）"}
     }
   ]
 }

@@ -122,7 +122,7 @@ Wokwi 用来覆盖 QEMU 做不到的部分：WiFi 关联、断线原因码、RSS
 | 场景 | 接线或配置 | 预期串口日志 |
 | --- | --- | --- |
 | `wokwi/no-ap` | SSID 改为不存在的 `Wokwi-MISSING`，需要单独构建 `build-wokwi-noap` | `wifi disconnected, reason=201 (NO_AP_FOUND)`，并按间隔重试 |
-| `wokwi/ntc-open` | NTC 模块的 VCC 不接，输出被拉到 0 V | `NTC reading at rail (raw=…): open or short circuit`，`sensor_valid=false` |
+| `wokwi/ntc-open` | 热敏电阻开路时模块输出为 0 V，用 GPIO34 直接接 GND 模拟 | `NTC reading at rail (raw=…): open or short circuit`，`sensor_valid=false` |
 | `wokwi/ntc-short` | GPIO34 直接接 3V3 | 同上，`raw` 接近 4095 |
 
 构建 `no-ap` 场景使用的固件：
@@ -133,11 +133,11 @@ docker run --rm -v "$PWD:/project" -w /project espressif/idf:v5.5.4 \
   -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.wokwi;wokwi/sdkconfig.defaults.no-ap" build
 ```
 
-`no-ap` 场景连不上 WiFi，所以平台收不到任何数据，证据只有串口日志。两个 NTC 场景能连上 Broker，可以在平台上发起诊断，再尝试 `calibrate_sensor`。
+`no-ap` 场景连不上 WiFi，所以平台收不到任何数据，证据只有串口日志。每个场景的 `wokwi.toml` 都设置了 `rfc2217ServerPort = 4000`：仿真运行时，串口通过 RFC2217（telnet）开放在本机 `127.0.0.1:4000`，脚本可以直接连上去读，不需要从界面复制。两个 NTC 场景能连上 Broker，可以在平台上发起诊断，再尝试 `calibrate_sensor`。
 
 已知限制：
 
-- Wokwi 的文档没有提供调节 RSSI 或模拟随机掉线的方法，所以弱信号场景仍然需要真机。
+- Wokwi 的文档没有提供调节 RSSI 或模拟随机掉线的方法，所以弱信号场景仍然需要真机。实测 Wokwi 上报的 RSSI 会在 -69 到 -98 dBm 之间自行波动，不代表真实信号强度，诊断时不要据此判断信号弱。
 - 默认 CPU 限速约 8 MHz。仿真时钟比真实时间慢时，Broker 一侧可能出现假的 Keep Alive 超时，演练时要排除这种情况。
 - 设备 ID 默认为 `ESP32_06`，可在 `sdkconfig.defaults.wokwi` 中修改。
 

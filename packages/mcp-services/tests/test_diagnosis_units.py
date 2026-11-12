@@ -483,6 +483,40 @@ def test_wired_link_clears_wifi_fields_left_by_older_reports(tmp_path) -> None:
     assert repository.get_device_status("ESP32_06")["rssi"] == -61
 
 
+def test_offline_status_drops_link_state_left_by_older_reports(tmp_path) -> None:
+    # Wokwi no-ap：设备断网后只剩遗嘱，旧的 "WiFi/MQTT 已连接" 会误导诊断
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.apply_status(
+        "ESP32_06",
+        {"online": True, "wifi_status": "connected", "mqtt_status": "connected", "rssi": -84},
+    )
+    repository.apply_status("ESP32_06", {"online": False, "offline_reason": "client_lost"})
+    status = repository.get_device_status("ESP32_06")
+    assert status["mqtt_status"] == "disconnected"
+    assert status["wifi_status"] is None
+    assert status["rssi"] == -84  # 最后一次读数保留
+    repository.apply_status(
+        "ESP32_06", {"online": True, "wifi_status": "connected", "mqtt_status": "connected"}
+    )
+    status = repository.get_device_status("ESP32_06")
+    assert (status["mqtt_status"], status["wifi_status"]) == ("connected", "connected")
+
+
+def test_invalid_sensor_clears_temperature_left_by_older_reports(tmp_path) -> None:
+    # Wokwi ntc-open：固件在 sensor_valid=false 时不再上报温度
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.apply_status("ESP32_06", {"online": True, "sensor_valid": True, "temperature": 26.0})
+    repository.apply_status("ESP32_06", {"online": True, "sensor_valid": False, "uptime": 12})
+    assert repository.get_device_status("ESP32_06")["temperature"] is None
+    repository.append_telemetry("ESP32_07", {"sensor_valid": True, "temperature": 24.5})
+    repository.append_telemetry("ESP32_07", {"sensor_valid": False, "rssi": -70})
+    assert repository.get_device_status("ESP32_07")["temperature"] is None
+    # 没有 sensor_valid 字段的旧载荷仍沿用上一次读数
+    repository.apply_status("ESP32_05", {"online": True, "temperature": 25.1})
+    repository.apply_status("ESP32_05", {"online": True, "uptime": 30})
+    assert repository.get_device_status("ESP32_05")["temperature"] == 25.1
+
+
 def test_cleared_retained_message_is_ignored_without_error(tmp_path, caplog) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
     ingestor = MQTTIngestor(repository)

@@ -1263,8 +1263,10 @@ async def test_ops_memory_seed_links_experiences_to_real_episodes() -> None:
 
     data = json.loads(SEED_FILE.read_text(encoding="utf-8"))
     total = len(data["episodes"]) + len(data["experiences"])
-    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {"created": total, "kept": 0}
-    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {"created": 0, "kept": total}
+    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {
+        "created": total, "updated": 0, "kept": 0}
+    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {
+        "created": 0, "updated": 0, "kept": total}
 
     async with SessionFactory() as db:
         memories = (await db.scalars(select(Memory))).all()
@@ -1288,3 +1290,48 @@ async def test_ops_memory_seed_links_experiences_to_real_episodes() -> None:
             assert rev.applicability_json["mcp_server_id"]
             all_refs += refs
         assert episode_ids <= set(all_refs)
+
+
+async def test_ops_memory_seed_revises_a_candidate_once_it_is_verified(tmp_path) -> None:
+    """候选经验在后来复现后改为确认：生成新版本并补证据链接，不新增重复记忆。"""
+    from app.memory.models import MemoryEvidenceLink
+    from app.models import MCPPurpose, MCPServer, UserRole
+    from app.security import hash_password
+    from scripts.seed_ops_memories import seed
+
+    async with SessionFactory() as db:
+        db.add(User(username="admin", password_hash=hash_password("x"), role=UserRole.ADMIN))
+        db.add(MCPServer(server_key="iot-mcp-local", name="IoT", url="http://iot-mcp:9000/mcp",
+                         purpose=MCPPurpose.IOT, enabled=True, connection_status="connected"))
+        await db.commit()
+
+    def episode(slug):
+        return {"slug": slug, "title": f"{slug} 复现", "summary": f"{slug} 的现象与结果",
+                "content": {"observations": ["raw=0"], "actions": [], "outcome": "failed"}}
+
+    def experience(confirm, episodes, summary):
+        claim = {"text": "读数贴近量程两端是开路或短路", "epistemic_status": "hypothesis",
+                 "evidence_refs": [f"episode:{slug}" for slug in episodes]}
+        return {"slug": "xp", "title": "NTC 开路或短路", "summary": summary, "confirm": confirm,
+                "episodes": episodes, "content": {"claims": [claim], "procedure": [], "limitations": []}}
+
+    path = tmp_path / "seed.json"
+    path.write_text(json.dumps({"episodes": [episode("ep-a")],
+                                "experiences": [experience(False, ["ep-a"], "待验证")]},
+                               ensure_ascii=False), encoding="utf-8")
+    assert await seed("admin", "iot-mcp-local", path) == {"created": 2, "updated": 0, "kept": 0}
+
+    path.write_text(json.dumps({"episodes": [episode("ep-a"), episode("ep-b")],
+                                "experiences": [experience(True, ["ep-a", "ep-b"], "已复现")]},
+                               ensure_ascii=False), encoding="utf-8")
+    assert await seed("admin", "iot-mcp-local", path) == {"created": 1, "updated": 1, "kept": 1}
+    assert await seed("admin", "iot-mcp-local", path) == {"created": 0, "updated": 0, "kept": 3}
+
+    async with SessionFactory() as db:
+        memory = await db.scalar(select(Memory).where(Memory.event_key == "ops-seed:xp"))
+        assert (memory.status, memory.current_revision, memory.active_revision) == ("active", 2, 2)
+        assert (await service.revision(db, memory)).summary == "已复现"
+        linked = set((await db.scalars(select(MemoryEvidenceLink.episode_id).where(
+            MemoryEvidenceLink.memory_id == memory.id, MemoryEvidenceLink.revision == 2))).all())
+        episodes = set((await db.scalars(select(Memory.id).where(Memory.kind == "episodic"))).all())
+        assert linked == episodes and len(episodes) == 2

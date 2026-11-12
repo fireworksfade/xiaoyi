@@ -5,7 +5,8 @@ evidence); experiences generalise them and link back to their episodes. Every me
 through the normal memory service, so validation, revisions, confirmation and vector
 indexing behave exactly as for memories created in the UI.
 
-Re-running is safe: each memory has a stable event key, and existing ones are left alone.
+Re-running is safe: each memory has a stable event key. Unchanged memories are left alone; an
+experience whose seed entry changed gets a new revision (and is confirmed when the entry says so).
 
   python -m scripts.seed_ops_memories --username admin
 """
@@ -22,7 +23,7 @@ from sqlalchemy import select
 from app.db import SessionFactory
 from app.memory.models import Memory, MemoryEvidenceLink
 from app.memory.schemas import MemoryWrite
-from app.memory.service import create, transition
+from app.memory.service import create, edit, make_revision, revision, transition
 from app.models import MCPServer, User
 
 SEED_FILE = Path(__file__).resolve().parents[1] / "seed" / "ops_memories.json"
@@ -45,9 +46,36 @@ def resolve_refs(content: dict, episodes: dict[str, Memory]) -> dict:
     return resolved
 
 
+async def refresh(db, owner: str, memory: Memory, payload: MemoryWrite,
+                  linked: list[Memory], confirm: bool) -> bool:
+    """An experience whose seed entry changed (e.g. a candidate verified later) gets a new
+    revision with the new evidence instead of a duplicate memory."""
+    current = await revision(db, memory)
+    if make_revision(memory, owner, payload, 0).content_hash != current.content_hash:
+        update = payload.model_copy(update={
+            "expected_revision": memory.current_revision,
+            "change_reason": "运维种子更新：补充复现证据",
+        })
+        memory = await edit(db, owner, memory.id, update)
+        known = set((await db.scalars(select(MemoryEvidenceLink.episode_id).where(
+            MemoryEvidenceLink.memory_id == memory.id,
+            MemoryEvidenceLink.revision == memory.current_revision))).all())
+        for episode in linked:
+            if episode.id not in known:
+                db.add(MemoryEvidenceLink(
+                    owner_user_id=owner, memory_id=memory.id, revision=memory.current_revision,
+                    episode_id=episode.id, episode_revision=episode.current_revision))
+        await db.flush()
+    elif not (confirm and memory.status == "candidate"):
+        return False
+    if confirm and (memory.status != "active" or memory.active_revision != memory.current_revision):
+        await transition(db, owner, memory.id, memory.current_revision, "confirm")
+    return True
+
+
 async def seed(username: str, server_key: str, path: Path) -> dict[str, int]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    counts = {"created": 0, "kept": 0}
+    counts = {"created": 0, "updated": 0, "kept": 0}
     async with SessionFactory() as db:
         user = await db.scalar(select(User).where(User.username == username))
         if user is None:
@@ -81,9 +109,6 @@ async def seed(username: str, server_key: str, path: Path) -> dict[str, int]:
         await db.flush()
 
         for item in data["experiences"]:
-            if await existing(item["slug"]) is not None:
-                counts["kept"] += 1
-                continue
             linked = [episodes[slug] for slug in item.get("episodes", [])]
             payload = MemoryWrite(
                 kind="experience",
@@ -92,6 +117,11 @@ async def seed(username: str, server_key: str, path: Path) -> dict[str, int]:
                 content=resolve_refs(item["content"], episodes),
                 applicability=scoped(item.get("applicability", {}), server.id),
             )
+            memory = await existing(item["slug"])
+            if memory is not None:
+                changed = await refresh(db, user.id, memory, payload, linked, item.get("confirm", True))
+                counts["updated" if changed else "kept"] += 1
+                continue
             memory = await create(db, user.id, payload, source_type="user",
                                   event_key=EVENT_PREFIX + item["slug"],
                                   episode=linked[0] if linked else None)

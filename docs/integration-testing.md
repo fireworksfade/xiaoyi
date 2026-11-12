@@ -102,9 +102,25 @@ Remove-Item Env:E2E_IOT_ACTIONS_LIVE
 - 诊断规则不再把普通的“MQTT + 超时”当作 Keep Alive 问题，同时补充了看门狗、panic、内存不足和传感器读取失败的规则。
 - 平台收到长度为 0 的 retained 清除消息时不再报错。
 
-新增修复动作 `set_mqtt_keepalive`（低风险）和 `rollback_firmware`（高风险，仅当状态带 `rollback_version` 时可用），协议见 [设备协议](device-protocol.md)。MCP 测试 303 项通过，后端测试 159 项通过、1 项跳过。
+新增修复动作 `set_mqtt_keepalive`（低风险）和 `rollback_firmware`（高风险，仅当状态带 `rollback_version` 时可用），协议见 [设备协议](device-protocol.md)。复现结束时 MCP 测试 308 项通过，后端测试 161 项通过、1 项跳过。
 
-WiFi 断开原因码和 NTC 开路/短路需要 Wokwi 才能复现，相关两条经验在种子中只作为待确认候选。场景配置在 `packages/esp32-node/wokwi/`（见 [ESP32 设备仿真](../packages/esp32-node/README.md)），需要用户自己的 Wokwi 许可运行。
+### Wokwi 复现
+
+WiFi 断开原因码和 NTC 开路/短路只能在 Wokwi 中复现。场景配置在 `packages/esp32-node/wokwi/`（见 [ESP32 设备仿真](../packages/esp32-node/README.md)），在 VS Code 的 Wokwi 扩展中运行，设备 ID 为 `ESP32_06`。串口通过 RFC2217 开放在本机 4000 端口，可以用脚本直接读取。
+
+| 场景 | 设备表现 | 平台诊断与处置 |
+| --- | --- | --- |
+| `ntc-open`（GPIO34 接 GND） | 每 10 秒报 `NTC reading at rail (raw=0)`，`sensor_valid=false`，上报 `sensor_read_failed` | `DIA_20261112_B614B370` 判定 NTC 开路/短路；`calibrate_sensor`（`CMD_20261112_5129ACAF`）回执 failed |
+| `ntc-short`（GPIO34 接 3V3） | 每 10 秒报 `raw=4095` | `DIA_20261112_B433C8A8` 判定 ADC 读数触顶；`calibrate_sensor`（`CMD_20261112_2F95C6A3`）回执 failed |
+| `no-ap`（SSID 为 `Wokwi-MISSING`） | 串口报 `reason=201 (NO_AP_FOUND), rssi=-128`，重试间隔翻倍到 32 秒封顶；平台只收到遗嘱 `client_lost` | 修正前 `DIA_20261112_7FAEDB06` 无法判断；修正后 `DIA_20261112_4547EAA1` 判定 WiFi/MQTT 连接未建立，提示查串口原因码 |
+
+Wokwi 复现中修复了三个问题：
+
+- 固件原来没等 DHCP 分到 IP 就连接 MQTT，第一次连接因 DNS 失败（getaddrinfo 202）报错。现在最多等 30 秒 IP。
+- 传感器失效后固件不再上报温度，平台却一直沿用上一次的读数。现在 `sensor_valid=false` 时温度清空。
+- 设备离线后，平台还保留着断线前的“WiFi/MQTT 已连接”，误导了诊断。现在离线状态把 MQTT 记为断开、WiFi 记为未知，RSSI 保留最后一次读数。
+
+Wokwi 上报的 RSSI 会在 -69 到 -98 dBm 之间自行波动。这是仿真器的行为，不能据此判断信号弱。复现结果已写入记忆种子：原来两条待确认经验已转为确认，并链接到三条 Wokwi 案例。
 
 ### RAG 评测集
 

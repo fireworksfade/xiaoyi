@@ -39,6 +39,11 @@ def wired_link(payload: dict[str, Any]) -> bool:
     return payload.get("link_type") not in (None, "wifi")
 
 
+def sensor_invalid(payload: dict[str, Any]) -> bool:
+    """传感器失效时固件不再上报温度；沿用上一次的读数会把过期值当成当前测量。"""
+    return payload.get("sensor_valid") is False
+
+
 class DeviceStateMixin:
     def get_device_status(self, device_id: str) -> dict[str, Any] | None:
         """最新状态：device + device_current_state，新鲜度按 received_at 判定。"""
@@ -222,7 +227,11 @@ class DeviceStateMixin:
     def apply_status(
         self, device_id: str, payload: dict[str, Any], received_at: str | None = None
     ) -> None:
-        """/status：更新 current state 与元数据；不写历史序列。"""
+        """/status：更新 current state 与元数据；不写历史序列。
+
+        离线载荷（遗嘱或主动下线）说明会话已结束：MQTT 记为断开，WiFi 状态未知；
+        RSSI 保留为最后一次读数，供排查离线前的信号情况。
+        """
         received_at = received_at or iso()
         payload_hash = self._payload_hash(payload)
         online = int(bool(payload.get("online", True)))
@@ -244,12 +253,14 @@ class DeviceStateMixin:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'status', ?, json_patch('{}', ?))
                 ON CONFLICT(device_id) DO UPDATE SET
                 online = excluded.online,
-                wifi_status = CASE WHEN ? THEN NULL
+                wifi_status = CASE WHEN ? OR excluded.online = 0 THEN NULL
                     ELSE COALESCE(excluded.wifi_status, device_current_state.wifi_status) END,
                 rssi = CASE WHEN ? THEN NULL
                     ELSE COALESCE(excluded.rssi, device_current_state.rssi) END,
-                mqtt_status = COALESCE(excluded.mqtt_status, device_current_state.mqtt_status),
-                temperature = COALESCE(excluded.temperature, device_current_state.temperature),
+                mqtt_status = CASE WHEN excluded.online = 0 THEN 'disconnected'
+                    ELSE COALESCE(excluded.mqtt_status, device_current_state.mqtt_status) END,
+                temperature = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.temperature, device_current_state.temperature) END,
                 uptime = COALESCE(excluded.uptime, device_current_state.uptime),
                 device_timestamp = COALESCE(excluded.device_timestamp, device_current_state.device_timestamp),
                 received_at = excluded.received_at,
@@ -270,6 +281,7 @@ class DeviceStateMixin:
                     details,
                     no_wifi,
                     no_wifi,
+                    sensor_invalid(payload),
                     details,
                 ),
             )
@@ -319,7 +331,8 @@ class DeviceStateMixin:
                 rssi = CASE WHEN ? THEN NULL
                     ELSE COALESCE(excluded.rssi, device_current_state.rssi) END,
                 mqtt_status = COALESCE(excluded.mqtt_status, device_current_state.mqtt_status),
-                temperature = COALESCE(excluded.temperature, device_current_state.temperature),
+                temperature = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.temperature, device_current_state.temperature) END,
                 uptime = COALESCE(excluded.uptime, device_current_state.uptime),
                 device_timestamp = COALESCE(excluded.device_timestamp, device_current_state.device_timestamp),
                 received_at = MAX(device_current_state.received_at, excluded.received_at),
@@ -337,6 +350,7 @@ class DeviceStateMixin:
                     payload_hash,
                     wired_link(payload),
                     wired_link(payload),
+                    sensor_invalid(payload),
                 ),
             )
 

@@ -29,6 +29,11 @@ void app_main(void)
     ota_record_running_slot();
     report_start();
     logfwd_start();
+    /* Connecting before DHCP finishes fails DNS (getaddrinfo 202) and sends the platform a
+     * misleading transport error, so wait for an address first; MQTT retries on its own after. */
+    if (!net_wait_ip(30000)) {
+        ESP_LOGW(TAG, "no IP address after 30 s, MQTT will keep retrying");
+    }
     ESP_ERROR_CHECK(link_start());
 
     /* A new OTA image stays "pending verify" until it proves it can reach the broker. */

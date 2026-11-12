@@ -1,5 +1,7 @@
-# 场景 ntc-open：NTC 模块的 VCC 没有接上，分压输出被拉到 0 V，ADC 读数贴近下限。
+# 场景 ntc-open：热敏电阻开路时，模块输出经下拉电阻落到 0 V。这里把 GPIO34 直接接 GND 来模拟，ADC 读数贴近下限。
 [wokwi]
 version = 1
 firmware = '../../build-wokwi/flasher_args.json'
 elf = '../../build-wokwi/xiaoyi-node.elf'
+# 串口经 RFC2217 开放在本机 4000 端口，脚本可直接读取（不需要复制串口输出）。
+rfc2217ServerPort = 4000
