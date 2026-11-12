@@ -63,6 +63,13 @@ def normalize_tool_output(output: Any) -> Any:
         return output
 
 
+def segment_separator(previous: str) -> str:
+    """新一轮模型输出前补足空行，让它在 Markdown 里另起一段。"""
+    if not previous or previous.endswith("\n\n"):
+        return ""
+    return "\n" if previous.endswith("\n") else "\n\n"
+
+
 class MockAgentRuntime:
     """确定性联调 Runtime，不调用外部模型。"""
 
@@ -455,18 +462,28 @@ class OpenAIAgentsRuntime:
                 )
                 final_parts: list[str] = []
                 tool_calls: dict[str, tuple[str, str | None]] = {}
+                # 每轮模型输出（工具调用前的说明、调用后的正文）各自成段；直接拼接会让
+                # “我先查一下。## 标题” 挤在一行，标题和表格都无法按 Markdown 显示。
+                new_segment = False
                 async for event in result.stream_events():
                     if event.type == "raw_response_event":
                         event_data = event.data
-                        if getattr(event_data, "type", "") == "response.output_text.delta":
+                        event_type = getattr(event_data, "type", "")
+                        if event_type == "response.created":
+                            new_segment = bool(final_parts)
+                        elif event_type == "response.output_text.delta":
                             delta = getattr(event_data, "delta", "")
                             if delta:
+                                if new_segment:
+                                    delta = segment_separator("".join(final_parts)) + delta
+                                    new_segment = False
                                 final_parts.append(delta)
                                 yield RuntimeEvent("answer.delta", {"delta": delta})
                         continue
                     if event.type != "run_item_stream_event":
                         continue
                     if event.name == "tool_called" and isinstance(event.item, ToolCallItem):
+                        new_segment = bool(final_parts)
                         call_id = event.item.call_id or ""
                         tool_name = event.item.tool_name or "unknown_tool"
                         server_name = (

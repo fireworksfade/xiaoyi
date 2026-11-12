@@ -8,6 +8,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { Markdown } from '@/features/conversation/markdown';
 import { RemediationCard } from '@/features/conversation/remediation-card';
 import { ToolChip } from '@/features/conversation/tool-chip';
 import { Button } from '@/components/ui/button';
@@ -80,9 +81,13 @@ export function MessageList({
                   ))}
                 </div>
               ) : null}
-              <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
-                {message.text}
-              </p>
+              {message.role === 'assistant' ? (
+                <Markdown text={message.text} />
+              ) : (
+                <p className="whitespace-pre-wrap text-[15px] leading-7 text-slate-700">
+                  {message.text}
+                </p>
+              )}
               {message.remediationStatus ? (
                 <output className="mt-2 block rounded-md bg-amber-50 p-2 text-xs text-amber-800">
                   {message.remediationStatus}
