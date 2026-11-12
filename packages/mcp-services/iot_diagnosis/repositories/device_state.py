@@ -1,7 +1,42 @@
+import json
 from datetime import timedelta
 from typing import Any
 
 from iot_diagnosis.repository_common import iso, utc_now
+
+# 真实固件 status 中的运维字段：只保存最新值，供诊断查看并作为修复前的验证快照。
+DETAIL_FIELDS = (
+    "reset_reason",
+    "boot_count",
+    "free_heap",
+    "min_free_heap",
+    "mqtt_reconnects",
+    "mqtt_keepalive_seconds",
+    "reporting_interval_seconds",
+    "sensor_valid",
+    "sensor_calibrated",
+    "sensor_backend",
+    "link_type",
+    "idf_version",
+    "rollback_version",
+    "offline_reason",
+)
+# 在线的完整状态里没有这两个字段，说明它们已不成立，需要从已保存的值中删除。
+_CLEARED_WHEN_ABSENT = ("rollback_version", "offline_reason")
+
+
+def status_details(payload: dict[str, Any]) -> dict[str, Any]:
+    """白名单字段；值为 None 表示删除（配合 SQLite json_patch）。"""
+    details = {key: payload[key] for key in DETAIL_FIELDS if key in payload}
+    if payload.get("online", True):
+        for key in _CLEARED_WHEN_ABSENT:
+            details.setdefault(key, None)
+    return details
+
+
+def wired_link(payload: dict[str, Any]) -> bool:
+    """以太网等非 WiFi 链路没有 WiFi 状态和 RSSI，之前保存的值不再成立。"""
+    return payload.get("link_type") not in (None, "wifi")
 
 
 class DeviceStateMixin:
@@ -17,6 +52,7 @@ class DeviceStateMixin:
             ).fetchone()
         if not state:
             return None
+        details = json.loads(state["details_json"] or "{}") if "details_json" in state.keys() else {}
         received_at = self._parse_datetime(state["received_at"]) or utc_now()
         heartbeat_fresh = utc_now() - received_at <= timedelta(seconds=self.offline_after_seconds)
         reported_online = bool(state["online"])
@@ -35,6 +71,7 @@ class DeviceStateMixin:
             "uptime": state["uptime"],
             "last_seen": state["device_timestamp"] or state["received_at"],
             "last_event_kind": state["last_event_kind"],
+            **{key: details[key] for key in DETAIL_FIELDS if key in details},
         }
 
     def list_devices(
@@ -195,25 +232,30 @@ class DeviceStateMixin:
         temperature = payload.get("temperature")
         uptime = payload.get("uptime")
         device_timestamp = str(payload.get("timestamp") or "") or None
+        details = json.dumps(status_details(payload), ensure_ascii=False)
+        no_wifi = wired_link(payload)
 
         self.upsert_device_metadata(device_id, payload, received_at)
         with self._lock, self._connect() as db:
             db.execute(
                 """INSERT INTO device_current_state
                 (device_id, online, wifi_status, rssi, mqtt_status, temperature, uptime,
-                 device_timestamp, received_at, last_event_kind, payload_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'status', ?)
+                 device_timestamp, received_at, last_event_kind, payload_hash, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'status', ?, json_patch('{}', ?))
                 ON CONFLICT(device_id) DO UPDATE SET
                 online = excluded.online,
-                wifi_status = COALESCE(excluded.wifi_status, device_current_state.wifi_status),
-                rssi = COALESCE(excluded.rssi, device_current_state.rssi),
+                wifi_status = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.wifi_status, device_current_state.wifi_status) END,
+                rssi = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.rssi, device_current_state.rssi) END,
                 mqtt_status = COALESCE(excluded.mqtt_status, device_current_state.mqtt_status),
                 temperature = COALESCE(excluded.temperature, device_current_state.temperature),
                 uptime = COALESCE(excluded.uptime, device_current_state.uptime),
                 device_timestamp = COALESCE(excluded.device_timestamp, device_current_state.device_timestamp),
                 received_at = excluded.received_at,
                 last_event_kind = 'status',
-                payload_hash = excluded.payload_hash""",
+                payload_hash = excluded.payload_hash,
+                details_json = json_patch(COALESCE(device_current_state.details_json, '{}'), ?)""",
                 (
                     device_id,
                     online,
@@ -225,6 +267,10 @@ class DeviceStateMixin:
                     device_timestamp,
                     received_at,
                     payload_hash,
+                    details,
+                    no_wifi,
+                    no_wifi,
+                    details,
                 ),
             )
         # 设备状态仅存储在 SQLite。
@@ -268,8 +314,10 @@ class DeviceStateMixin:
                  device_timestamp, received_at, last_event_kind, payload_hash)
                 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 'telemetry', ?)
                 ON CONFLICT(device_id) DO UPDATE SET
-                wifi_status = COALESCE(excluded.wifi_status, device_current_state.wifi_status),
-                rssi = COALESCE(excluded.rssi, device_current_state.rssi),
+                wifi_status = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.wifi_status, device_current_state.wifi_status) END,
+                rssi = CASE WHEN ? THEN NULL
+                    ELSE COALESCE(excluded.rssi, device_current_state.rssi) END,
                 mqtt_status = COALESCE(excluded.mqtt_status, device_current_state.mqtt_status),
                 temperature = COALESCE(excluded.temperature, device_current_state.temperature),
                 uptime = COALESCE(excluded.uptime, device_current_state.uptime),
@@ -287,6 +335,8 @@ class DeviceStateMixin:
                     device_timestamp,
                     received_at,
                     payload_hash,
+                    wired_link(payload),
+                    wired_link(payload),
                 ),
             )
 

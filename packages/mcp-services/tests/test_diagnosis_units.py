@@ -41,6 +41,19 @@ from iot_diagnosis.router import route_query
         ("heap low, out of memory", "设备内存不足"),
         ("watchdog reset and reboot", "设备异常重启"),
         ("MQTT keep alive timeout", "MQTT Keep Alive Timeout"),
+        # 真实固件的日志：不同行里的 mqtt 与 timeout 不能拼成 Keep Alive 超时
+        ("MQTT connected (session_present=1) sensor read failed: ESP_ERR_TIMEOUT", "传感器读取失败"),
+        ("mqtt_client: No PING_RESP, disconnected", "MQTT Keep Alive Timeout"),
+        ("Client ESP32_04 has exceeded timeout, disconnecting.", "MQTT Keep Alive Timeout"),
+        ("mqtt_client: tcp_read error, errno=Connection reset by peer", "MQTT 连接异常"),
+        (
+            "固件 1.4.1-rc1 在 ota_1 分区启动后未通过自检，引导程序已回滚到 1.4.0；"
+            "设备异常复位 reset_reason=PANIC，panic 原因：abort() was called",
+            "新固件自检失败已回滚",
+        ),
+        ("task_wdt: Task watchdog got triggered. MQTT disconnected", "看门狗复位"),
+        ("Guru Meditation Error: Core 0 panic'ed (StoreProhibited)", "设备异常复位（panic）"),
+        ("heap: Allocation failed, out of memory; MQTT connect failed", "设备内存不足"),
     ],
 )
 def test_fallback_diagnosis_profiles_cover_core_fault_scenarios(evidence, fault_name) -> None:
@@ -95,6 +108,13 @@ def test_inventory_pagination_and_document_aggregation(tmp_path) -> None:
     )
     repository.replace_knowledge_document(
         source="mqtt_docs",
+        document_id="LEGACY_SINGLE",
+        title="Single Chunk Guide",
+        chunks=["c" * 100],
+        device_type="ESP32",
+    )
+    repository.replace_knowledge_document(
+        source="mqtt_docs",
         document_id="multi-chunk",
         title="Multi Chunk Guide",
         chunks=["a" * 300, "b" * 400],
@@ -115,6 +135,13 @@ def test_inventory_pagination_and_document_aggregation(tmp_path) -> None:
 
 def test_reingesting_legacy_document_replaces_unsuffixed_chunk(tmp_path) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    # 早期版本按 document_id 写入不带 #0000 后缀的单块文档
+    with repository._connect() as db:
+        db.execute(
+            """INSERT INTO knowledge_document
+            (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
+            VALUES ('mqtt_docs', 'MQTT_DOC_03', 'Legacy', 'legacy', 'ESP32', 'now', 'MQTT_DOC_03', 0)"""
+        )
 
     repository.replace_knowledge_document(
         source="mqtt_docs",
@@ -416,6 +443,64 @@ def test_fault_topic_is_ingested_and_stale_heartbeat_marks_device_offline(tmp_pa
     assert fault["message"] == "MQTT keep alive timeout"
 
 
+def test_firmware_status_details_are_kept_and_cleared(tmp_path) -> None:
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.apply_status("ESP32_08", {
+        "online": True, "firmware_version": "1.4.0", "reset_reason": "TASK_WDT", "boot_count": 7,
+        "free_heap": 180000, "mqtt_keepalive_seconds": 30, "rollback_version": "1.3.1",
+        "unrelated_field": "ignored",
+    })
+    status = repository.get_device_status("ESP32_08")
+    assert status["reset_reason"] == "TASK_WDT" and status["boot_count"] == 7
+    assert status["rollback_version"] == "1.3.1" and "unrelated_field" not in status
+
+    # 遗嘱只带 offline_reason：保留上次的运维字段
+    repository.apply_status("ESP32_08", {"online": False, "offline_reason": "client_lost"})
+    status = repository.get_device_status("ESP32_08")
+    assert status["offline_reason"] == "client_lost" and status["boot_count"] == 7
+
+    # 重新上线的完整状态里没有 rollback_version / offline_reason：两者都清除
+    repository.apply_status("ESP32_08", {"online": True, "firmware_version": "1.3.1",
+                                         "reset_reason": "SW", "boot_count": 8})
+    status = repository.get_device_status("ESP32_08")
+    assert "rollback_version" not in status and "offline_reason" not in status
+    assert status["reset_reason"] == "SW" and status["free_heap"] == 180000
+    assert status["online"] is True and status["firmware_version"] == "1.3.1"
+
+
+def test_wired_link_clears_wifi_fields_left_by_older_reports(tmp_path) -> None:
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.apply_status("ESP32_08", {"online": True, "wifi_status": "connected", "rssi": -55})
+    repository.apply_status("ESP32_08", {"online": True, "link_type": "ethernet", "uptime": 5})
+    status = repository.get_device_status("ESP32_08")
+    assert status["rssi"] is None and status["wifi_status"] is None
+    repository.append_telemetry("ESP32_09", {"wifi_status": "connected", "rssi": -60})
+    repository.append_telemetry("ESP32_09", {"link_type": "ethernet", "temperature": 20.5})
+    assert repository.get_device_status("ESP32_09")["rssi"] is None
+    # WiFi 节点缺字段时沿用旧值
+    repository.apply_status("ESP32_06", {"online": True, "link_type": "wifi", "rssi": -61})
+    repository.apply_status("ESP32_06", {"online": True, "link_type": "wifi", "uptime": 9})
+    assert repository.get_device_status("ESP32_06")["rssi"] == -61
+
+
+def test_cleared_retained_message_is_ignored_without_error(tmp_path, caplog) -> None:
+    repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    ingestor = MQTTIngestor(repository)
+    status = {"online": False, "offline_reason": "client_lost"}
+    ingestor._on_message(
+        None, None, SimpleNamespace(topic="iot/ESP32_06/status", retain=True,
+                                    payload=json.dumps(status).encode("utf-8")),
+    )
+    # Broker 清除保留消息时向订阅者转发零长度消息
+    with caplog.at_level("ERROR", logger="xiaoyi.iot_diagnosis.mqtt"):
+        for kind in ("status", "telemetry", "logs", "fault", "heartbeat"):
+            ingestor._on_message(
+                None, None, SimpleNamespace(topic=f"iot/ESP32_06/{kind}", retain=False, payload=b""),
+            )
+    assert caplog.records == []
+    assert repository.get_device_status("ESP32_06")["reported_online"] is False
+
+
 def test_external_write_outbox_recovers_without_false_index_success(tmp_path) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
 
@@ -503,6 +588,13 @@ def test_text_ingestion_chunks_and_replaces_document(tmp_path) -> None:
 
 def test_rebuild_vector_index_batches_sqlite_documents(tmp_path) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
+    repository.replace_knowledge_document(
+        source="mqtt_docs",
+        document_id="ESP_MQTT",
+        title="ESP-MQTT",
+        chunks=["MQTT keepalive, default is 120 seconds", "disable_clean_session"],
+        device_type="ESP32",
+    )
 
     class FakeProvider:
         name = "real-test"

@@ -65,7 +65,8 @@ def test_existing_sources_and_curated_documents_are_classified_without_rewriting
     for source, document_id in (
         ("sensor_docs", "sensor-manual"),
         ("device_docs", "hardware-manual"),
-        ("device_docs", "ESP_HTTPS_OTA_GUIDE"),
+        ("device_docs", "ESP_HTTPS_OTA"),
+        ("mqtt_docs", "seeded-protocol-doc"),
     ):
         repository.replace_knowledge_document(
             source=source,
@@ -77,9 +78,9 @@ def test_existing_sources_and_curated_documents_are_classified_without_rewriting
     before = repository.knowledge_documents(["device_docs", "sensor_docs"])
     docs = {doc["document_id"]: doc for doc in repository.list_knowledge_documents()["items"]}
     assert docs["sensor-manual"]["category"] == docs["hardware-manual"]["category"] == "hardware"
-    assert docs["ESP_HTTPS_OTA_GUIDE"]["category"] == "software"
-    assert docs["ESP_HTTPS_OTA_GUIDE"]["document_type"] == "manual"
-    assert docs["MQTT_DOC_03"]["category"] == "protocol"
+    assert docs["ESP_HTTPS_OTA"]["category"] == "software"
+    assert docs["ESP_HTTPS_OTA"]["document_type"] == "api"
+    assert docs["seeded-protocol-doc"]["category"] == "protocol"
     assert repository.knowledge_documents(["device_docs", "sensor_docs"]) == before
 
 

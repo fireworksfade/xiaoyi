@@ -51,6 +51,9 @@ class ControlMQTT:
         logger.info("Subscribed to IoT control topics")
 
     def _on_message(self, _client, _userdata, message) -> None:
+        if not message.payload:
+            # 零长度消息是清除保留消息的标准做法（MQTT 3.3.1.3），不是设备上报
+            return
         try:
             payload = json.loads(message.payload.decode("utf-8"))
             parts = message.topic.split("/")

@@ -15,7 +15,9 @@ COPY evals ./evals
 COPY scripts ./scripts
 COPY --from=retrieval / /opt/retrieval
 
-RUN pip install --no-cache-dir /opt/retrieval . \
+# PyPI 镜像可在 .env 的 PYPI_INDEX 中配置（见 .env.example）
+ARG PYPI_INDEX=https://pypi.org/simple
+RUN pip install --no-cache-dir --index-url "${PYPI_INDEX}" /opt/retrieval . \
     && addgroup --system xiaoyi \
     && adduser --system --ingroup xiaoyi xiaoyi \
     && mkdir -p /app/data \

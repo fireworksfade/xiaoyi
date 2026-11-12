@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 
 import pytest
 
 from iot_control import actions
 from iot_control.repository import ControlRepository, iso, utc_now
-from iot_diagnosis.simulator import DeviceState, handle_command
 
 DIAGNOSIS_ID = "DIA_20260922_DEADBEEF"
 
@@ -170,54 +168,6 @@ def test_proposal_task_status_follows_command_verification(
     repo.finalize_watches(utc_now() + timedelta(seconds=120))
     stored = repo.get_proposal(proposal["proposal_id"])
     assert stored is not None and stored["task_status"] == "succeeded"
-
-
-def test_simulator_command_handler_behaviors() -> None:
-    state = DeviceState("mqtt_timeout", 5.0)
-    state.wifi_weak = True
-
-    ack = handle_command(state, {"command_id": "CMD_1", "action": "reconnect_mqtt"})
-    assert ack["status"] == "applied" and state.snapshot()["mqtt_timeout"] is False
-    assert state.snapshot()["wifi_weak"] is True
-
-    ack = handle_command(
-        state,
-        {"command_id": "CMD_2", "action": "set_reporting_interval", "parameters": {"seconds": 10}},
-    )
-    assert ack["status"] == "applied" and state.snapshot()["interval"] == 10.0
-
-    ack = handle_command(
-        state,
-        {"command_id": "CMD_3", "action": "set_reporting_interval", "parameters": {"seconds": -1}},
-    )
-    assert ack["status"] == "failed"
-
-    ack = handle_command(state, {"command_id": "CMD_4", "action": "restart_device"})
-    snapshot = state.snapshot()
-    assert ack["status"] == "applied"
-    assert not snapshot["mqtt_timeout"]
-    assert not snapshot["wifi_weak"]
-    assert snapshot["uptime"] == 0
-
-    ack = handle_command(
-        state,
-        {"command_id": "CMD_5", "action": "update_firmware", "parameters": {"version": "1.3.0"}},
-    )
-    assert ack["status"] == "applied"
-    assert state.snapshot()["firmware_version"] == "1.3.0"
-
-    ack = handle_command(state, {"command_id": "CMD_6", "action": "no_such_action"})
-    assert ack["status"] == "failed"
-
-    ack = handle_command(state, {"action": "restart_device"})
-    assert ack["status"] == "failed"
-
-
-def test_simulator_ack_payload_is_json_serializable() -> None:
-    state = DeviceState("normal", 5.0)
-    ack = handle_command(state, {"command_id": "CMD_X", "action": "calibrate_sensor"})
-    # 确保回执可以直接作为 MQTT JSON 载荷
-    assert json.loads(json.dumps(ack, ensure_ascii=False))["status"] == "applied"
 
 
 # ---------------------------------------------------------- 修复结果与关联键

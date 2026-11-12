@@ -1,0 +1,8 @@
+# Wokwi for VS Code: open packages/esp32-node as the workspace folder, build
+# the WiFi variant into build-wokwi (see README.md), then "Wokwi: Start Simulator".
+# The VS Code extension bundles the private IoT gateway, so the firmware reaches
+# the local Compose broker at host.wokwi.internal:1883.
+[wokwi]
+version = 1
+firmware = 'build-wokwi/flasher_args.json'
+elf = 'build-wokwi/xiaoyi-node.elf'

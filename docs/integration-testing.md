@@ -41,21 +41,88 @@ Text2SQL 计划格式错误（包括无法解析的模型 JSON）最多纠正一
 
 ## 六种修复动作联调
 
-`e2e/iot-actions-live.spec.ts` 覆盖 MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级。需要上述服务及有效聊天/诊断模型配置，还需要本机 Python 已安装 `packages/mcp-services` 的依赖；测试会调用已配置的模型 API。
+`e2e/iot-actions-live.spec.ts` 覆盖 MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级。需要上述服务（含 `toxiproxy` 与已构建的 `xiaoyi-esp32-node:local` 镜像）及有效聊天/诊断模型配置；测试会调用已配置的模型 API。
 
 在仓库根目录执行：
 
 ```powershell
 $env:E2E_IOT_ACTIONS_LIVE='1'
-$env:E2E_IOT_PYTHON=(Resolve-Path 'packages/mcp-services/.venv/Scripts/python.exe').Path
 npm run test:e2e -- --workers=1 e2e/iot-actions-live.spec.ts
 Remove-Item Env:E2E_IOT_ACTIONS_LIVE
-Remove-Item Env:E2E_IOT_PYTHON
 ```
 
-每项测试启动一台唯一命名的临时模拟设备，通过真实页面发送请求，让 Agent 调用诊断与修复 MCP 工具。四种低风险动作直接执行；两个高风险动作先检查待审批时没有命令，再点击页面“批准执行”。随后确认设备回执、`device_acked` 和最终 `verify_status=succeeded`，并验证刷新后的工具输出与审批卡片恢复。
+每项测试通过 `docker compose run esp32-node` 启动一台唯一命名的 QEMU ESP32，运行真实 xiaoyi-node 固件，并为它单独创建一个 Toxiproxy 代理。故障均为真实发生：`mqtt_timeout` 通过 Toxiproxy 双向黑洞让设备 Keep Alive 超时（`No PING_RESP`），设备断开后 Toxiproxy 同步关闭 Broker 一侧连接；传感器、内存泄漏和看门狗由固件 `inject_fault` 演练产生。随后通过真实页面发送请求，让 Agent 调用诊断与修复 MCP 工具。四种低风险动作直接执行；两个高风险动作先检查待审批时没有命令，再点击页面“批准执行”。随后确认设备回执、`device_acked` 和最终 `verify_status=succeeded`，并验证刷新后的工具输出与审批卡片恢复。
 
-测试使用真实 MQTT Broker 和服务的完整观察窗口，通过只读查询控制库核对结果；不伪造回执或验证状态，也不提前推进验证时间。测试结束停止自己启动的模拟设备，保留联调对话、诊断和命令记录。截图、工具输出、命令证据与模拟器日志保存在 Playwright 输出目录中。这些结果验证的是模拟设备链路，真实 ESP32 固件、物理传感器校准与 OTA 安装需要单独验收。
+`reconnect_wifi` 在 QEMU 中跳过：QEMU 没有 WiFi 射频，该动作在 Wokwi 中验证（见 [ESP32 设备仿真](../packages/esp32-node/README.md)）。
+
+测试使用真实 MQTT Broker 和服务的完整观察窗口，通过只读查询控制库核对结果；不伪造回执或验证状态，也不提前推进验证时间。测试结束停止自己启动的设备、删除其代理和 flash 镜像，保留联调对话、诊断和命令记录。截图、工具输出、命令证据和设备串口日志保存在 Playwright 输出目录中。
+
+## 2026-11-12 验证结果（QEMU 真实固件）
+
+设备端换成 QEMU 中运行的 xiaoyi-node 固件（ESP-IDF v5.5.4）后重新联调。
+
+| 检查 | 结果 |
+| --- | --- |
+| 六种修复动作浏览器端到端测试 | 5 通过、1 跳过（`reconnect_wifi`，QEMU 无 WiFi 射频），约 10.4 分钟 |
+| 固件编译 | QEMU 与 Wokwi 两个变体均编译通过，0 警告；Wokwi 变体未在 Wokwi 中运行 |
+| `restart_device` | 回执 `applied`，重启后 `reset_reason=SW`，持久会话 `session_present=1` |
+| OTA 1.3.1 → 1.4.0 | 下载 601 KB 写入 `ota_1`，重启后连上 Broker 即确认有效 |
+| OTA 回滚 1.4.0 → 1.4.1-rc1 | 自检失败并 `abort()`，引导程序回滚到 1.4.0，上报 `panic_reset` 与 `ota_rollback` 两条故障 |
+| `inject_fault` panic | `reset_reason=PANIC`，core dump 摘要含任务 `panic_drill`、`EXCCAUSE 29` 与回溯 |
+| `inject_fault` watchdog_reset | `reset_reason=TASK_WDT`，故障含 panic 原因“IDLE0 (CPU 0) 未按时喂狗”与回溯 |
+| Compose 机群 9 台 | 全部在线；esp32-04 堆泄漏、esp32-08 看门狗崩溃循环、esp32-09 传感器失效、esp32-10 每 4 分钟断开重连均真实发生 |
+| MCP 测试 | 288 通过 |
+
+## 2026-11-12 运维问题复现（记忆种子来源）
+
+为整理记忆种子（`packages/backend/seed/ops_memories.json`），在 QEMU 中用 `OPS_*` 临时设备逐一复现能出现的运维问题。每台设备单独使用一个 Toxiproxy 代理。故障来源只有三种：Toxiproxy 网络故障、固件 `inject_fault` 演练、真实的 Broker 或电源操作。诊断和命令都通过 IoT MCP 下发，没有伪造回执。下表的诊断与命令记录保留在平台库中，可以按 ID 查询。
+
+| 问题 | 设备 | 处置与结果 |
+| --- | --- | --- |
+| 升级 1.4.0 后看门狗崩溃循环 | OPS_WDT | `rollback_firmware` 回到 1.3.1，验证成功（`CMD_20261112_454D1E30`） |
+| 出厂固件看门狗崩溃循环 | OPS_WDT2 | 另一分区没有旧固件，回退被拒绝。在线时下发升级，下载中途被复位打断。改在设备刚复位时下发，升级成功（`CMD_20261112_EA436C63`，回执约 43 秒） |
+| 1.2.0 慢速内存泄漏（约 51 B/s） | OPS_LEAK | 重启只能推迟；升级到 1.3.1 后堆内存保持平稳 |
+| 传感器读取超时 | OPS_SENSOR | 校准后恢复，重新上电后复发，升级后解决 |
+| 升级到不存在的版本 9.9.9 | OPS_OTA | 设备日志显示 HTTP 404，回执 `ESP_FAIL` |
+| 候选版本 1.4.1-rc1 自检失败 | OPS_OTA | 引导程序自动回滚，升级命令验证失败 |
+| 单次 StoreProhibited panic | OPS_OTA | 只诊断不处置，设备自行恢复 |
+| 上行中断 / 断电 2 分钟 | OPS_NET | 离线期间的命令在平台记为超时，恢复后被设备执行 |
+| 链路每 4 分钟被对端断开 | ESP32_10 | `reconnect_mqtt` 回执成功，但验证失败，需要交给网络侧处理 |
+| 4–8 秒延迟导致 `No PING_RESP` | OPS_LAT | 新动作 `set_mqtt_keepalive` 把 Keep Alive 从 10 秒改为 60 秒，之后不再出现 |
+| 两台设备使用同一 ID | OPS_DUP | 3 分钟内重连 12 次，Broker 日志显示 `session taken over`，在现场停用重复设备 |
+| 上报间隔 300 秒导致误判离线 | OPS_INT | `set_reporting_interval` 改回 30 秒 |
+| 以太网节点执行 `reconnect_wifi` | OPS_INT | 只能重启网口，验证结果不明 |
+| Broker 停机 2 分钟 | 全机群 | Broker 恢复后 27 个客户端会话全部恢复 |
+
+复现过程中修复了以下问题：
+
+- 升级命令的回执超时延长到 300 秒，其余动作仍是 30 秒。
+- 以太网节点不再沿用旧的 RSSI 和 WiFi 状态。
+- OTA 下载中断后，写了一半的分区不再作为 `rollback_version` 上报。
+- 诊断规则不再把普通的“MQTT + 超时”当作 Keep Alive 问题，同时补充了看门狗、panic、内存不足和传感器读取失败的规则。
+- 平台收到长度为 0 的 retained 清除消息时不再报错。
+
+新增修复动作 `set_mqtt_keepalive`（低风险）和 `rollback_firmware`（高风险，仅当状态带 `rollback_version` 时可用），协议见 [设备协议](device-protocol.md)。MCP 测试 303 项通过，后端测试 159 项通过、1 项跳过。
+
+WiFi 断开原因码和 NTC 开路/短路需要 Wokwi 才能复现，相关两条经验在种子中只作为待确认候选。场景配置在 `packages/esp32-node/wokwi/`（见 [ESP32 设备仿真](../packages/esp32-node/README.md)），需要用户自己的 Wokwi 许可运行。
+
+### RAG 评测集
+
+`packages/mcp-services/evals/rag_router.jsonl` 已改为 21 条用例，相关文档指向新的官方文档 ID。用例中的日志取自真实固件和 Mosquitto 的输出，覆盖 Keep Alive、对端重置、认证、看门狗、panic、堆内存、OTA 回滚、SNTP、WiFi 原因码和 ADC 校准。确定性档位（hash embedding + weighted 重排，不调用模型）的结果如下：
+
+| 指标 | 结果 |
+| --- | --- |
+| 命中率 / recall@5 / MRR | 0.95 / 0.71 / 0.52 |
+| 路由准确率 / 来源选择准确率 | 1.0 / 0.95 |
+| 诊断类型 / 诊断名称准确率 | 1.0 / 1.0 |
+
+为让评测符合真实日志，诊断规则做了三处修正：
+
+- `Connection reset by peer` 不再被当作设备复位。
+- Mosquitto 的 `has exceeded timeout` 归为 Keep Alive 超时。
+- 新增“新固件自检失败已回滚”规则，放在 panic 规则之前。
+
+路由原型补充了 PINGRESP、TLS、panic、回滚、HTTP 404 和 SNTP 等词。在 `packages/mcp-services` 中运行评测：先用 `python scripts/ingest_recommended_documents.py --database <临时库>` 导入文档，再执行 `python scripts/evaluate_rag.py --database <临时库>`。
 
 ## 2026-10-08 验证结果
 

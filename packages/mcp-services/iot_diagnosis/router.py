@@ -19,7 +19,8 @@ ALLOWED_SOURCES = {
 SOURCE_PROTOTYPES = {
     "mqtt_docs": (
         "MQTT broker 连接 心跳 keep alive timeout 超时 报文 publish subscribe "
-        "QoS session 会话 认证 鉴权 掉线 断开 CONNACK mosquitto 重连"
+        "QoS session 会话 认证 鉴权 掉线 断开 CONNACK mosquitto 重连 "
+        "PINGRESP TLS errno 授权 unauthorized"
     ),
     "wifi_docs": (
         "WiFi 无线 RSSI 信号强度 弱信号 断线 掉线 重连 接入点 AP 信道 "
@@ -32,7 +33,9 @@ SOURCE_PROTOTYPES = {
     "device_docs": (
         "固件 firmware OTA 升级 upgrade 重启 reboot 复位 reset 内存 heap 内存泄漏 碎片 "
         "看门狗 watchdog core dump backtrace 崩溃 crash panic 栈 存储 NVS 分区 "
-        "电源管理 power management 睡眠 sleep 唤醒 wake 事件 event 日志 log GPIO"
+        "电源管理 power management 睡眠 sleep 唤醒 wake 事件 event 日志 log GPIO "
+        "Guru Meditation panic 回滚 rollback 自检 HTTP 404 复位原因 "
+        "系统时间 SNTP 对时 时间不同步"
     ),
 }
 

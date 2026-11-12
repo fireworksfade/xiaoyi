@@ -1,0 +1,709 @@
+{
+  "description": "运维记忆种子：情景记忆来自 2026-11-12 在 QEMU 仿真节点上真实复现的运维问题（诊断 ID、命令 ID 均可在平台中查到）；经验记忆从这些经历总结，并链接回对应情景。知识库只放官方文档，项目自己的经验放在这里。",
+  "episodes": [
+    {
+      "slug": "ep-wdt-after-upgrade",
+      "title": "OPS_WDT · 升级 1.4.0 后看门狗崩溃循环，回退到 1.3.1 解决",
+      "summary": "OPS_WDT 升级到 1.4.0 后陷入 TASK_WDT 崩溃循环（boot_count 2→6，每次运行 60–100 秒）。状态有 rollback_version=1.3.1，执行 rollback_firmware 回到 1.3.1，验证成功，之后 5 分钟没有再复位。",
+      "content": {
+        "observations": [
+          "升级到 1.4.0 后 reset_reason 一直是 TASK_WDT，boot_count 从 2 增长到 6，uptime 总在 100 秒以内",
+          "watchdog_reset 故障：Task watchdog got triggered，未喂狗的是 IDLE0 (CPU 0)，CPU 0 上正在运行 data_worker",
+          "日志：data_worker entering a busy loop without yielding",
+          "状态带 rollback_version=1.3.1（另一个 OTA 分区里的上一版本）"
+        ],
+        "actions": [
+          {
+            "action": "rollback_firmware",
+            "diagnosis_id": "DIA_20261112_A3327919",
+            "command_id": "CMD_20261112_454D1E30",
+            "ack": "applied：已切换到 ota_0 分区的固件 1.3.1，重启后生效（回执用时约 1 秒）",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "忙循环缺陷只存在于 1.4.0（演练注入并绑定该版本），回到 1.3.1 后不再出现",
+        "unresolved_items": ["1.4.0 修复前不要再升级到该版本；回退后状态显示 rollback_version=1.4.0，不要误把它当作可用的新版本"]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_WDT", "firmware_versions": ["1.4.0", "1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-wdt-factory",
+      "title": "OPS_WDT2 · 出厂固件崩溃循环，无法回退，在复位时机重发升级后解决",
+      "summary": "OPS_WDT2 出厂固件 1.3.1 自带忙循环，TASK_WDT 崩溃循环（boot_count 增长到 18）。rollback_firmware 被设备拒绝（没有旧版本）；第一次升级下载到 50% 被看门狗打断；在设备刚复位时重发 update_firmware 1.3.9，上线后立即下载完成，验证成功。",
+      "content": {
+        "observations": [
+          "出厂即运行 1.3.1，每次启动 40–90 秒后 TASK_WDT 复位，boot_count 从 3 一直增长到 18",
+          "状态里没有 rollback_version",
+          "设备每次只在线约 1 分钟，期间能收到命令"
+        ],
+        "actions": [
+          {
+            "action": "rollback_firmware",
+            "diagnosis_id": "DIA_20261112_1E95B10D",
+            "command_id": "CMD_20261112_1CF2C8E5",
+            "ack": "failed：另一个 OTA 分区没有可以启动的旧固件，无法回退",
+            "verify_status": null
+          },
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "1.3.9"},
+            "command_id": "CMD_20261112_8BA7A1E2",
+            "ack": "无回执：设备在上线约 59 秒时才开始下载，下载到 50% 时看门狗复位，OTA 中断；平台 30 秒没收到回执记为 timeout",
+            "verify_status": null
+          },
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "1.3.9"},
+            "command_id": "CMD_20261112_EA436C63",
+            "ack": "applied：在设备刚复位、尚未上线时下发，持久会话在它上线后立即投递，下载在运行约 41 秒时完成（回执用时 43 秒）",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "缺陷绑定出厂版本 1.3.1，换到 1.3.9 后不再复位",
+        "unresolved_items": [
+          "OTA 被打断后，旧固件曾把半截镜像报成 rollback_version=1.3.9；固件已修正为只提供确认完整的分区",
+          "这次暴露出平台对 OTA 回执只等 30 秒，已改为 update_firmware 单独等待 300 秒"
+        ]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_WDT2", "firmware_versions": ["1.3.1", "1.3.9"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-slow-leak",
+      "title": "OPS_LEAK · 1.2.0 慢速内存泄漏，重启后复发，升级后消失",
+      "summary": "OPS_LEAK（1.2.0）空闲堆每秒下降约 51 字节。restart_device 验证成功、空闲堆回升，但 10 分钟内按同样斜率再次下降；update_firmware 1.3.1 后空闲堆稳定在 214856 字节。",
+      "content": {
+        "observations": [
+          "固件 1.2.0：uptime 353 s 时 free_heap=192860，964 s 时 161400，约 51 字节/秒，min_free_heap 同步下降",
+          "日志：boot fault memory_leak active on firmware 1.2.0",
+          "restart_device 后 uptime 52 s 时 free_heap=208312，662 s 时 176852，斜率与重启前相同",
+          "升级到 1.3.1 后 uptime 52 s 与 363 s 时 free_heap 都是 214856"
+        ],
+        "actions": [
+          {
+            "action": "restart_device",
+            "diagnosis_id": "DIA_20261112_CD5427DA",
+            "command_id": "CMD_20261112_B3AE9079",
+            "ack": "applied：设备即将重启",
+            "verify_status": "succeeded"
+          },
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "1.3.1"},
+            "diagnosis_id": "DIA_20261112_0E232E37",
+            "command_id": "CMD_20261112_792C7117",
+            "ack": "applied：固件 1.3.1 已写入 ota_1 分区（回执用时 21 秒）",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "泄漏绑定 1.2.0 版本；重启只是把已泄漏的内存释放",
+        "unresolved_items": ["1.2.0 的泄漏代码需要修复后再发布"]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_LEAK；机群 ESP32_04 是同一问题", "firmware_versions": ["1.2.0", "1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-sensor-timeout",
+      "title": "OPS_SENSOR · 传感器读取超时，校准后恢复，重新上电后复发，升级后解决",
+      "summary": "OPS_SENSOR（1.2.0）sensor_valid=false，日志 sensor read failed: ESP_ERR_TIMEOUT。calibrate_sensor 立即恢复并验证成功；重新上电后故障复现；update_firmware 1.3.1 后读数持续有效。",
+      "content": {
+        "observations": [
+          "sensor_valid=false，日志 sensor read failed: ESP_ERR_TIMEOUT，故障主题 sensor_read_failed",
+          "calibrate_sensor 后 sensor_valid=true、sensor_calibrated=true",
+          "重新上电后 sensor_valid 又变为 false（本次实验的上电同时恢复了出厂 flash，所以 sensor_calibrated 也回到 false；故障复现与此无关，启动故障随 1.2.0 每次启动生效）",
+          "升级到 1.3.1 后 sensor_valid=true"
+        ],
+        "actions": [
+          {
+            "action": "calibrate_sensor",
+            "diagnosis_id": "DIA_20261112_E53637C1",
+            "command_id": "CMD_20261112_B01AC2F6",
+            "ack": "applied：传感器已重新初始化并记录校准，当前读数 25.55 °C",
+            "verify_status": "succeeded"
+          },
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "1.3.1"},
+            "diagnosis_id": "DIA_20261112_5A5C1B61",
+            "command_id": "CMD_20261112_81EB91F5",
+            "ack": "applied：固件 1.3.1 已写入 ota_1 分区",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "传感器驱动故障绑定 1.2.0 版本；校准只在本次运行期间有效",
+        "unresolved_items": ["第一次诊断时大模型调用失败，规则兜底把它误判成 MQTT Keep Alive 超时；兜底规则已修正"]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_SENSOR；机群 ESP32_09 是同一问题", "firmware_versions": ["1.2.0", "1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-ota-missing-version",
+      "title": "OPS_OTA · 升级到不存在的版本 9.9.9，设备回执 ESP_FAIL",
+      "summary": "对 OPS_OTA 下发 update_firmware 9.9.9：设备日志 esp_https_ota: File not found(404)，回执 failed「无法从 OTA 服务器获取固件 9.9.9：ESP_FAIL」，设备继续运行 1.3.1，没有任何影响。",
+      "content": {
+        "observations": [
+          "设备日志：esp_https_ota: File not found(404)，Failed to establish HTTP connection",
+          "回执 detail 只有 ESP_FAIL，看不出 404，需要看设备日志",
+          "设备仍运行 1.3.1，没有重启"
+        ],
+        "actions": [
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "9.9.9"},
+            "diagnosis_id": "DIA_20261112_2633F204",
+            "command_id": "CMD_20261112_C86571FD",
+            "ack": "failed：无法从 OTA 服务器获取固件 9.9.9：ESP_FAIL",
+            "verify_status": null
+          }
+        ],
+        "outcome": "failed",
+        "root_cause_status": "OTA 服务器上没有 xiaoyi-node-9.9.9.bin",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_OTA", "firmware_versions": ["1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-ota-rc-rollback",
+      "title": "OPS_OTA · 候选版本 1.4.1-rc1 自检失败，被引导程序自动回滚",
+      "summary": "update_firmware 1.4.1-rc1 回执 applied，但新版本启动后自检失败并 abort()，引导程序自动回到 1.3.1（reset_reason=PANIC），平台验证 failed。之后状态不再提供该版本作为回退目标。",
+      "content": {
+        "observations": [
+          "回执 applied：固件 1.4.1-rc1 已写入 ota_1 分区",
+          "新版本启动日志：self-test failed: sensor bus pin map missing from this build，abort() was called",
+          "随后以 1.3.1 从 ota_0 启动，reset_reason=PANIC，boot_count +1",
+          "平台验证：firmware_version 仍为 1.3.1，verify_status=failed"
+        ],
+        "actions": [
+          {
+            "action": "update_firmware",
+            "parameters": {"version": "1.4.1-rc1"},
+            "diagnosis_id": "DIA_20261112_FDF00E75",
+            "command_id": "CMD_20261112_AA699456",
+            "ack": "applied（回执用时 28 秒）",
+            "verify_status": "failed"
+          }
+        ],
+        "outcome": "failed",
+        "root_cause_status": "1.4.1-rc1 本身自检失败，属于有缺陷的发布",
+        "unresolved_items": ["修复前不要再向任何设备推送 1.4.1-rc1"]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_OTA", "firmware_versions": ["1.3.1", "1.4.1-rc1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-single-panic",
+      "title": "OPS_OTA · 单次 StoreProhibited panic，设备自行恢复",
+      "summary": "OPS_OTA 出现一次 panic：StoreProhibited（EXCCAUSE 29，EXCVADDR 0x0），出错任务 panic_drill，写空指针。设备自动重启后正常运行，没有执行修复动作，诊断正确识别了原因。",
+      "content": {
+        "observations": [
+          "控制台：Guru Meditation Error: Core 0 panic'ed (StoreProhibited)，EXCCAUSE 0x1d，EXCVADDR 0x00000000",
+          "重启后 reset_reason=PANIC，panic_reset 故障带 core dump 摘要：任务 panic_drill 与回溯",
+          "之后没有再次复位"
+        ],
+        "actions": [],
+        "diagnosis_id": "DIA_20261112_9912CEFA",
+        "outcome": "not_executed",
+        "root_cause_status": "演练任务写空指针；真实设备上要用同版本 ELF 解码回溯定位代码",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_OTA", "firmware_versions": ["1.3.1"], "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-uplink-outage",
+      "title": "OPS_NET · 上行中断期间下发的重连命令超时，链路恢复后才被执行",
+      "summary": "OPS_NET 上行中断 150 秒：设备 MQTT 断开后每约 17 秒重试一次，均报 mqtt_message_receive() returned 0。期间下发 reconnect_mqtt，平台 30 秒后记为 timeout；链路恢复后设备 session_present=1 重新连上，并立即执行了这条已超时的命令。",
+      "content": {
+        "observations": [
+          "中断开始约 20 秒后设备报 MQTT disconnected，Broker 记录 connection closed by client 并发布遗嘱 client_lost",
+          "中断期间设备日志每约 17 秒一组：esp_mqtt_connect: mqtt_message_receive() returned 0 / MQTT connect failed",
+          "平台显示 online=false，offline_reason=client_lost",
+          "恢复后：MQTT connected (session_present=1)，紧接着 executing reconnect_mqtt (CMD_20261112_0D74EAB4)；Broker 记录 session taken over"
+        ],
+        "actions": [
+          {
+            "action": "reconnect_mqtt",
+            "diagnosis_id": "DIA_20261112_AF6CD226",
+            "command_id": "CMD_20261112_0D74EAB4",
+            "ack": "平台 30 秒内未收到回执记为 timeout；设备在链路恢复后才执行，迟到的回执被平台丢弃",
+            "verify_status": null
+          }
+        ],
+        "outcome": "inconclusive",
+        "root_cause_status": "网络侧中断，设备与 Broker 均正常",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_NET，Toxiproxy 黑洞模拟上行中断；机群 ESP32_05 每 10 分钟中断 75 秒", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-power-loss",
+      "title": "OPS_NET · 设备断电 2 分钟，离线期间的命令在上电后被执行",
+      "summary": "OPS_NET 断电后平台约 1 分钟内显示 offline_reason=client_lost。期间下发 reconnect_mqtt 记为 timeout；重新上电后 reset_reason=POWERON、boot_count 1→2，持久会话补投该命令并立即执行。",
+      "content": {
+        "observations": [
+          "断电前日志与状态都正常，断电后没有任何日志",
+          "平台显示离线，offline_reason=client_lost",
+          "上电后 boot #2，reset_reason=POWERON，uptime 从 0 开始",
+          "上电后第一件事：MQTT connected (session_present=1)，executing reconnect_mqtt (CMD_20261112_830621BA)"
+        ],
+        "actions": [
+          {
+            "action": "reconnect_mqtt",
+            "diagnosis_id": "DIA_20261112_19DFA3D1",
+            "command_id": "CMD_20261112_830621BA",
+            "ack": "平台记为 timeout；设备上电后执行",
+            "verify_status": null
+          }
+        ],
+        "outcome": "inconclusive",
+        "root_cause_status": "设备断电，平台侧无法远程处理",
+        "unresolved_items": ["这次的诊断把它判成了“连接被反复关闭”，没有识别出断电"]
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_NET", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-periodic-peer-reset",
+      "title": "ESP32_10 · 链路每 4 分钟被对端断开，reconnect_mqtt 验证失败",
+      "summary": "ESP32_10 每 240 秒被对端断开一次（EOF、ESP_ERR_ESP_TLS_TCP_CLOSED_FIN、errno=104），几秒后自动重连。执行 reconnect_mqtt 回执成功（22 ms），但 15 秒后再次断开，验证 failed，mqtt_reconnects 继续增长。",
+      "content": {
+        "observations": [
+          "日志：transport_read(): EOF，esp_tls_last_esp_err=0x8008 (ESP_ERR_ESP_TLS_TCP_CLOSED_FIN)；重连时 tcp_read error, errno=Connection reset by peer、sock_errno=104",
+          "断开间隔固定约 240 秒，每次 7–15 秒后重连成功，设备没有重启（uptime 连续）",
+          "mqtt_reconnects：05:18 为 8，05:19 为 10，05:28 为 12"
+        ],
+        "actions": [
+          {
+            "action": "reconnect_mqtt",
+            "diagnosis_id": "DIA_20261112_8FECEC2D",
+            "command_id": "CMD_20261112_82D9E0C6",
+            "ack": "applied：MQTT 已重新连接，耗时 22 ms",
+            "verify_status": "failed"
+          }
+        ],
+        "outcome": "failed",
+        "root_cause_status": "链路上的中间设备按固定周期断开连接（Toxiproxy reset_peer 模拟），与设备无关",
+        "unresolved_items": ["需要网络侧调整策略"]
+      },
+      "applicability": {"environment": "机群设备 ESP32_10（QEMU）", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-latency-keepalive",
+      "title": "OPS_LAT · Keep Alive 10 秒遇到 4–8 秒延迟，调到 60 秒后稳定",
+      "summary": "OPS_LAT 的 Keep Alive 只有 10 秒，下行延迟 4–8 秒后 5 分钟内断开重连 11 次（No PING_RESP, disconnected，随后立即重连）。set_mqtt_keepalive 60 验证成功，之后 5 分钟 No PING_RESP 为 0，重连次数不再增长。",
+      "content": {
+        "observations": [
+          "注入下行延迟 6000±2000 ms 后，日志反复出现 No PING_RESP, disconnected，每次 10–15 秒内又连上",
+          "5 分钟内 mqtt_reconnects 从 0 增长到 11（调整前共 14 次）",
+          "命令回执明显变慢：set_mqtt_keepalive 从下发到回执约 13 秒"
+        ],
+        "actions": [
+          {
+            "action": "set_mqtt_keepalive",
+            "parameters": {"seconds": 60},
+            "diagnosis_id": "DIA_20261112_05B94A4C",
+            "command_id": "CMD_20261112_9BD172A5",
+            "ack": "applied：Keep Alive 已从 10 秒调整为 60 秒，MQTT 已重新连接",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "esp-mqtt 发出 PINGREQ 后只留半个 Keep Alive（5 秒）等 PINGRESP，链路往返 4–8 秒必然超时",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_LAT，Toxiproxy latency 模拟高延迟", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-duplicate-client-id",
+      "title": "OPS_DUP · 两台设备使用同一 ID，互相踢下线",
+      "summary": "第二台设备以相同 ID OPS_DUP 接入后，3 分钟内 mqtt_reconnects 从 0 增至 12，Broker 交替记录 session taken over，状态的 firmware_version 在 1.3.1 与 1.2.0 之间跳变。停用重复设备后不再被接管。",
+      "content": {
+        "observations": [
+          "Broker：Client OPS_DUP disconnected: session taken over，约每 7 秒交替一次，来源端口不同",
+          "状态值来回跳：firmware_version 1.3.1/1.2.0、uptime 与 boot_count 两组数值交替",
+          "设备本身没有重启，日志只有正常的连接与断开"
+        ],
+        "actions": [
+          {
+            "action": "现场停用重复设备（不是平台动作）",
+            "diagnosis_id": "DIA_20261112_8406D770",
+            "result": "之后 3 分钟内只剩 1 次接管（停用当时），重连次数停在 15"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "两台设备烧录了同一个设备 ID",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_DUP 与一台重复设备", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-interval-offline",
+      "title": "OPS_INT · 上报间隔 300 秒导致平台误判离线，改回 30 秒",
+      "summary": "OPS_INT 上报间隔被改为 300 秒后，平台在两次上报之间显示 online=false、heartbeat_fresh=false，但设备没有重启、没有断线。set_reporting_interval 30 验证成功，之后持续在线。",
+      "content": {
+        "observations": [
+          "reporting_interval_seconds=300 时：平台 online=false、heartbeat_fresh=false",
+          "设备 mqtt_reconnects=0，uptime 连续增长，日志没有错误",
+          "平台离线判定阈值为 120 秒（DIAGNOSIS_OFFLINE_AFTER_SECONDS）"
+        ],
+        "actions": [
+          {
+            "action": "set_reporting_interval",
+            "parameters": {"seconds": 30},
+            "diagnosis_id": "DIA_20261112_3E56159D",
+            "command_id": "CMD_20261112_BFC625F1",
+            "ack": "applied：上报间隔已调整为 30 秒",
+            "verify_status": "succeeded"
+          }
+        ],
+        "outcome": "succeeded",
+        "root_cause_status": "上报间隔大于平台离线判定阈值，属于配置问题",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_INT", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-ethernet-reconnect-wifi",
+      "title": "OPS_INT · 以太网节点没有 RSSI，reconnect_wifi 只能重启网口",
+      "summary": "OPS_INT 是以太网节点，状态里 rssi、wifi_status 为空。诊断确认这不是 WiFi 断线；reconnect_wifi 回执「以太网接口已重启并重新获取 IP」，验证结果 inconclusive（没有 RSSI 可验）。",
+      "content": {
+        "observations": [
+          "link_type=ethernet，rssi=null，wifi_status=null，日志有 ethernet link up 与 got ip 10.0.2.15",
+          "执行后 mqtt_reconnects 0→1，设备持续在线"
+        ],
+        "actions": [
+          {
+            "action": "reconnect_wifi",
+            "diagnosis_id": "DIA_20261112_D3B9374C",
+            "command_id": "CMD_20261112_6596C56C",
+            "ack": "applied：以太网接口已重启并重新获取 IP（QEMU 节点没有 WiFi 射频）",
+            "verify_status": "inconclusive"
+          }
+        ],
+        "outcome": "inconclusive",
+        "root_cause_status": "没有故障，字段缺失是以太网节点的正常情况",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "QEMU 仿真节点 OPS_INT", "occurred_on": "2026-11-12"}
+    },
+    {
+      "slug": "ep-broker-down",
+      "title": "全机群 · Broker 停机 2 分钟，所有设备同时离线，恢复后自动重连",
+      "summary": "Mosquitto 停机后约 1 分钟内平台上的全部设备同时变为离线；设备日志 errno=104、MQTT connect failed。Broker 启动时从持久化文件恢复 27 个客户端会话和 28 条暂存消息，各设备只重连 1 次就恢复在线，没有执行任何设备动作。",
+      "content": {
+        "observations": [
+          "ESP32_01、02、07 等设备的 last_seen 停在同一时刻（05:52 前后），平台 online=false、heartbeat_fresh=false",
+          "设备日志：tcp_read error, errno=Connection reset by peer，esp_mqtt_connect: mqtt_message_receive() returned -2，MQTT connect failed",
+          "Broker 启动日志：Restored 27 clients / 34 subscriptions / 23 retained messages / 28 client messages",
+          "恢复后各设备 MQTT connected (session_present=1)，mqtt_reconnects=1，约 1 分钟内全部在线"
+        ],
+        "actions": [],
+        "diagnosis_id": "DIA_20261112_8081CB4A",
+        "outcome": "not_executed",
+        "root_cause_status": "Broker 进程停止",
+        "unresolved_items": []
+      },
+      "applicability": {"environment": "Compose 机群 9 台 QEMU 设备与 Mosquitto 2.1", "occurred_on": "2026-11-12"}
+    }
+  ],
+  "experiences": [
+    {
+      "slug": "xp-watchdog-crash-loop",
+      "episodes": ["ep-wdt-after-upgrade", "ep-wdt-factory"],
+      "title": "看门狗崩溃循环：有 rollback_version 就回退，没有就在复位时机升级",
+      "summary": "TASK_WDT 崩溃循环（boot_count 持续增长、回溯相同）重启无效。状态有 rollback_version 时用 rollback_firmware；没有时用 update_firmware 换版本，并在设备刚复位、尚未上线时下发，让 OTA 在看门狗触发前完成。",
+      "content": {
+        "claims": [
+          {"text": "版本绑定的崩溃循环换版本后消失；回退到上一版本验证成功", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wdt-after-upgrade", "CMD_20261112_454D1E30"]},
+          {"text": "出厂后从未升级过的设备没有可回退的版本，rollback_firmware 会被设备拒绝", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wdt-factory", "CMD_20261112_1CF2C8E5"]},
+          {"text": "设备在线窗口只有 40–90 秒时，上线后才收到的升级命令可能被看门狗打断；在复位期间下发，持久会话会在上线瞬间投递，OTA 能在约 40 秒内完成", "epistemic_status": "observed", "evidence_refs": ["episode:ep-wdt-factory", "CMD_20261112_8BA7A1E2", "CMD_20261112_EA436C63"]}
+        ],
+        "procedure": [
+          "确认是循环：reset_reason 连续为 TASK_WDT/INT_WDT，boot_count 持续增长，watchdog_reset 故障里出错任务和回溯每次相同",
+          "看状态是否有 rollback_version，并确认问题是否在最近一次升级后出现",
+          "有 rollback_version 且问题出现在升级后：提案 rollback_firmware",
+          "没有 rollback_version：选一个其他设备上运行正常的版本，在设备下一次复位后立即提案并批准 update_firmware",
+          "验证：至少观察 2 到 3 个原来的崩溃周期，boot_count 不再增长、没有新的 watchdog_reset"
+        ],
+        "limitations": [
+          "restart_device 对版本绑定的缺陷无效",
+          "回退后状态会显示 rollback_version=有问题的新版本，那不是可用的升级目标"
+        ]
+      },
+      "applicability": {"fault_types": ["device_runtime"], "actions": ["rollback_firmware", "update_firmware"]}
+    },
+    {
+      "slug": "xp-slow-memory-leak",
+      "episodes": ["ep-slow-leak"],
+      "title": "慢速内存泄漏：按斜率判断，重启只能拖延，换版本才能根治",
+      "summary": "free_heap 与 min_free_heap 按固定斜率下降就是泄漏。restart_device 能暂时恢复但斜率不变；泄漏与固件版本绑定时用 update_firmware 换版本。验证要看至少 5–10 分钟的曲线是否走平，不能只看重启后的瞬时值。",
+      "content": {
+        "claims": [
+          {"text": "重启后空闲堆回升，但 10 分钟内按同样的每秒约 51 字节再次下降", "epistemic_status": "observed", "evidence_refs": ["episode:ep-slow-leak", "CMD_20261112_B3AE9079"]},
+          {"text": "换到 1.3.1 后空闲堆在 5 分钟内保持不变", "epistemic_status": "observed", "evidence_refs": ["episode:ep-slow-leak", "CMD_20261112_792C7117"]}
+        ],
+        "procedure": [
+          "至少取 3 个间隔 5 分钟的 free_heap 样本，算出每分钟下降量和预计耗尽时间",
+          "比较同型号其他版本设备有没有同样下降",
+          "离耗尽还远时先换版本；快要耗尽时先 restart_device 争取时间，再安排换版本",
+          "换版本后同样取样，确认曲线走平"
+        ],
+        "limitations": ["只有一次重启后的读数不能证明问题解决"]
+      },
+      "applicability": {"fault_types": ["device_runtime"], "actions": ["restart_device", "update_firmware"]}
+    },
+    {
+      "slug": "xp-sensor-read-timeout",
+      "episodes": ["ep-sensor-timeout"],
+      "title": "传感器读取超时：先校准恢复，重启后复发就查固件版本",
+      "summary": "sensor_valid=false 且日志 sensor read failed: ESP_ERR_TIMEOUT 时，calibrate_sensor 会重新初始化驱动并能立即恢复。若重启后又出现，说明故障来自固件或配置，要换版本；读数贴近满量程两端才是接线问题。",
+      "content": {
+        "claims": [
+          {"text": "calibrate_sensor 能立即恢复读取并通过验证", "epistemic_status": "observed", "evidence_refs": ["episode:ep-sensor-timeout", "CMD_20261112_B01AC2F6"]},
+          {"text": "故障绑定固件版本时，重新上电后会复发，升级后消失", "epistemic_status": "observed", "evidence_refs": ["episode:ep-sensor-timeout", "CMD_20261112_81EB91F5"]}
+        ],
+        "procedure": [
+          "确认 sensor_valid=false 与 sensor_read_failed 故障，排除平台把传感器问题误判为网络问题",
+          "执行 calibrate_sensor，验证 sensor_valid=true",
+          "关注下一次重启后是否复发；复发则对比同版本设备，安排 update_firmware"
+        ],
+        "limitations": ["QEMU 节点的传感器是固件内的热模型，接线、量程类问题只能在 Wokwi 或真机上复现"]
+      },
+      "applicability": {"fault_types": ["sensor_anomaly"], "actions": ["calibrate_sensor", "update_firmware"]}
+    },
+    {
+      "slug": "xp-ota-missing-version",
+      "episodes": ["ep-ota-missing-version"],
+      "title": "OTA 回执“无法从 OTA 服务器获取固件 X：ESP_FAIL”：多半是服务器没有该版本",
+      "summary": "update_firmware 回执「无法从 OTA 服务器获取固件 X：ESP_FAIL」且设备日志有 File not found(404)，说明 OTA 服务器上没有这个版本，设备不受影响。不要重试同一版本，先核对服务器上可用的版本。",
+      "content": {
+        "claims": [
+          {"text": "版本不存在时回执只写 ESP_FAIL，404 只出现在设备日志里", "epistemic_status": "observed", "evidence_refs": ["episode:ep-ota-missing-version", "CMD_20261112_C86571FD"]}
+        ],
+        "procedure": [
+          "查设备日志里 esp_https_ota 的错误：404 是版本不存在，连接失败或超时是网络问题",
+          "核对 OTA 服务器（http://esp32-ota:8070/）上是否有 xiaoyi-node-<版本>.bin",
+          "改用存在的版本重新提案"
+        ],
+        "limitations": []
+      },
+      "applicability": {"fault_types": ["device_runtime"], "actions": ["update_firmware"]}
+    },
+    {
+      "slug": "xp-ota-auto-rollback",
+      "episodes": ["ep-ota-rc-rollback"],
+      "title": "升级回执成功但验证失败、复位原因 PANIC：新版本被自动回滚了",
+      "summary": "update_firmware 回执 applied，随后设备以旧版本上线、reset_reason=PANIC、验证 failed，是新版本启动自检失败被引导程序自动回滚。这个版本有缺陷，不要重复升级；回滚后它不会再作为 rollback_version 出现。",
+      "content": {
+        "claims": [
+          {"text": "自检失败的版本会被引导程序回滚，设备自行回到旧版本", "epistemic_status": "observed", "evidence_refs": ["episode:ep-ota-rc-rollback", "CMD_20261112_AA699456"]}
+        ],
+        "procedure": [
+          "核对：回执 applied、之后 firmware_version 仍是旧版本、reset_reason=PANIC、日志有 self-test failed 或 abort()",
+          "把该版本记为不可用，通知发布方修复",
+          "设备已回到旧版本，无需进一步动作"
+        ],
+        "limitations": ["只适用于新版本在确认有效之前就复位的情况；能通过自检但运行中出问题的版本不会自动回滚，需要 rollback_firmware"]
+      },
+      "applicability": {"fault_types": ["device_runtime"], "actions": ["update_firmware"]}
+    },
+    {
+      "slug": "xp-single-panic",
+      "episodes": ["ep-single-panic"],
+      "title": "单次 panic：先解码、再观察，不急于下发修复动作",
+      "summary": "只出现一次的 panic（如 StoreProhibited、EXCVADDR=0x0 写空指针）设备会自行重启恢复。先用同版本 ELF 解码回溯，记录出错任务；没有再次出现就不需要修复动作，反复出现在同一位置才按固件缺陷处理。",
+      "content": {
+        "claims": [
+          {"text": "单次 panic 后设备自行恢复，诊断能从 core dump 摘要识别出错任务与异常类型", "epistemic_status": "observed", "evidence_refs": ["episode:ep-single-panic", "DIA_20261112_9912CEFA"]}
+        ],
+        "procedure": [
+          "从 panic_reset 故障取 EXCCAUSE、EXCVADDR、出错任务和回溯",
+          "从 OTA 服务器下载同版本 .elf，用 xtensa-esp32-elf-addr2line 解码",
+          "观察 boot_count 与 reset_reason：再次出现才升级或回退"
+        ],
+        "limitations": ["版本不一致的 ELF 解出的函数名没有意义"]
+      },
+      "applicability": {"fault_types": ["device_runtime"]}
+    },
+    {
+      "slug": "xp-command-while-offline",
+      "episodes": ["ep-uplink-outage", "ep-power-loss"],
+      "title": "设备离线时下发的命令：平台超时不代表没执行，不要重复下发",
+      "summary": "设备断网或断电时下发的命令会在平台 30 秒后记为 timeout，但它仍在 Broker 的持久会话里，设备恢复连接后会立即执行。设备离线时不要下发或重复下发命令；恢复后先看设备日志确认是否已执行。",
+      "content": {
+        "claims": [
+          {"text": "断网期间下发的 reconnect_mqtt 在平台记为 timeout，链路恢复后被设备立即执行", "epistemic_status": "observed", "evidence_refs": ["episode:ep-uplink-outage", "CMD_20261112_0D74EAB4"]},
+          {"text": "断电期间下发的命令在设备上电后被执行", "epistemic_status": "observed", "evidence_refs": ["episode:ep-power-loss", "CMD_20261112_830621BA"]}
+        ],
+        "procedure": [
+          "先确认设备在线（online=true 且 heartbeat_fresh=true）再下发命令",
+          "命令 timeout 后，等设备恢复连接，查日志里有没有 executing <action> (<command_id>)",
+          "已执行就不要再发；重启、升级类命令尤其不能重复"
+        ],
+        "limitations": ["平台目前会丢弃超时后的迟到回执，所以这类命令的结果要从设备日志确认"]
+      },
+      "applicability": {"fault_types": ["network_connection", "mqtt_connection"]}
+    },
+    {
+      "slug": "xp-outage-vs-power-loss",
+      "episodes": ["ep-uplink-outage", "ep-power-loss"],
+      "title": "区分断网和断电：看恢复后的 reset_reason、boot_count 和 uptime",
+      "summary": "两者离线时都表现为 offline_reason=client_lost、没有日志，无法区分。恢复后看：断网时 uptime 连续、boot_count 不变、离线期间日志会补传（连接失败重试）；断电时 reset_reason=POWERON、boot_count 加 1、uptime 从 0 开始。",
+      "content": {
+        "claims": [
+          {"text": "断网恢复后设备 uptime 连续，补传的日志里有离线期间每约 17 秒一次的连接失败", "epistemic_status": "observed", "evidence_refs": ["episode:ep-uplink-outage"]},
+          {"text": "断电恢复后 reset_reason=POWERON、boot_count 加 1", "epistemic_status": "observed", "evidence_refs": ["episode:ep-power-loss"]}
+        ],
+        "procedure": [
+          "离线期间只记录离线时间，不要下发命令",
+          "设备恢复后读状态的 reset_reason、boot_count、uptime，并查离线时段的补传日志",
+          "断网反复出现查网络；断电反复出现查供电"
+        ],
+        "limitations": ["离线时间超过日志缓冲容量时，设备会记录 log buffer overflowed，部分日志丢失"]
+      },
+      "applicability": {"fault_types": ["network_connection"]}
+    },
+    {
+      "slug": "xp-periodic-peer-reset",
+      "episodes": ["ep-periodic-peer-reset"],
+      "title": "连接按固定周期被对端断开：reconnect_mqtt 无效，交给网络侧",
+      "summary": "日志 transport_read(): EOF、ESP_ERR_ESP_TLS_TCP_CLOSED_FIN(0x8008) 或 errno=104，且断开间隔固定、几秒后自动重连、设备未重启，是中间设备的定时或空闲策略。reconnect_mqtt 回执成功但会在下一次断开时验证失败，应联系网络侧。",
+      "content": {
+        "claims": [
+          {"text": "reconnect_mqtt 回执成功，但 15 秒后再次被断开，验证结果 failed", "epistemic_status": "observed", "evidence_refs": ["episode:ep-periodic-peer-reset", "CMD_20261112_82D9E0C6"]}
+        ],
+        "procedure": [
+          "统计断开时间点，确认间隔是否固定",
+          "确认 uptime 连续、reset_reason 未变化，排除设备重启",
+          "间隔固定且与空闲无关：联系网络侧检查防火墙、NAT 或负载均衡策略",
+          "只在连接空闲时被断开：把 Keep Alive 调到小于空闲超时（set_mqtt_keepalive）"
+        ],
+        "limitations": ["经过 QEMU 用户态网络时 RST 会表现为 FIN，真机通常直接看到 errno=104"]
+      },
+      "applicability": {"fault_types": ["mqtt_connection", "network_connection"], "actions": ["reconnect_mqtt", "set_mqtt_keepalive"]}
+    },
+    {
+      "slug": "xp-latency-keepalive",
+      "episodes": ["ep-latency-keepalive"],
+      "title": "高延迟链路频繁 No PING_RESP：把 Keep Alive 调到往返时间的 2 倍以上",
+      "summary": "日志反复 No PING_RESP, disconnected 但每次都能立即重连、设备未重启，多半是链路延迟超过了半个 Keep Alive（esp-mqtt 发 PINGREQ 后只等 Keep Alive/2）。用 set_mqtt_keepalive 把 Keep Alive 调到最坏往返时间的 2 倍以上，例如延迟 8 秒时至少 30 秒，实测 60 秒稳定。",
+      "content": {
+        "claims": [
+          {"text": "Keep Alive 10 秒、往返 4–8 秒时 5 分钟内重连 11 次；调到 60 秒后 5 分钟内没有 No PING_RESP", "epistemic_status": "observed", "evidence_refs": ["episode:ep-latency-keepalive", "CMD_20261112_9BD172A5"]}
+        ],
+        "procedure": [
+          "确认 No PING_RESP 后能立即重连（不是中断），设备 uptime 连续",
+          "估计往返时间：命令下发到回执的时间、日志时间差",
+          "执行 set_mqtt_keepalive，取值不低于 2 倍最坏往返时间",
+          "观察 5 分钟以上：mqtt_reconnects 不再增长，Broker 新连接日志的 k 值已变"
+        ],
+        "limitations": ["Keep Alive 越大，真正断线时 Broker 判定离线越慢（1.5 倍 Keep Alive）", "esp-mqtt 等 CONNACK 只有 10 秒，往返超过 10 秒时连重连都会失败，调 Keep Alive 无效"]
+      },
+      "applicability": {"fault_types": ["mqtt_connection", "network_connection"], "actions": ["set_mqtt_keepalive"]}
+    },
+    {
+      "slug": "xp-duplicate-client-id",
+      "episodes": ["ep-duplicate-client-id"],
+      "title": "频繁掉线且状态值来回跳：查设备 ID 是否重复",
+      "summary": "Broker 交替出现同一 ID 的 session taken over，状态里的固件版本、uptime、boot_count 在两组值之间跳变，就是两台设备用了同一个 ID。重连、重启都无效，要在现场找出并改正重复的设备；修好后 session taken over 不再出现。",
+      "content": {
+        "claims": [
+          {"text": "重复 ID 时 3 分钟内重连 12 次，状态值来回跳；停用重复设备后恢复", "epistemic_status": "observed", "evidence_refs": ["episode:ep-duplicate-client-id", "DIA_20261112_8406D770"]}
+        ],
+        "procedure": [
+          "在 Broker 日志里查该 ID 的 session taken over 和连接来源地址",
+          "对比连续几次状态：firmware_version、uptime、boot_count 是否交替出现两组值",
+          "通知现场找出使用同一 ID 的设备并重新烧录 ID",
+          "不要下发 reconnect_mqtt 或 restart_device，它们会落到其中任意一台上"
+        ],
+        "limitations": []
+      },
+      "applicability": {"fault_types": ["mqtt_connection"]}
+    },
+    {
+      "slug": "xp-interval-vs-offline-threshold",
+      "episodes": ["ep-interval-offline"],
+      "title": "上报间隔不能超过平台离线阈值（120 秒）",
+      "summary": "平台按 120 秒内是否收到消息判定在线，心跳与状态共用上报间隔。上报间隔超过 120 秒时设备正常也会被显示为离线（heartbeat_fresh=false）。用 set_reporting_interval 设到 60 秒以内（阈值的一半以下）。",
+      "content": {
+        "claims": [
+          {"text": "上报间隔 300 秒时平台显示离线，设备无重连、无错误；改回 30 秒后恢复在线", "epistemic_status": "observed", "evidence_refs": ["episode:ep-interval-offline", "CMD_20261112_BFC625F1"]}
+        ],
+        "procedure": [
+          "离线但 mqtt_reconnects 不变、uptime 连续、日志无错误时，先看 reporting_interval_seconds",
+          "大于 60 秒就用 set_reporting_interval 调回 30–60 秒"
+        ],
+        "limitations": ["阈值由 DIAGNOSIS_OFFLINE_AFTER_SECONDS 配置，改了阈值要同步调整这条经验"]
+      },
+      "applicability": {"fault_types": ["device_runtime", "network_connection"], "actions": ["set_reporting_interval"]}
+    },
+    {
+      "slug": "xp-broker-down",
+      "episodes": ["ep-broker-down"],
+      "title": "多台设备同一时刻离线：先查 Broker，不要逐台处理",
+      "summary": "多台设备 last_seen 停在同一时刻、同时离线，设备日志 MQTT connect failed 或 errno=104，先检查 Mosquitto 是否运行。Broker 恢复后设备会自行重连，开启持久化时会话和暂存消息会恢复；期间不要对单台设备下发动作。",
+      "content": {
+        "claims": [
+          {"text": "Broker 停机 2 分钟后重启，设备各重连 1 次即全部恢复在线，持久会话与暂存消息被恢复", "epistemic_status": "observed", "evidence_refs": ["episode:ep-broker-down", "DIA_20261112_8081CB4A"]}
+        ],
+        "procedure": [
+          "比较多台设备的 last_seen：同一时刻停止说明是公共环节",
+          "检查 Broker 容器状态与日志",
+          "恢复 Broker 后确认日志 Restored N clients，设备 session_present=1 重新上线"
+        ],
+        "limitations": ["Broker 停机期间平台下发的命令无法投递"]
+      },
+      "applicability": {"fault_types": ["mqtt_connection"]}
+    },
+    {
+      "slug": "xp-ethernet-node-no-rssi",
+      "episodes": ["ep-ethernet-reconnect-wifi"],
+      "title": "以太网节点没有 RSSI 和 WiFi 状态是正常的",
+      "summary": "link_type=ethernet 的节点（QEMU 机群）不上报 rssi 和 wifi_status，不能据此判断 WiFi 断线。reconnect_wifi 在这类节点上只会重启网口，验证结果为 inconclusive，不要用它处理以太网节点的连接问题。",
+      "content": {
+        "claims": [
+          {"text": "以太网节点执行 reconnect_wifi 回执“以太网接口已重启并重新获取 IP”，验证 inconclusive", "epistemic_status": "observed", "evidence_refs": ["episode:ep-ethernet-reconnect-wifi", "CMD_20261112_6596C56C"]}
+        ],
+        "procedure": ["先看 link_type：ethernet 节点的连接问题按 MQTT 或链路问题处理"],
+        "limitations": []
+      },
+      "applicability": {"fault_types": ["wifi_connection", "network_connection"], "actions": ["reconnect_wifi"]}
+    },
+    {
+      "slug": "xp-wifi-reason-codes",
+      "episodes": [],
+      "confirm": false,
+      "title": "（待 Wokwi 验证）WiFi 断线按原因码分类处理",
+      "summary": "WiFi 节点日志 wifi disconnected, reason=N 中，201 NO_AP_FOUND、202 AUTH_FAIL、15 4WAY_HANDSHAKE_TIMEOUT 多为配置问题，重连无效；200 BEACON_TIMEOUT、2 AUTH_EXPIRE 与信号有关，要结合 RSSI。reconnect_wifi 只适合驱动状态异常、AP 正常的情况。尚未在 Wokwi 中实际验证。",
+      "content": {
+        "claims": [
+          {"text": "原因码含义来自 ESP-IDF Wi-Fi 驱动官方文档；按原因码区分配置类与信号类问题的处理方法尚未在本项目中验证", "epistemic_status": "hypothesis", "evidence_refs": ["ESP_WIFI_DRIVER"]}
+        ],
+        "procedure": [
+          "从日志读 reason 与 rssi",
+          "配置类原因：核对 SSID、密码、加密方式",
+          "信号类原因：看 RSSI 是否低于 -75 dBm",
+          "AP 正常且长时间重连失败时再用 reconnect_wifi"
+        ],
+        "limitations": ["只适用于 Wokwi 或真机 WiFi 节点；QEMU 节点没有 WiFi"]
+      },
+      "applicability": {"fault_types": ["wifi_connection"], "actions": ["reconnect_wifi"], "verification": "待在 Wokwi 中复现后确认"}
+    },
+    {
+      "slug": "xp-ntc-open-short",
+      "episodes": [],
+      "confirm": false,
+      "title": "（待 Wokwi 验证）NTC 读数贴近满量程两端是开路或短路",
+      "summary": "Wokwi 节点 NTC 接 ADC1，固件在原始值 ≤8 或 ≥4087 时记录 NTC reading at rail: open or short circuit 并把读数判为无效。这是接线问题，calibrate_sensor 无效，需要现场检查。尚未在 Wokwi 中实际验证。",
+      "content": {
+        "claims": [
+          {"text": "判定逻辑来自固件 sensor.c 与 ESP-IDF ADC 官方文档，尚未在 Wokwi 中复现", "epistemic_status": "hypothesis", "evidence_refs": ["packages/esp32-node/main/sensor.c", "ESP_ADC_ONESHOT"]}
+        ],
+        "procedure": [
+          "日志出现 NTC reading at rail 时，不要下发校准",
+          "现场检查 NTC 与分压电阻的连接"
+        ],
+        "limitations": ["只适用于 sensor_backend=ntc_adc 的节点"]
+      },
+      "applicability": {"fault_types": ["sensor_anomaly"], "verification": "待在 Wokwi 中复现后确认"}
+    }
+  ]
+}

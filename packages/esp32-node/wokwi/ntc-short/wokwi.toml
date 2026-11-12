@@ -1,0 +1,5 @@
+# 场景 ntc-short：GPIO34 直接短接到 3V3，ADC 读数贴近满量程上限。
+[wokwi]
+version = 1
+firmware = '../../build-wokwi/flasher_args.json'
+elf = '../../build-wokwi/xiaoyi-node.elf'

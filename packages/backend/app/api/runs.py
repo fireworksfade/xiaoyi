@@ -22,8 +22,8 @@ from app.models import (
     RunStatus,
 )
 from app.observability.metrics import SSE_CONNECTIONS
-from app.services.run_state import is_retryable
 from app.services.artifacts import LocalArtifactStore
+from app.services.run_state import is_retryable
 from app.services.runs import process_agent_run
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])

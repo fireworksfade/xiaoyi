@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -11,6 +12,8 @@ from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
 from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retrieval import search_knowledge
 from iot_diagnosis.router import RouteDecision, route_query
+
+logger = logging.getLogger("xiaoyi.iot_diagnosis.diagnosis")
 
 
 class DiagnosisStageError(RuntimeError):
@@ -47,6 +50,60 @@ def _profile(text: str, state: dict[str, Any]) -> dict[str, Any]:
         "内存" in lowered or "heap" in lowered or "固件" in lowered or "重启" in lowered
     )
 
+    if any(marker in lowered for marker in ("task watchdog", "task_wdt", "int_wdt", "看门狗")):
+        return {
+            "fault_type": "device_runtime",
+            "fault_name": "看门狗复位",
+            "cause": "某个任务长时间占用 CPU 或中断被阻塞，看门狗超时后复位设备",
+            "solutions": [
+                "读取复位原因、启动次数和看门狗日志中正在运行的任务",
+                "用同版本 ELF 解码回溯",
+                "崩溃循环与固件版本相关时，回退或升级到其他版本",
+            ],
+        }
+    # 新固件自检失败会先 abort（panic），再由引导程序回滚；回滚是更具体的结论，放在 panic 之前
+    if any(
+        marker in lowered
+        for marker in ("未通过自检", "引导程序已回滚", "self-test failed", "rollback to previously")
+    ):
+        return {
+            "fault_type": "device_runtime",
+            "fault_name": "新固件自检失败已回滚",
+            "cause": "新固件启动后没有通过自检就复位，引导程序把它标记为无效并回到上一版本",
+            "solutions": [
+                "确认设备已回到旧版本并恢复上报",
+                "不要再次下发同一版本，先修复该版本的自检问题",
+                "在测试设备上复现自检失败并查看串口日志",
+            ],
+        }
+    if any(marker in lowered for marker in ("guru meditation", "panic", "core dump")):
+        return {
+            "fault_type": "device_runtime",
+            "fault_name": "设备异常复位（panic）",
+            "cause": "固件访问非法地址、断言失败或 abort 导致 panic 复位",
+            "solutions": [
+                "读取 panic 原因、出错任务和 EXCCAUSE",
+                "用同版本 ELF 解码回溯",
+                "观察是否在同一位置反复出现",
+            ],
+        }
+    if any(marker in lowered for marker in ("out of memory", "allocation failed", "out_of_memory")):
+        return {
+            "fault_type": "device_runtime",
+            "fault_name": "设备内存不足",
+            "cause": "堆内存持续消耗、碎片化或资源未释放导致分配失败",
+            "solutions": ["记录空闲堆和最小空闲堆的变化趋势", "检查资源释放与内存泄漏", "必要时在耗尽前重启"],
+        }
+    if any(
+        marker in lowered
+        for marker in ("sensor read failed", "sensor_read_failed", "传感器读取失败")
+    ):
+        return {
+            "fault_type": "sensor_anomaly",
+            "fault_name": "传感器读取失败",
+            "cause": "传感器接线、驱动初始化或采样链路异常导致读取失败",
+            "solutions": ["重新初始化传感器驱动并校准", "检查接线和供电", "确认故障是否随固件版本复现"],
+        }
     if ("mqtt" in lowered or "broker" in lowered) and any(
         marker in lowered
         for marker in (
@@ -102,7 +159,8 @@ def _profile(text: str, state: dict[str, Any]) -> dict[str, Any]:
     if (
         "keep alive" in lowered
         or "keepalive" in lowered
-        or ("mqtt" in lowered and "timeout" in lowered)
+        or "ping_resp" in lowered
+        or "exceeded timeout" in lowered  # Mosquitto: "Client X has exceeded timeout"
     ):
         return {
             "fault_type": "mqtt_connection",
@@ -153,7 +211,9 @@ def _profile(text: str, state: dict[str, Any]) -> dict[str, Any]:
             "cause": "堆内存持续消耗、碎片化或资源未释放可能导致运行异常",
             "solutions": ["记录空闲堆和最小空闲堆", "检查资源释放与内存泄漏", "降低缓冲区峰值占用"],
         }
-    if any(marker in lowered for marker in ("重启", "reboot", "reset", "复位")):
+    # "Connection reset by peer" 是对端关闭 TCP 连接，不是设备复位
+    device_text = lowered.replace("reset by peer", "").replace("connection reset", "")
+    if any(marker in device_text for marker in ("重启", "reboot", "reset", "复位")):
         return {
             "fault_type": "device_runtime",
             "fault_name": "设备异常重启",
@@ -289,7 +349,8 @@ def diagnose(
             llm_latency_ms += llm_response.latency_ms
             input_tokens += llm_response.input_tokens
             output_tokens += llm_response.output_tokens
-        except (LLMClientError, TypeError, ValueError):
+        except (LLMClientError, TypeError, ValueError) as exc:
+            logger.warning("diagnosis LLM failed for %s, using rule fallback: %s", device_id, exc)
             llm_fallback_reason = "LLM_DIAGNOSIS_FAILED"
     evidence = []
     if use_realtime_state:

@@ -1,0 +1,108 @@
+menu "Xiaoyi node"
+
+    choice XIAOYI_NET
+        prompt "Network link"
+        default XIAOYI_NET_OPENETH
+        help
+            QEMU has no WiFi radio; it emulates an OpenCores Ethernet MAC instead.
+            Use WiFi for Wokwi and real boards.
+
+        config XIAOYI_NET_OPENETH
+            bool "Ethernet (OpenCores MAC, QEMU)"
+            select ETH_USE_OPENETH
+        config XIAOYI_NET_WIFI
+            bool "WiFi station (Wokwi or real board)"
+    endchoice
+
+    config XIAOYI_WIFI_SSID
+        string "WiFi SSID"
+        default "Wokwi-GUEST"
+        depends on XIAOYI_NET_WIFI
+
+    config XIAOYI_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        depends on XIAOYI_NET_WIFI
+
+    config XIAOYI_WIFI_CHANNEL
+        int "WiFi channel hint (0 scans all channels)"
+        range 0 13
+        default 6
+        depends on XIAOYI_NET_WIFI
+
+    choice XIAOYI_SENSOR
+        prompt "Temperature sensor backend"
+        default XIAOYI_SENSOR_MODEL
+
+        config XIAOYI_SENSOR_MODEL
+            bool "Thermal model (no physical sensor, QEMU)"
+        config XIAOYI_SENSOR_NTC
+            bool "NTC thermistor on ADC1 (Wokwi or real board)"
+    endchoice
+
+    config XIAOYI_NTC_ADC_CHANNEL
+        int "ADC1 channel wired to the NTC divider"
+        range 0 7
+        default 6
+        depends on XIAOYI_SENSOR_NTC
+        help
+            ADC1 channel 6 is GPIO34. ADC2 cannot be used while WiFi is active.
+
+    config XIAOYI_NTC_BETA
+        int "NTC beta coefficient"
+        default 3950
+        depends on XIAOYI_SENSOR_NTC
+
+    config XIAOYI_DEFAULT_DEVICE_ID
+        string "Device ID used when the factory NVS namespace is missing"
+        default "ESP32_06"
+
+    config XIAOYI_DEFAULT_DEVICE_NAME
+        string "Device name used when the factory NVS namespace is missing"
+        default "办公区-环境终端"
+
+    config XIAOYI_DEFAULT_BROKER_URI
+        string "Default MQTT broker URI"
+        default "mqtt://mqtt:1883"
+
+    config XIAOYI_DEFAULT_OTA_BASE_URL
+        string "Default OTA firmware base URL"
+        default "http://esp32-ota:8070"
+
+    config XIAOYI_DEFAULT_INTERVAL_S
+        int "Default reporting interval (seconds)"
+        range 1 3600
+        default 10
+
+    config XIAOYI_DEFAULT_TEMP_BASE_DECI
+        int "Thermal model baseline temperature in 0.1 C"
+        default 260
+
+    config XIAOYI_MQTT_KEEPALIVE_S
+        int "Default MQTT keep alive (seconds)"
+        range 5 600
+        default 30
+
+    config XIAOYI_SNTP_SERVER
+        string "SNTP server"
+        default "pool.ntp.org"
+
+    config XIAOYI_SNTP_SERVER_2
+        string "Second SNTP server (tried when the first does not answer)"
+        default "ntp.aliyun.com"
+
+    config XIAOYI_SNTP_SERVER_3
+        string "Third SNTP server"
+        default "time.cloudflare.com"
+
+    config XIAOYI_EMULATED_POWER_CYCLE
+        bool "Every reboot is a fresh power-on (QEMU -no-reboot)"
+        default n
+        help
+            Espressif QEMU does not survive a software CPU reset, so the QEMU
+            image runs with -no-reboot and restarts the emulator instead. The
+            RTC reset cause is lost that way; the firmware then recovers it from
+            what a real reboot leaves in flash: a core dump and its panic reason
+            after a crash, or a restart marker in NVS after an intentional reboot.
+
+endmenu

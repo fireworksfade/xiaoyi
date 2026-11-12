@@ -8,6 +8,13 @@ import { expect, test, type Page } from '@playwright/test';
 
 const execute = promisify(execFile);
 const root = '/api/backend/api/v1';
+const repoRoot = resolve('../..');
+const toxiproxyApi = process.env.E2E_TOXIPROXY_URL ?? 'http://127.0.0.1:8474';
+
+// Each case boots its own QEMU ESP32 running the real xiaoyi-node firmware.
+// Faults are real: network faults go through Toxiproxy, runtime faults are
+// firmware drills (inject_fault). reconnect_wifi needs a WiFi radio, which
+// QEMU does not emulate; it is verified in Wokwi instead.
 const cases = [
   {
     action: 'reconnect_mqtt',
@@ -20,6 +27,7 @@ const cases = [
     scenario: 'wifi_weak',
     parameters: {},
     high: false,
+    qemuUnsupported: 'QEMU has no WiFi radio; verify reconnect_wifi in Wokwi',
   },
   {
     action: 'calibrate_sensor',
@@ -47,20 +55,43 @@ const cases = [
   },
 ];
 
-// Only the uniquely named simulator is changed. Real chat, diagnosis, backend,
-// MCP, Broker, ACK handling and the production observation window remain active.
-const simulatorCode = `
-import sys
-from iot_diagnosis.simulator.models import DeviceProfile
-from iot_diagnosis.simulator.device_simulator import DeviceSimulator
-profile = DeviceProfile(device_id=sys.argv[1], scenario=sys.argv[2], interval=2)
-device = DeviceSimulator(profile, '127.0.0.1', 1883)
-device.start()
-try:
-    sys.stdin.readline()
-finally:
-    device.stop()
-`;
+function compose(args: string[], timeout = 60_000) {
+  return execute('docker', ['compose', ...args], {
+    cwd: repoRoot,
+    windowsHide: true,
+    timeout,
+  });
+}
+
+async function toxiproxy(method: string, path: string, body?: unknown) {
+  const response = await fetch(`${toxiproxyApi}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok && !(method === 'DELETE' && response.status === 404)) {
+    throw new Error(
+      `toxiproxy ${method} ${path}: ${response.status} ${await response.text()}`,
+    );
+  }
+}
+
+async function publishCommand(deviceId: string, payload: object) {
+  await compose([
+    'exec',
+    '-T',
+    'mqtt',
+    'mosquitto_pub',
+    '-h',
+    'localhost',
+    '-q',
+    '1',
+    '-t',
+    `iot/${deviceId}/cmd`,
+    '-m',
+    JSON.stringify(payload),
+  ]);
+}
 
 // Independent read-only evidence avoids asking the chat model to poll forever.
 // No synthetic ACKs, verification results or clock advancement are injected.
@@ -113,44 +144,107 @@ async function messages(page: Page, conversationId: string) {
   }>;
 }
 
-for (const item of cases) {
+for (const [index, item] of cases.entries()) {
   test(`real action: ${item.action}, ACK, verification and refresh`, async ({
     page,
   }, testInfo) => {
     test.skip(
       process.env.E2E_IOT_ACTIONS_LIVE !== '1',
-      'Requires Docker IoT, configured chat/diagnosis APIs and simulator Python',
+      'Requires Docker IoT with the QEMU ESP32 image and configured chat/diagnosis APIs',
     );
-    test.setTimeout(360_000);
+    test.skip(Boolean(item.qemuUnsupported), item.qemuUnsupported);
+    test.setTimeout(480_000);
     const deviceId = `iot-action-e2e-${item.action}-${randomUUID().slice(0, 8)}`;
-    const simulator = spawn(
-      process.env.E2E_IOT_PYTHON ?? 'python',
-      ['-u', '-c', simulatorCode, deviceId, item.scenario],
-      {
-        cwd: resolve('../mcp-services'),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-      },
+    const container = `e2e-${deviceId}`;
+    const proxyPort = 18390 + index;
+    await toxiproxy('POST', '/proxies', {
+      name: deviceId,
+      listen: `0.0.0.0:${proxyPort}`,
+      upstream: 'mqtt:1883',
+      enabled: true,
+    });
+    // The serial console of the emulated ESP32 is the container's stdout.
+    const device = spawn(
+      'docker',
+      [
+        'compose',
+        'run',
+        '--rm',
+        '-T',
+        '--name',
+        container,
+        '-e',
+        `DEVICE_ID=${deviceId}`,
+        '-e',
+        `BROKER_URI=mqtt://toxiproxy:${proxyPort}`,
+        '-e',
+        'FIRMWARE_VERSION=1.3.1',
+        '-e',
+        'REPORT_INTERVAL=2',
+        '-e',
+        'KEEPALIVE=10',
+        '-e',
+        'RESET_FLASH=1',
+        'esp32-node',
+      ],
+      { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
     );
-    let simulatorLog = '';
-    simulator.stdout.on('data', (chunk) => {
-      simulatorLog += chunk.toString();
+    let serialLog = '';
+    device.stdout.on('data', (chunk) => {
+      serialLog += chunk.toString();
     });
-    simulator.stderr.on('data', (chunk) => {
-      simulatorLog += chunk.toString();
+    device.stderr.on('data', (chunk) => {
+      serialLog += chunk.toString();
     });
-    simulator.on('error', (error) => {
-      simulatorLog += error.message;
+    device.on('error', (error) => {
+      serialLog += error.message;
     });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
-    try {
-      await expect
+    const online = () =>
+      expect
         .poll(async () => (await evidence('device', deviceId))?.online, {
-          timeout: 30_000,
+          timeout: 90_000,
           intervals: [1000, 2000],
         })
         .toBe(1);
+    try {
+      await online();
+      if (item.scenario === 'mqtt_timeout') {
+        // Black-hole the uplink long enough for both keep alive timers to fire.
+        for (const stream of ['upstream', 'downstream']) {
+          await toxiproxy('POST', `/proxies/${deviceId}/toxics`, {
+            name: `blackhole_${stream}`,
+            type: 'timeout',
+            stream,
+            attributes: { timeout: 0 },
+          });
+        }
+        await expect
+          .poll(async () => (await evidence('device', deviceId))?.online, {
+            timeout: 60_000,
+            intervals: [2000],
+          })
+          .toBe(0);
+        for (const stream of ['upstream', 'downstream']) {
+          await toxiproxy(
+            'DELETE',
+            `/proxies/${deviceId}/toxics/blackhole_${stream}`,
+          );
+        }
+        await online();
+      } else if (item.scenario !== 'normal') {
+        await publishCommand(deviceId, {
+          command_id: `DRILL_${randomUUID().slice(0, 8)}`,
+          action: 'inject_fault',
+          parameters: { scenario: item.scenario },
+        });
+        // Give the drill time to produce real symptoms (logs, faults, heap).
+        await page.waitForTimeout(
+          item.scenario === 'memory_leak' ? 45_000 : 15_000,
+        );
+        await online();
+      }
       const initialized = page.waitForResponse(
         (r) => r.url().includes('/conversations?') && r.status() === 200,
       );
@@ -165,7 +259,7 @@ for (const item of cases) {
       await page
         .getByRole('textbox', { name: '给小yi发送消息', exact: true })
         .fill(
-          `这是联调专用模拟设备 ${deviceId}，只允许操作这台设备。请先调用 diagnose_fault 做真实诊断，再用 list_device_actions 确认动作，随后${item.high ? '调用 create_remediation_proposal 创建待审批提案，等待我在页面批准' : '调用 execute_device_action 执行动作'}。指定 action=${item.action}，parameters=${JSON.stringify(item.parameters)}。${item.action === 'set_reporting_interval' ? '我明确要求把上报间隔改为 3 秒以验证配置下发。' : ''}只执行或提交一次指定动作，不选择其他修复动作。受理后结束回复，恢复验证由后台跟踪。`,
+          `这是联调专用的 QEMU 仿真设备 ${deviceId}，只允许操作这台设备。请先调用 diagnose_fault 做真实诊断，再用 list_device_actions 确认动作，随后${item.high ? '调用 create_remediation_proposal 创建待审批提案，等待我在页面批准' : '调用 execute_device_action 执行动作'}。指定 action=${item.action}，parameters=${JSON.stringify(item.parameters)}。${item.action === 'set_reporting_interval' ? '我明确要求把上报间隔改为 3 秒以验证配置下发。' : ''}只执行或提交一次指定动作，不选择其他修复动作。受理后结束回复，恢复验证由后台跟踪。`,
         );
       await page.getByRole('button', { name: '发送消息', exact: true }).click();
       const submittedResponse = await submitted;
@@ -289,16 +383,27 @@ for (const item of cases) {
         fullPage: true,
       });
     } finally {
-      const exited = once(simulator, 'exit');
-      if (simulator.exitCode === null && !simulator.killed) {
-        simulator.stdin.end('\n');
-        const timer = setTimeout(() => simulator.kill(), 10_000);
+      const exited = once(device, 'exit');
+      if (device.exitCode === null) {
+        await execute('docker', ['stop', container], {
+          windowsHide: true,
+          timeout: 30_000,
+        }).catch(() => device.kill());
         await exited;
-        clearTimeout(timer);
       }
-      await writeFile(testInfo.outputPath('simulator.log'), simulatorLog);
-      await testInfo.attach('simulator-log', {
-        body: simulatorLog,
+      await toxiproxy('DELETE', `/proxies/${deviceId}`).catch(() => undefined);
+      await compose([
+        'run',
+        '--rm',
+        '-T',
+        'esp32-node',
+        'rm',
+        '-rf',
+        `/flash/${deviceId}`,
+      ]).catch(() => undefined);
+      await writeFile(testInfo.outputPath('serial.log'), serialLog);
+      await testInfo.attach('esp32-serial-log', {
+        body: serialLog,
         contentType: 'text/plain',
       });
     }

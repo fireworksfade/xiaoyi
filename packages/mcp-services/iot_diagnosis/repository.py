@@ -18,7 +18,6 @@ from iot_diagnosis.repositories import (
     LogRepositoryMixin,
 )
 from iot_diagnosis.repository_common import iso
-from iot_diagnosis.retrieval.bm25 import fts_ready, insert_fts_rows
 
 
 class DiagnosisRepository(
@@ -81,53 +80,6 @@ class DiagnosisRepository(
                 "INSERT INTO device_log(device_id, level, module, message, timestamp) VALUES (?, ?, ?, ?, ?)",
                 ("ESP32_05", "ERROR", "mqtt", "MQTT keep alive timeout", now),
             )
-        documents = (
-            (
-                "mqtt_docs",
-                "MQTT_DOC_03",
-                "MQTT Keep Alive 与连接超时",
-                "客户端必须在 Keep Alive 窗口内发送控制报文。频繁出现 keep alive timeout 时，应检查客户端心跳、Broker 超时和网络延迟。",
-            ),
-            (
-                "wifi_docs",
-                "WIFI_DOC_02",
-                "ESP32 WiFi 弱信号诊断",
-                "RSSI 低于 -75 dBm 时连接稳定性会明显下降。检查天线、供电、信道拥塞与接入点距离。",
-            ),
-            (
-                "sensor_docs",
-                "SENSOR_DOC_01",
-                "传感器异常值排查",
-                "传感器读数异常时先检查接线、供电、采样周期和量程，并与已知参考值交叉验证。",
-            ),
-            (
-                "device_docs",
-                "ESP32_DOC_01",
-                "ESP32 运行状态检查",
-                "设备重启、内存不足或长时间运行异常时，应核对 uptime、复位原因、空闲堆和固件版本。",
-            ),
-        )
-        for source, source_id, title, content in documents:
-            cursor = db.execute(
-                """INSERT OR IGNORE INTO knowledge_document
-                (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (source, source_id, title, content, "ESP32", now, source_id, 0),
-            )
-            if cursor.rowcount and fts_ready(db):
-                insert_fts_rows(
-                    db,
-                    [
-                        {
-                            "chunk_id": source_id,
-                            "document_id": source_id,
-                            "source": source,
-                            "title": title,
-                            "heading": "",
-                            "content": content,
-                        }
-                    ],
-                )
 
     # ---------------------------------------------------------------- 设备状态
 

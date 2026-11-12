@@ -49,4 +49,10 @@ Thumbs.db
 /output/
 /tmp/
 /gui-test-screenshots/
-.archify/**/snapshot.index
+
+# ESP-IDF firmware build output
+packages/esp32-node/build/
+packages/esp32-node/build-*/
+packages/esp32-node/managed_components/
+packages/esp32-node/sdkconfig
+packages/esp32-node/sdkconfig.old

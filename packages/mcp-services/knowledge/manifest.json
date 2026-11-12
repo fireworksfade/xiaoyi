@@ -1,0 +1,199 @@
+{
+  "description": "运维知识库：全部取自官方文档原文，由 scripts/fetch_official_docs.py 下载转换，scripts/ingest_recommended_documents.py 入库。",
+  "documents": [
+    {
+      "document_id": "ESP_FATAL_ERRORS",
+      "title": "ESP-IDF 严重错误（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-guides/fatal-errors.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "troubleshooting",
+      "covers": "panic、Guru Meditation 异常类型、abort、看门狗超时、回溯"
+    },
+    {
+      "document_id": "ESP_CORE_DUMP",
+      "title": "ESP-IDF 核心转储（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-guides/core_dump.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "troubleshooting",
+      "covers": "core dump 写入 flash、读取与分析"
+    },
+    {
+      "document_id": "ESP_WATCHDOGS",
+      "title": "ESP-IDF 看门狗（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/wdts.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "manual",
+      "covers": "中断看门狗、任务看门狗、空闲任务饿死"
+    },
+    {
+      "document_id": "ESP_MISC_SYSTEM_API",
+      "title": "ESP-IDF 杂项系统 API：复位原因与堆大小（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/misc_system_api.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "api",
+      "covers": "esp_reset_reason 复位原因、esp_restart、空闲堆查询、应用版本"
+    },
+    {
+      "document_id": "ESP_HEAP_ALLOCATION",
+      "title": "ESP-IDF 堆内存分配（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/mem_alloc.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "manual",
+      "covers": "堆的能力类型、空闲堆与最大空闲块、分配失败"
+    },
+    {
+      "document_id": "ESP_HEAP_DEBUGGING",
+      "title": "ESP-IDF 堆内存调试（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/heap_debug.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "troubleshooting",
+      "covers": "堆信息、堆损坏检测、堆跟踪定位内存泄漏"
+    },
+    {
+      "document_id": "ESP_OTA",
+      "title": "ESP-IDF 空中升级 OTA 与应用回滚（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/ota.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "manual",
+      "covers": "OTA 分区、镜像状态、自动回滚、esp_ota_set_boot_partition"
+    },
+    {
+      "document_id": "ESP_HTTPS_OTA",
+      "title": "ESP-IDF ESP HTTPS OTA（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/esp_https_ota.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "api",
+      "covers": "通过 HTTP(S) 下载升级、镜像描述校验、错误处理"
+    },
+    {
+      "document_id": "ESP_SYSTEM_TIME",
+      "title": "ESP-IDF 系统时间与 SNTP 对时（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/system/system_time.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "manual",
+      "covers": "系统时间、SNTP 同步、时间未同步的影响"
+    },
+    {
+      "document_id": "ESP_MQTT",
+      "title": "ESP-IDF ESP-MQTT 客户端（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/protocols/mqtt.html",
+      "site": "espressif",
+      "source": "mqtt_docs",
+      "category": "protocol",
+      "document_type": "manual",
+      "covers": "MQTT 事件、错误信息、Keep Alive、持久会话、遗嘱、重连"
+    },
+    {
+      "document_id": "ESP_TLS",
+      "title": "ESP-IDF ESP-TLS 与传输层错误码（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/protocols/esp_tls.html",
+      "site": "espressif",
+      "source": "mqtt_docs",
+      "category": "protocol",
+      "document_type": "api",
+      "covers": "esp-tls 错误码（如 ESP_ERR_ESP_TLS_TCP_CLOSED_FIN）、连接失败分类"
+    },
+    {
+      "document_id": "ESP_ERROR_CODES",
+      "title": "ESP-IDF 错误代码参考（官方）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/error-codes.html",
+      "site": "espressif",
+      "source": "device_docs",
+      "category": "software",
+      "document_type": "api",
+      "covers": "全部 esp_err_t 名称与数值，如 ESP_ERR_TIMEOUT、ESP_ERR_ESP_TLS_TCP_CLOSED_FIN (0x8008)"
+    },
+    {
+      "document_id": "MQTT_V311_SPEC",
+      "title": "OASIS MQTT 3.1.1 标准：第 3、4 章（控制报文与运行行为）",
+      "url": "http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html",
+      "site": "oasis",
+      "chapters": [
+        "3",
+        "4"
+      ],
+      "source": "mqtt_docs",
+      "category": "protocol",
+      "document_type": "specification",
+      "covers": "CONNECT/Keep Alive/遗嘱/客户端 ID 接管/会话/QoS/保留消息"
+    },
+    {
+      "document_id": "MOSQUITTO_CONF",
+      "title": "mosquitto.conf 配置手册（官方）",
+      "url": "https://mosquitto.org/man/mosquitto-conf-5.html",
+      "site": "mosquitto",
+      "source": "mqtt_docs",
+      "category": "protocol",
+      "document_type": "configuration",
+      "covers": "持久化、max_keepalive、max_queued_messages、日志、监听器"
+    },
+    {
+      "document_id": "MOSQUITTO_BROKER",
+      "title": "mosquitto Broker 手册（官方）",
+      "url": "https://mosquitto.org/man/mosquitto-8.html",
+      "site": "mosquitto",
+      "source": "mqtt_docs",
+      "category": "protocol",
+      "document_type": "manual",
+      "covers": "Broker 运行、遗嘱、持久化、信号与日志"
+    },
+    {
+      "document_id": "ESP_LWIP",
+      "title": "ESP-IDF lwIP 网络栈（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-guides/lwip.html",
+      "site": "espressif",
+      "source": "wifi_docs",
+      "category": "network",
+      "document_type": "manual",
+      "covers": "BSD socket、TCP 连接、errno、DHCP、DNS"
+    },
+    {
+      "document_id": "ESP_WIFI_DRIVER",
+      "title": "ESP-IDF Wi-Fi 驱动程序（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-guides/wifi.html",
+      "site": "espressif",
+      "source": "wifi_docs",
+      "category": "network",
+      "document_type": "manual",
+      "covers": "Station 连接流程、断线事件与原因码、重连、RSSI"
+    },
+    {
+      "document_id": "ESP_ADC_ONESHOT",
+      "title": "ESP-IDF ADC 单次转换模式驱动（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/peripherals/adc_oneshot.html",
+      "site": "espressif",
+      "source": "sensor_docs",
+      "category": "hardware",
+      "document_type": "manual",
+      "covers": "ADC1 通道、衰减、读取超时与错误码"
+    },
+    {
+      "document_id": "ESP_ADC_CALIBRATION",
+      "title": "ESP-IDF ADC 校准驱动（官方指南）",
+      "url": "https://docs.espressif.com/projects/esp-idf/zh_CN/v5.5.4/esp32/api-reference/peripherals/adc_calibration.html",
+      "site": "espressif",
+      "source": "sensor_docs",
+      "category": "hardware",
+      "document_type": "manual",
+      "covers": "线性拟合校准方案、eFuse 校准值、读数偏差"
+    }
+  ]
+}

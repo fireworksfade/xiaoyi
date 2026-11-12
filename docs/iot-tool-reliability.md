@@ -50,7 +50,7 @@ QoS1 允许网络层重复交付，实际设备端仍应按 `command_id` 去重�
 无证据窗口恢复。迁移不修改历史脚本。开发 Compose 启动命令自动执行迁移：
 
 ```powershell
-docker compose restart backend iot-mcp iot-simulator-fleet
+docker compose restart backend iot-mcp
 docker compose exec -T backend python scripts/bootstrap_local_mcp.py
 ```
 
@@ -75,7 +75,7 @@ python -m tests.mqtt_control_smoke --host 127.0.0.1 --port 1883
 ```
 
 2026-10-07 已在本地运行环境应用：按原有 `compose.yaml` 与
-`compose.retrieval-api-fallback.yaml` 组合重启 backend、iot-mcp、iot-simulator-fleet，
+`compose.retrieval-api-fallback.yaml` 组合重启 backend、iot-mcp 和当时的 Python 模拟机群，
 宿主机前端单独重启。控制库迁移状态为 head=5、pending=[]；注册脚本确认 MCP
 连接正常、发现 19 个工具，并按既定策略启用 17 个工具。
 

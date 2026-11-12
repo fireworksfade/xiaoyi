@@ -60,7 +60,7 @@ python -m pytest
 Compose 使用 `additional_contexts` 引入共享源码，无须扩大整个仓库的构建上下文。首次应用此次改动需要重建镜像：
 
 ```bash
-docker compose up -d --build backend iot-mcp iot-simulator-fleet
+docker compose up -d --build backend iot-mcp
 ```
 
 使用检索模型档位时继续带原有 `-f` 覆盖文件。后续共享库源码变更可通过开发 Compose 中的只读挂载与服务重启加载。依赖或元数据变化仍需重建。
@@ -100,6 +100,6 @@ docker build --build-context retrieval=packages/retrieval -f packages/mcp-servic
 
 用户授权重启后，已基于正在运行的后端镜像构建增量镜像，安装本地构建的后端与共享检索 wheel 并更新应用源码。已核对既有依赖版本满足项目声明，`pip check` 通过；回退镜像保留为 `last-work-backend:before-architecture-20261001`。这次增量构建不依赖重新下载运行时依赖，原始 Dockerfile 的全量下载构建记录仍如上所述。
 
-按实际正在使用的基础 Compose/Portable 配置重建并启动 backend、iot-mcp 和 iot-simulator-fleet 容器，新增共享源码挂载已应用；既有环境变量核对无变化。前端已在 `127.0.0.1:3000` 启动。
+按实际正在使用的基础 Compose/Portable 配置重建并启动 backend、iot-mcp 和当时的 Python 模拟机群容器（该机群已由 QEMU ESP32 机群替代），新增共享源码挂载已应用；既有环境变量核对无变化。前端已在 `127.0.0.1:3000` 启动。
 
 验证结果：后端与 MCP `/ready` 均就绪，前端页面返回 200，同源 `/api/backend/ready` 返回后端 ready，两端共享检索包均为 0.1.0。此次更新未重建或清除持久化数据卷。

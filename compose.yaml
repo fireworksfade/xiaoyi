@@ -1,11 +1,28 @@
 # Portable 档位：无 GPU、无模型下载即可运行。
 # 诊断服务使用本地确定性检索（hash embedding + weighted reranker，384 维集合）。
+
+# QEMU 上运行真实 xiaoyi-node 固件的 ESP32 设备，镜像由 esp32-ota 服务构建。
+x-esp32-node: &esp32-node
+  image: xiaoyi-esp32-node:local
+  pull_policy: never
+  init: true
+  volumes:
+    - esp32-flash:/flash
+  depends_on:
+    esp32-ota:
+      condition: service_started
+    toxiproxy:
+      condition: service_started
+  restart: unless-stopped
+
 services:
   backend:
     build:
       context: ./packages/backend
       additional_contexts:
         retrieval: ./packages/retrieval
+      args:
+        PYPI_INDEX: ${PYPI_INDEX:-https://pypi.org/simple}
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -43,6 +60,8 @@ services:
       context: ./packages/mcp-services
       additional_contexts:
         retrieval: ./packages/retrieval
+      args:
+        PYPI_INDEX: ${PYPI_INDEX:-https://pypi.org/simple}
     command: sh -c "python -m scripts.migrate upgrade --service diagnosis && python -m scripts.migrate upgrade --service control && python -m iot_mcp.server"
     ports:
       - "127.0.0.1:9000:9000"
@@ -134,24 +153,143 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  iot-simulator-fleet:
+  # ---- ESP32 fleet: real xiaoyi-node firmware running in Espressif QEMU ----
+  # Each container is one ESP32 whose flash lives in the esp32-flash volume.
+  # Devices reach the broker through their own Toxiproxy proxy so network faults
+  # can be injected per device. See packages/esp32-node/README.md.
+  esp32-ota:
     build:
-      context: ./packages/mcp-services
-      additional_contexts:
-        retrieval: ./packages/retrieval
-    command: python -m iot_diagnosis.simulator --host mqtt --fleet /app/iot_diagnosis/fleet.json
-    environment:
-      MQTT_HOST: mqtt
-      MQTT_PORT: "1883"
-      PYTHONPATH: /app
+      context: ./packages/esp32-node
+      dockerfile: qemu/Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://deb.debian.org}
+        PYPI_INDEX: ${PYPI_INDEX:-https://pypi.org/simple}
+        IDF_GITHUB_ASSETS: ${IDF_GITHUB_ASSETS:-dl.espressif.com/github_assets}
+    image: xiaoyi-esp32-node:local
+    command: ["ota-server"]
+    ports:
+      - "127.0.0.1:8070:8070"
+    restart: unless-stopped
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    ports:
+      - "127.0.0.1:8474:8474"
     volumes:
-      - ./packages/mcp-services/iot_diagnosis:/app/iot_diagnosis:ro
+      - ./packages/esp32-node/qemu/toxiproxy.json:/config/toxiproxy.json:ro
     depends_on:
       mqtt:
         condition: service_started
-      iot-mcp:
-        condition: service_healthy
     restart: unless-stopped
+
+  esp32-01:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_01
+      DEVICE_NAME: 车间A-环境监测01
+      FIRMWARE_VERSION: "1.3.1"
+      REPORT_INTERVAL: "5"
+      TEMP_BASE: "27.5"
+      BROKER_URI: mqtt://toxiproxy:18301
+
+  esp32-02:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_02
+      DEVICE_NAME: 车间A-空压机监测
+      FIRMWARE_VERSION: "1.2.0"
+      REPORT_INTERVAL: "10"
+      TEMP_BASE: "38.0"
+      BROKER_URI: mqtt://toxiproxy:18302
+
+  esp32-03:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_03
+      DEVICE_NAME: 车间B-焊接工位终端
+      FIRMWARE_VERSION: "1.1.4"
+      REPORT_INTERVAL: "10"
+      TEMP_BASE: "33.5"
+      BROKER_URI: mqtt://toxiproxy:18303
+
+  # Slow heap leak in firmware 1.2.0: runs out of memory after about an hour.
+  esp32-04:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_04
+      DEVICE_NAME: 成品仓库-温湿度终端
+      FIRMWARE_VERSION: "1.2.0"
+      REPORT_INTERVAL: "15"
+      TEMP_BASE: "24.0"
+      BOOT_FAULT: memory_leak
+      BROKER_URI: mqtt://toxiproxy:18304
+
+  # Uplink drops for 75 s every 10 min: keep alive timeouts on both sides.
+  esp32-05:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_05
+      DEVICE_NAME: 机房-边缘网关
+      FIRMWARE_VERSION: "1.2.0"
+      REPORT_INTERVAL: "5"
+      TEMP_BASE: "31.0"
+      BROKER_URI: mqtt://toxiproxy:18305
+      PROXY_NAME: ESP32_05
+      NETWORK_FAULT: outage:every=600,duration=75
+
+  esp32-07:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_07
+      DEVICE_NAME: 冷库-温度监控
+      FIRMWARE_VERSION: "1.1.4"
+      REPORT_INTERVAL: "5"
+      TEMP_BASE: "4.0"
+      BROKER_URI: mqtt://toxiproxy:18307
+
+  # Firmware 1.3.1 on this unit hangs a worker task: task watchdog crash loop.
+  esp32-08:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_08
+      DEVICE_NAME: 配电房-温度监测
+      FIRMWARE_VERSION: "1.3.1"
+      REPORT_INTERVAL: "15"
+      TEMP_BASE: "41.0"
+      BOOT_FAULT: watchdog_reset
+      BROKER_URI: mqtt://toxiproxy:18308
+
+  esp32-09:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_09
+      DEVICE_NAME: 锅炉房-烟温监测
+      FIRMWARE_VERSION: "1.2.0"
+      REPORT_INTERVAL: "10"
+      TEMP_BASE: "55.0"
+      BOOT_FAULT: sensor_error
+      BROKER_URI: mqtt://toxiproxy:18309
+
+  # Upstream resets every TCP connection after 4 minutes: reconnect churn.
+  esp32-10:
+    <<: *esp32-node
+    environment:
+      DEVICE_ID: ESP32_10
+      DEVICE_NAME: 温室大棚-环境监测
+      FIRMWARE_VERSION: "1.3.1"
+      REPORT_INTERVAL: "10"
+      TEMP_BASE: "29.0"
+      BROKER_URI: mqtt://toxiproxy:18310
+      PROXY_NAME: ESP32_10
+      NETWORK_FAULT: reset:every=240,hold=12
+
+  # Template for ad-hoc devices (drills, e2e):
+  #   docker compose run -d --rm -e DEVICE_ID=LAB_01 -e BROKER_URI=mqtt://mqtt:1883 esp32-node
+  esp32-node:
+    <<: *esp32-node
+    profiles: ["tools"]
+    restart: "no"
 
   mqtt:
     image: eclipse-mosquitto:2.1.2-alpine
@@ -181,3 +319,4 @@ volumes:
   iot-mcp-data:
   mqtt-data:
   qdrant-data:
+  esp32-flash:

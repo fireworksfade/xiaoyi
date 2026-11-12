@@ -1,0 +1,5 @@
+# 场景 ntc-open：NTC 模块的 VCC 没有接上，分压输出被拉到 0 V，ADC 读数贴近下限。
+[wokwi]
+version = 1
+firmware = '../../build-wokwi/flasher_args.json'
+elf = '../../build-wokwi/xiaoyi-node.elf'

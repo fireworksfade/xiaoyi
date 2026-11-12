@@ -1,3 +1,2 @@
-# Archify receipts bind the exact bytes of the HTML and JSON artifacts.
-.archify/**/*.html text eol=lf
-.archify/**/*.json text eol=lf
+# Firmware sources and container scripts run on Linux; keep LF on every checkout.
+packages/esp32-node/** text eol=lf

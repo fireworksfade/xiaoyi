@@ -6,16 +6,17 @@
 | --- | --- | --- |
 | `packages/frontend` | 对话、知识库、记忆与设置界面 | `app/` 路由，`features/` 业务组件，`hooks/` 状态，`lib/api/` 请求 |
 | `packages/backend` | 认证、Agent 运行、审批、记忆、审计 | `app/main.py`，`app/cli.py`，`app/services/runs/` |
-| `packages/mcp-services` | 设备诊断与控制、知识检索、模拟器、可选模型服务 | `iot_mcp/server.py`，`iot_diagnosis/simulator/__main__.py` |
+| `packages/mcp-services` | 设备诊断与控制、知识检索、可选模型服务 | `iot_mcp/server.py` |
+| `packages/esp32-node` | ESP-IDF 设备固件、QEMU 机群镜像、Wokwi 工程 | `main/main.c`，`qemu/Dockerfile`，`wokwi.toml` |
 | `packages/retrieval` | 共用 embedding 与 Qdrant HTTP 客户端 | `xiaoyi_retrieval/` |
 | `deploy` | MQTT Broker 配置 | `mosquitto.conf` |
-| `docs` | 当前设计、操作说明和注明日期的验收记录 | 本文、架构简化说明、memory 规格及验收报告 |
+| `docs` | 当前设计与操作说明 | 本文、设备协议、架构简化说明、memory 规格 |
 
 ## 数据与配置
 
 主后端、诊断和控制分别使用 SQLite；知识向量存于 Qdrant。历史 SQLite 与 Alembic 迁移必须保留，已有库的版本连续性和 checksum 校验依赖这些文件。
 
-诊断与控制只运行一个 IoT MCP 服务，默认端口 9000。`external/` 和 `simulator/` 是实际实现；已删除同名 `.py` 兼容文件，原包导入和 `python -m iot_diagnosis.simulator` 命令仍可使用。
+诊断与控制只运行一个 IoT MCP 服务，默认端口 9000。设备端是 QEMU 中运行的真实固件，与平台只通过 [设备协议](device-protocol.md) 约定的 MQTT 主题交互；平台代码中没有设备模拟器。
 
 根 `.env`、各包的本地 `.env*`、运行数据库和 `data/` 属于本机状态，不随源码提交。`node_modules/` 与 `.venv/` 属于运行依赖；`output/`、`tmp/` 和 `.tmp/` 还包含个人资料、备份和验收产物，不能作为缓存统一删除。
 
@@ -27,4 +28,4 @@
 
 当前 IoT MCP wheel 包含 `common`、`iot_diagnosis`、`iot_control`、`iot_mcp` 和 `model_service`。旧子仓库中无法被 GitHub 发现、安装路径也已失效的嵌套 CI 配置已删除。
 
-2026-10-01 全项目清理范围与验证记录见 [清理记录](project-cleanup-20261001.md)。架构与共享配置见 [架构简化说明](architecture-simplification.md)。
+架构与共享配置见 [架构简化说明](architecture-simplification.md)。

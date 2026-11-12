@@ -8,6 +8,7 @@
     python -m app.cli status       # 比较数据库版本与代码 head
     python -m app.cli retention    # 数据保留统计（默认 dry-run）
     python -m app.cli retention --execute   # 实际执行清理（需 RETENTION_DELETE_ENABLED）
+    python -m app.cli reindex-memories      # 为未建向量索引的有效记忆补发同步任务
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="实际删除（默认 dry-run；仍需 RETENTION_DELETE_ENABLED=true）",
     )
+    subparsers.add_parser(
+        "reindex-memories", help="开启记忆向量或更换 embedding 后，为有效记忆补建向量索引"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "upgrade":
@@ -84,6 +88,14 @@ def main(argv: list[str] | None = None) -> int:
                     "开启后再次执行才会删除"
                 }
             )
+        return 0
+    if args.command == "reindex-memories":
+        from app.memory.indexing import reindex_active
+
+        report = asyncio.run(reindex_active())
+        _print({"action": "reindex-memories", **report})
+        if not report["vectors_enabled"]:
+            _print({"warning": "未配置 Qdrant 或 embedding 地址，记忆仍使用关键词检索"})
         return 0
     parser.error(f"unknown command {args.command}")
     return 2

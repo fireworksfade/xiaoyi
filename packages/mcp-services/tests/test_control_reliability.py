@@ -27,6 +27,10 @@ def repo(tmp_path):
     ("set_reporting_interval", {"seconds": 10}, {"reporting_interval_seconds": 10}, {}),
     ("restart_device", {}, {"uptime": 5}, {"uptime": 1000}),
     ("update_firmware", {"version": "2.0"}, {"firmware_version": "2.0"}, {}),
+    ("set_mqtt_keepalive", {"seconds": 120},
+     {"mqtt_keepalive_seconds": 120, "mqtt_status": "connected"}, {}),
+    ("rollback_firmware", {}, {"firmware_version": "1.3.1"},
+     {"firmware_version": "1.4.0", "rollback_version": "1.3.1"}),
 ])
 def test_action_requires_its_own_evidence(repo, action, parameters, state, baseline):
     first = repo.create_command("D1", action, "low", DIA, parameters,
@@ -64,6 +68,28 @@ def test_online_device_with_unmet_criteria_fails(repo, action, parameters, state
     assert repo.finalize_watches(utc_now() + timedelta(minutes=2))[0]["verify_status"] == "failed"
 
 
+@pytest.mark.parametrize("baseline,state,expected", [
+    # 回退后仍在运行原版本：明确失败
+    ({"firmware_version": "1.4.0", "rollback_version": "1.3.1"}, {"firmware_version": "1.4.0"}, "failed"),
+    # 执行前没有可回退版本，无法判定回退到了哪里
+    ({"firmware_version": "1.4.0"}, {"firmware_version": "1.3.1"}, "inconclusive"),
+])
+def test_rollback_is_judged_against_the_version_offered_before(repo, baseline, state, expected):
+    command = repo.create_command("D1", "rollback_firmware", "high", DIA, {},
+                                  verification_baseline=baseline)
+    repo.mark_command_ack(command["command_id"], "applied", {})
+    repo.record_status_sample("D1", {"online": True, **state})
+    assert repo.finalize_watches(utc_now() + timedelta(minutes=2))[0]["verify_status"] == expected
+
+
+def test_keepalive_change_needs_a_connected_session(repo):
+    command = repo.create_command("D1", "set_mqtt_keepalive", "low", DIA, {"seconds": 120})
+    repo.mark_command_ack(command["command_id"], "applied", {})
+    repo.record_status_sample("D1", {"online": True, "mqtt_keepalive_seconds": 120,
+                                     "mqtt_status": "disconnected"})
+    assert repo.finalize_watches(utc_now() + timedelta(minutes=2))[0]["verify_status"] == "failed"
+
+
 def test_stale_retained_or_wrong_device_messages_cannot_verify(repo):
     command = repo.create_command("D1", "reconnect_mqtt", "low", DIA)
     assert repo.mark_command_ack(command["command_id"], "applied", {}, device_id="D2") is None
@@ -77,6 +103,14 @@ def test_stale_retained_or_wrong_device_messages_cannot_verify(repo):
     repo.record_status_sample("D1", {**state, "timestamp": iso(utc_now() + timedelta(days=1))})
     repo.record_log_sample("D1", "ERROR", {"timestamp": iso(utc_now() - timedelta(minutes=1))})
     assert repo.finalize_watches(utc_now() + timedelta(minutes=2))[0]["verify_status"] == "inconclusive"
+
+
+def test_cleared_retained_message_is_ignored_without_error(repo, caplog):
+    client = ControlMQTT(repo)
+    with caplog.at_level("ERROR", logger="xiaoyi.iot_control.mqtt"):
+        for kind in ("cmd_ack", "status", "logs", "fault"):
+            client._on_message(None, None, SimpleNamespace(topic=f"iot/D1/{kind}", retain=False, payload=b""))
+    assert caplog.records == []
 
 
 def test_newer_failure_is_not_overwritten_by_older_success(repo):
@@ -112,6 +146,27 @@ def test_ack_arriving_during_publish_is_not_overwritten(repo):
 
     result = repo.dispatch_command(command["command_id"], send)
     assert result["status"] == "applied" and result["delivery_status"] == "device_acked"
+
+
+def test_firmware_update_waits_longer_for_its_ack(repo):
+    """OTA 回执要等镜像下载并校验完，30 秒的通用超时不适用。"""
+    def sent(command, seconds_ago):
+        repo.dispatch_command(command["command_id"], lambda *_: "broker_confirmed")
+        with repo._connect() as db:
+            db.execute("UPDATE command_outbox SET confirmed_at = ? WHERE command_id = ?",
+                       (iso(utc_now() - timedelta(seconds=seconds_ago)), command["command_id"]))
+
+    update = repo.create_command("D1", "update_firmware", "high", DIA, {"version": "1.3.9"})
+    reconnect = repo.create_command("D2", "reconnect_mqtt", "low", DIA)
+    sent(update, 120)
+    sent(reconnect, 120)
+    assert repo.mark_timed_out_commands() == [reconnect["command_id"]]
+    # 迟到的 OTA 回执仍被接受并进入验证
+    assert repo.mark_command_ack(update["command_id"], "applied", {}, device_id="D1")["status"] == "applied"
+
+    late = repo.create_command("D3", "update_firmware", "high", DIA, {"version": "1.3.9"})
+    sent(late, 301)
+    assert repo.mark_timed_out_commands() == [late["command_id"]]
 
 
 def test_unsent_command_does_not_use_ack_timeout_but_expires(repo):

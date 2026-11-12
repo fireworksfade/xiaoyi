@@ -36,6 +36,9 @@ def new_proposal_id() -> str:
     return f"RPR_{utc_now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8].upper()}"
 
 
+# 回执等待时间：默认用 command_timeout_seconds；OTA 下载和校验镜像通常超过 30 秒。
+ACK_TIMEOUT_SECONDS = {"update_firmware": 300}
+
 class ControlRepository:
     def __init__(
         self,
@@ -241,18 +244,30 @@ class ControlRepository:
                 WHERE device_id = ? AND started_at <= ? AND deadline >= ?""",
                 (device_id, sampled_at, iso()))
 
+    def ack_timeout_seconds(self, action: str) -> int:
+        """设备在动作完成后才回执；OTA 要下载并校验整个镜像，等待时间单独设置。"""
+        return max(self.command_timeout_seconds, ACK_TIMEOUT_SECONDS.get(action, 0))
+
     def mark_timed_out_commands(self) -> list[str]:
-        deadline = iso(utc_now() - timedelta(seconds=self.command_timeout_seconds))
+        now = utc_now()
+        deadline = iso(now - timedelta(seconds=self.command_timeout_seconds))
         timed_out: list[str] = []
         with self._lock, self._connect() as db:
-            rows = db.execute(
-                """SELECT c.command_id FROM device_command c JOIN command_outbox o
+            candidates = db.execute(
+                """SELECT c.command_id, c.action, o.expires_at,
+                COALESCE(o.confirmed_at, o.attempted_at, c.created_at) AS sent_at
+                FROM device_command c JOIN command_outbox o
                 ON o.command_id = c.command_id WHERE c.status = 'pending'
                 AND ((o.delivery_status IN ('broker_confirmed', 'unknown')
                     AND COALESCE(o.confirmed_at, o.attempted_at, c.created_at) < ?)
                     OR o.expires_at < ?)""",
                 (deadline, iso()),
             ).fetchall()
+            rows = [
+                row for row in candidates
+                if (row["expires_at"] and row["expires_at"] < iso())
+                or row["sent_at"] < iso(now - timedelta(seconds=self.ack_timeout_seconds(row["action"])))
+            ]
             for row in rows:
                 db.execute(
                     """UPDATE device_command

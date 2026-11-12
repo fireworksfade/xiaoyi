@@ -1,0 +1,6 @@
+# 场景 no-ap：固件连接不存在的 SSID，复现 WiFi 断开原因码 201 (NO_AP_FOUND)。
+# 先构建 build-wokwi-noap（见 packages/esp32-node/README.md 的 Wokwi 场景一节）。
+[wokwi]
+version = 1
+firmware = '../../build-wokwi-noap/flasher_args.json'
+elf = '../../build-wokwi-noap/xiaoyi-node.elf'

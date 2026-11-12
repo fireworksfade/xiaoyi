@@ -10,7 +10,7 @@ from xiaoyi_retrieval.qdrant import AsyncQdrantClient, collection_payload
 from app.config import get_settings
 from app.db import SessionFactory
 from app.memory.models import Memory, MemoryIndexState, MemoryVectorOutbox
-from app.memory.service import eligible, revision
+from app.memory.service import eligible, index_change, revision
 
 
 def collection():
@@ -52,6 +52,40 @@ async def vector_search(owner, query):
         return await AsyncQdrantClient(client, s.memory_qdrant_url).query(
             collection(), vector, filters=filters, limit=30
         )
+
+
+async def reindex_active():
+    """Queue a vector upsert for every active memory not yet indexed under the current model.
+
+    Needed after vectors are switched on for a database whose memories were written in keyword
+    mode, or after the embedding fingerprint changes. The worker performs the actual sync.
+    """
+    s = get_settings()
+    if not s.memory_qdrant_url or not s.memory_embedding_url:
+        return {"queued": 0, "already_indexed": 0, "vectors_enabled": False}
+    counts = {"queued": 0, "already_indexed": 0, "vectors_enabled": True}
+    async with SessionFactory() as db:
+        items = (
+            await db.scalars(
+                select(Memory).where(Memory.status == "active", Memory.deleted_at.is_(None))
+            )
+        ).all()
+        for item in items:
+            indexed = await db.scalar(
+                select(MemoryIndexState.id).where(
+                    MemoryIndexState.memory_id == item.id,
+                    MemoryIndexState.revision == item.active_revision,
+                    MemoryIndexState.model_fingerprint == s.memory_embedding_fingerprint,
+                    MemoryIndexState.status == "indexed",
+                )
+            )
+            if indexed:
+                counts["already_indexed"] += 1
+                continue
+            await index_change(db, item)
+            counts["queued"] += 1
+        await db.commit()
+    return counts
 
 
 async def sync(job):

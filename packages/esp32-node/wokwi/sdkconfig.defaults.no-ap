@@ -1,0 +1,2 @@
+# Wokwi 场景 no-ap：SSID 指向不存在的接入点，设备应持续上报 reason=201 (NO_AP_FOUND)。
+CONFIG_XIAOYI_WIFI_SSID="Wokwi-MISSING"

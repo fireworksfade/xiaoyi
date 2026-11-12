@@ -35,7 +35,7 @@ def test_empty_db_upgrade_creates_schema(tmp_path: Path, service: str) -> None:
     runner = _runner(service)
     result = runner.upgrade(db_path)
     expected = {
-        "diagnosis": [1, 2, 3, 4, 5, 6],
+        "diagnosis": [1, 2, 3, 4, 5, 6, 7],
         "control": [1, 2, 3, 4, 5],
     }[service]
     assert result["applied"] == expected
@@ -86,7 +86,7 @@ def test_populated_legacy_cases_are_deleted_by_cleanup_migration(tmp_path: Path)
             VALUES ('F1', 'ESP32', 'mqtt', 'Timeout', '[]', '[]', 'unknown',
                     'reconnect', 1, 'admin', 'human_verified', 'now', 'now')""")
         db.commit()
-    assert runner.upgrade(path)["applied"] == [6]
+    assert runner.upgrade(path)["applied"] == [6, 7]
     with sqlite3.connect(path) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "fault_case" not in tables
@@ -239,7 +239,7 @@ def test_migrate_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     try:
         assert migrate_cli.main(["--service", "diagnosis", "status"]) == 0
         first = capsys.readouterr().out
-        assert '"pending": [1, 2, 3, 4, 5, 6]' in first
+        assert '"pending": [1, 2, 3, 4, 5, 6, 7]' in first
 
         assert migrate_cli.main(["--service", "diagnosis", "upgrade", "--dry-run"]) == 0
         capsys.readouterr()

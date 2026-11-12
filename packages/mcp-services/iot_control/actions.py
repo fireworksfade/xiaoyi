@@ -12,7 +12,7 @@ from iot_control.verification import ACCEPTANCE_CRITERIA
 
 ActionName = Literal[
     "reconnect_mqtt", "reconnect_wifi", "calibrate_sensor", "set_reporting_interval",
-    "restart_device", "update_firmware",
+    "set_mqtt_keepalive", "restart_device", "update_firmware", "rollback_firmware",
 ]
 
 LOW_RISK = "low"
@@ -51,6 +51,20 @@ ACTIONS: dict[str, dict[str, Any]] = {
         },
         "applicable_fault_types": ["device_runtime", "network_connection"],
     },
+    "set_mqtt_keepalive": {
+        "risk_level": LOW_RISK,
+        "description": "调整设备的 MQTT Keep Alive 并重新连接，用于高延迟或有空闲超时的链路",
+        "parameters": {
+            "seconds": {
+                "type": "integer",
+                "required": True,
+                "minimum": 10,
+                "maximum": 600,
+                "description": "新的 Keep Alive（秒）",
+            },
+        },
+        "applicable_fault_types": ["mqtt_connection", "network_connection"],
+    },
     "restart_device": {
         "risk_level": HIGH_RISK,
         "description": "远程重启设备，会短暂中断服务，用于清除运行时异常",
@@ -68,6 +82,12 @@ ACTIONS: dict[str, dict[str, Any]] = {
                 "description": "目标固件版本号，例如 1.3.0",
             },
         },
+        "applicable_fault_types": ["device_runtime"],
+    },
+    "rollback_firmware": {
+        "risk_level": HIGH_RISK,
+        "description": "切换回另一个 OTA 分区中的上一版固件并重启，用于新版本引入的故障；仅当设备状态带有 rollback_version 时可用",
+        "parameters": {},
         "applicable_fault_types": ["device_runtime"],
     },
 }

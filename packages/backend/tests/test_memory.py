@@ -1015,6 +1015,38 @@ async def test_vector_indexing_uses_owner_filter_and_marks_indexed(monkeypatch) 
         settings.memory_qdrant_url, settings.memory_embedding_url = previous
 
 
+async def test_reindex_active_backfills_memories_written_in_keyword_mode(monkeypatch) -> None:
+    from app.memory.indexing import reindex_active, sync
+    from app.memory.models import MemoryVectorOutbox
+
+    settings = get_settings()
+    monkeypatch.setattr("app.memory.indexing.httpx.AsyncClient", _FakeQdrantClient)
+    previous = (settings.memory_qdrant_url, settings.memory_embedding_url)
+    settings.memory_qdrant_url, settings.memory_embedding_url = None, None
+    try:
+        async with SessionFactory() as db:
+            await service.create(db, "user-a", _experience_payload(confirm=True))
+            candidate = _experience_payload(confirm=False).model_copy(update={"title": "候选经验"})
+            await service.create(db, "user-a", candidate)
+            await db.commit()
+        assert (await reindex_active())["vectors_enabled"] is False
+
+        settings.memory_qdrant_url = "http://qdrant:6333"
+        settings.memory_embedding_url = "http://embed:8080"
+        # Only the active memory is queued; the candidate stays out of the index.
+        assert await reindex_active() == {"queued": 1, "already_indexed": 0, "vectors_enabled": True}
+        async with SessionFactory() as db:
+            outbox = await db.scalar(
+                select(MemoryVectorOutbox)
+                .where(MemoryVectorOutbox.operation == "upsert")
+                .order_by(MemoryVectorOutbox.created_at.desc())
+            )
+        await sync(SimpleNamespace(payload={"outbox_id": outbox.id}))
+        assert await reindex_active() == {"queued": 0, "already_indexed": 1, "vectors_enabled": True}
+    finally:
+        settings.memory_qdrant_url, settings.memory_embedding_url = previous
+
+
 async def test_vector_indexing_fingerprint_mismatch_and_late_upsert_never_revive(
     monkeypatch,
 ) -> None:
@@ -1214,3 +1246,45 @@ async def test_late_approval_stays_on_original_run_budget() -> None:
             )
         ).all()
         assert stops == []
+
+
+async def test_ops_memory_seed_links_experiences_to_real_episodes() -> None:
+    """seed/ops_memories.json 经正常 memory 服务写入：情景启用、经验链接回情景，重复运行不新增。"""
+    from app.memory.models import MemoryEvidenceLink
+    from app.models import MCPPurpose, MCPServer, UserRole
+    from app.security import hash_password
+    from scripts.seed_ops_memories import SEED_FILE, seed
+
+    async with SessionFactory() as db:
+        db.add(User(username="admin", password_hash=hash_password("x"), role=UserRole.ADMIN))
+        db.add(MCPServer(server_key="iot-mcp-local", name="IoT", url="http://iot-mcp:9000/mcp",
+                         purpose=MCPPurpose.IOT, enabled=True, connection_status="connected"))
+        await db.commit()
+
+    data = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    total = len(data["episodes"]) + len(data["experiences"])
+    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {"created": total, "kept": 0}
+    assert await seed("admin", "iot-mcp-local", SEED_FILE) == {"created": 0, "kept": total}
+
+    async with SessionFactory() as db:
+        memories = (await db.scalars(select(Memory))).all()
+        by_kind = {kind: [m for m in memories if m.kind == kind] for kind in ("episodic", "experience")}
+        assert len(by_kind["episodic"]) == len(data["episodes"])
+        assert all(m.status == "active" for m in by_kind["episodic"])
+        unverified = {item["slug"] for item in data["experiences"] if item.get("confirm") is False}
+        for memory in by_kind["experience"]:
+            slug = memory.event_key.split(":", 1)[1]
+            assert memory.status == ("candidate" if slug in unverified else "active")
+        links = (await db.scalars(select(MemoryEvidenceLink))).all()
+        assert len(links) == sum(len(item["episodes"]) for item in data["experiences"])
+        # 经验里的 episode:<slug> 引用已换成真实的情景记忆 ID
+        episode_ids = {m.id for m in by_kind["episodic"]}
+        all_refs = []
+        for memory in by_kind["experience"]:
+            rev = await service.revision(db, memory)
+            refs = [ref for claim in rev.content_json["claims"] for ref in claim["evidence_refs"]]
+            assert not any(ref.startswith("episode:") for ref in refs)
+            assert rev.applicability_json["device_types"] == ["ESP32"]
+            assert rev.applicability_json["mcp_server_id"]
+            all_refs += refs
+        assert episode_ids <= set(all_refs)

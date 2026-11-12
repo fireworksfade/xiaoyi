@@ -10,7 +10,8 @@
 | 后端 | `packages/backend` | FastAPI、SQLite、Agent 运行、SSE、MCP 工具目录与审批策略 |
 | IoT MCP | `packages/mcp-services/iot_mcp` | 单个 Streamable HTTP 服务，整合诊断与控制工具 |
 | 共享检索库 | `packages/retrieval` | 两个 Python 服务共用的 embedding 与 Qdrant 请求、响应校验；不负责业务数据和权限 |
-| 基础设施 | `compose.yaml` | MQTT、Qdrant、设备模拟机群及后端和 MCP 容器 |
+| ESP32 固件与机群 | `packages/esp32-node` | ESP-IDF 固件 xiaoyi-node；Compose 中每台设备是一个运行真实固件的 Espressif QEMU 容器，Wokwi 补充 WiFi 建链与传感器 |
+| 基础设施 | `compose.yaml` | MQTT、Qdrant、Toxiproxy、OTA 固件服务、QEMU ESP32 机群及后端和 MCP 容器 |
 
 未配置外部检索 API 时，默认 Compose 使用本地 hash embedding 和 weighted reranker（Portable 档位），无需 GPU 或模型下载。可在根目录 `.env` 配置 API 作为主 Embedding / Reranker，再叠加本地 Qwen 0.6B 兜底；也可选择本地 Qwen 主档位，见下文「检索模型档位」。后端默认使用演示 Runtime；若数据库中已保存模型配置，运行时会使用该配置。默认不启动 Qwen3 模型服务，是为了让开发环境无需 GPU、模型下载或较长的冷启动等待即可运行。
 
@@ -32,15 +33,17 @@ docker compose ps
 docker compose exec -T backend python scripts/bootstrap_local_mcp.py
 ```
 
+首次构建会在 `espressif/idf` 镜像中编译多个固件版本并安装 QEMU，耗时较长（视网络约 10–30 分钟），之后有缓存。设备机群、故障演练和 Wokwi 用法见 [ESP32 设备仿真](packages/esp32-node/README.md)，设备与平台的 MQTT 约定见 [设备协议](docs/device-protocol.md)。
+
 最后一条命令向后端注册 `http://iot-mcp:9000/mcp`，测试连接、刷新工具目录并配置风险策略。重复运行可刷新已有连接。开发环境使用演示账号 `admin / admin123`；该账号只适用于本地开发。
 
-首次启动或重建数据卷后，导入随项目提供的真实技术资料：
+首次启动或重建数据卷后，导入随项目提供的官方技术文档：
 
 ```bash
 docker compose exec -T iot-mcp python -m scripts.ingest_recommended_documents
 ```
 
-该命令将 20 份官方文档快照和 12 份整理的诊断指南写入持久化知识库，同时建立全文与 Qdrant 向量索引，覆盖 MQTT、WiFi、传感器和 ESP32 设备。官方快照正文保留来源链接；这些资料属于技术文档，不是现场故障案例。重复执行会按固定文档 ID 替换对应资料，不会重复添加。输出中的 `vector_indexed: true` 和 `sync_status: complete` 表示向量同步完成；`pending` 表示等待后台重试。导入后可在前端“知识库”查看，并通过 `search_knowledge` 检索。
+该命令把 `packages/mcp-services/knowledge/manifest.json` 列出的 19 份官方文档写入持久化知识库，同时建立全文与 Qdrant 向量索引。文档按仿真能复现的运维问题选取：ESP-IDF v5.5.4 中文版的严重错误、核心转储、看门狗、复位原因、堆内存、OTA 与回滚、系统时间、ESP-MQTT、ESP-TLS、错误代码、lwIP、Wi-Fi、ADC，OASIS MQTT 3.1.1 标准第 3、4 章，以及 Mosquitto 的两份手册。正文是官方原文，开头保留来源链接；项目自己的排查经验不放在知识库里，而是放在“记忆”中（见 `packages/backend/seed/ops_memories.json`）。更新文档时先运行 `python scripts/fetch_official_docs.py` 从官网重新下载。重复执行会按固定文档 ID 替换对应资料，不会重复添加。输出中的 `vector_indexed: true` 和 `sync_status: complete` 表示向量同步完成；`pending` 表示等待后台重试。导入后可在前端“知识库”查看，并通过 `search_knowledge` 检索。
 
 ### 2. 启动前端
 
@@ -191,7 +194,7 @@ Remove-Item Env:E2E_MEMORY_LIVE, Env:E2E_PYTHON
 
 macOS/Linux 可用 `E2E_MEMORY_LIVE=1 E2E_PYTHON="$PWD/packages/backend/.venv/bin/python" npm run test:e2e`。测试会禁用 Wrangler 对 `.env.local` 的覆盖，并在发送消息前核验临时后端标记；不拦截或 mock 记忆 API 响应。运行前关闭同一前端目录已有的 dev 服务，Vinext 同一目录只允许一个 dev 实例。临时测试服务在结束后退出。
 
-2026-10-07 IoT 工具可靠性修复后的验证：MCP 305 passed，后端 158 passed、1 skipped，前端 55 passed；类型检查、lint、构建和真实 MQTT 冒烟通过。后端、IoT MCP、模拟机群及前端已重启，控制库迁移到版本 5，工具目录与既定风险策略已刷新；前端页面、同源代理及两个服务的就绪检查均返回 HTTP 200。在线 MCP 调用验证了新动作枚举、六类动作验收说明、实时设备状态和 SQL 分页。测试边界与升级说明见 [IoT 工具可靠性说明](docs/iot-tool-reliability.md)。
+2026-10-07 IoT 工具可靠性修复后的验证：MCP 305 passed，后端 158 passed、1 skipped，前端 55 passed；类型检查、lint、构建和真实 MQTT 冒烟通过。后端、IoT MCP、当时的 Python 模拟机群及前端已重启，控制库迁移到版本 5，工具目录与既定风险策略已刷新；前端页面、同源代理及两个服务的就绪检查均返回 HTTP 200。在线 MCP 调用验证了新动作枚举、六类动作验收说明、实时设备状态和 SQL 分页。测试边界与升级说明见 [IoT 工具可靠性说明](docs/iot-tool-reliability.md)。
 
 2026-10-07 较早的 Text2SQL 与 API 检索联调验证：前端 54 passed，后端 158 passed、1 skipped，MCP 263 passed，浏览器基础流程 1 passed、真实 IoT / 知识库流程 2 passed；类型检查、lint 和构建通过。真实调用验证了 API、本地 Qwen、hash/weighted 及 API 恢复四条检索路径，知识文档新增、替换、删除同步到三套索引。启动步骤与验收细节见 [前后端联调说明](docs/integration-testing.md)。
 
@@ -203,7 +206,7 @@ npm run test:e2e -- --workers=1 e2e/iot-live.spec.ts
 Remove-Item Env:E2E_IOT_LIVE
 ```
 
-2026-10-01 全项目清理后的验证（历史记录）：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。清理与重启范围见 [全项目清理记录](docs/project-cleanup-20261001.md)。
+2026-10-01 全项目清理后的验证（历史记录）：后端 162 passed、1 skipped，MCP 154 passed，共享检索库 10 passed，前端 Vitest 37 passed，完整浏览器流程 2 passed；类型检查、lint、构建、Compose 配置和 MCP wheel 内容核验均通过。
 
 2026-09-30 联调结果（历史记录）：
 
@@ -216,7 +219,7 @@ Remove-Item Env:E2E_IOT_LIVE
 | MCP 回归 | 150 passed、5 skipped（历史结果，当前存储与测试范围见上文） |
 | 前端回归 | typecheck、lint、34 项 Vitest、build 全通过 |
 
-首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。详细记忆验证与小样本在线语义评估见 [修复报告](docs/memory-repair-report-20260930.md)。
+首轮普通冒烟遇到外部模型流的连接中断；同源重验与跨域验证随后通过。确定性浏览器联调不依赖该外部模型。
 
 ## 设备控制与恢复验证
 
@@ -233,13 +236,13 @@ Remove-Item Env:E2E_IOT_LIVE
 | `restart_device` | 重启设备，会短暂中断服务 | 高风险 | 需要人工审批 |
 | `update_firmware` | 升级到 `version` 指定的固件版本并自动重启 | 高风险 | 需要人工审批 |
 
-2026-10-08 六种动作的前后端端到端联调全部通过，覆盖真实 Agent、MCP、MQTT 与独立模拟设备的执行回执、完整观察窗口和刷新恢复；重启与升级同时覆盖页面人工审批。真实 ESP32 固件、物理传感器校准与 OTA 安装需单独验收。复现步骤见 [前后端联调说明](docs/integration-testing.md#六种修复动作联调)。
+2026-10-08 六种动作的前后端端到端联调全部通过（当时设备端为 Python 模拟器）。设备端现已换成 QEMU 中运行的真实 xiaoyi-node 固件：重启、OTA 升级与回滚、看门狗复位和 core dump 均由固件真实执行；QEMU 没有 WiFi 射频和传感器外设，`reconnect_wifi` 在 QEMU 节点上只能重启以太网口，验收会因缺少 RSSI 返回 `inconclusive`，WiFi 与传感器在 Wokwi 中验证。复现步骤见 [前后端联调说明](docs/integration-testing.md#六种修复动作联调)。
 
 命令、审批与待投递记录原子落库。`ok=true` 表示请求已受理；`delivery_status` 区分待投递、发送中、Broker 确认、设备回执和结果未知。MQTT 暂时不可用时保留命令，通道恢复后继续发送；结果未知时不自动重发，队列有效期为 30 分钟。通过 `get_action_result` 查询设备执行及恢复验证结果。
 
 恢复观察窗口按命令持久保存，服务重启后继续验证。MQTT 重连、WiFi 重连、传感器校准、上报间隔调整、设备重启和固件升级分别检查对应状态字段；仅设备在线不能证明修复成功。证据不足时返回 `verify_status=inconclusive`，前端显示“验证证据不足”，记忆模块按结果不明处理。真实设备需实现验收字段与过期命令拒绝，具体协议见 [可靠性与验收说明](docs/iot-tool-reliability.md)。
 
-本次更新包含控制库迁移 0005 与工具参数 schema 变更。开发 Compose 启动时自动迁移；更新源码后重启后端、IoT MCP 和模拟机群，再运行 `bootstrap_local_mcp.py` 刷新工具与策略。宿主机前端单独重启，检索模型档位继续使用原有 Compose 覆盖文件。
+本次更新包含控制库迁移 0005 与工具参数 schema 变更。开发 Compose 启动时自动迁移；更新源码后重启后端和 IoT MCP，再运行 `bootstrap_local_mcp.py` 刷新工具与策略。宿主机前端单独重启，检索模型档位继续使用原有 Compose 覆盖文件。
 
 ## RAG + Text2SQL
 
@@ -261,7 +264,7 @@ Text2SQL 复用 IoT MCP 的 `DIAGNOSIS_LLM_*` 配置，默认按北京时间解�
 
 ## 记忆（Memory）
 
-旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)，历史验收证据见 [`docs/memory-repair-report-20260930.md`](docs/memory-repair-report-20260930.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。
+旧故障案例库与自动沉淀链路已整体退役，由主后端的记忆模块替代（设计见 [`docs/memory-replacement-spec.md`](docs/memory-replacement-spec.md)）。2026-09-30 复验发现的生命周期、来源清除与修复执行边界问题已修复，浏览器记忆流程与小型语义评估通过；正式部署和规模性能验证仍需另行执行。
 
 - 三层记忆：工作记忆（会话内，不入向量）、情景记忆（一次具体经历，含成功/失败/无结论）、经验记忆（可复用认识与步骤）。同一会话的新 Run 会加载此前任务留下的工作记忆（TTL 默认 24 小时，`MEMORY_WORKING_TTL_HOURS`）。
 - 自动提炼的经验一律先进入候选，用户在界面确认后才参与召回；情景中已收敛的事实性经历可直接作为历史参考。Agent 可用只读的 `search_memory` / `get_memory` 查询当前用户自己的记忆；`propose_memory` 只能创建待确认候选。
@@ -270,9 +273,10 @@ Text2SQL 复用 IoT MCP 的 `DIAGNOSIS_LLM_*` 配置，默认按北京时间解�
 - 修复预算：每个 Run 最多 3 次修复（`AGENT_REPAIR_MAX_ATTEMPTS`，部署时可降为 1–3，Run 创建时固化）；明确失败后自动重新诊断，需要新依据才继续，高风险动作逐次审批；超过运行期限（`AGENT_RUN_MAX_RUNTIME_MINUTES`，默认 60）后停止自动再诊断，结果由后台跟踪（最长 7 天）。
 - 可观测性：`/metrics` 暴露 `memory.*` 生命周期事件、后台任务与 `remediation.loop_stopped`（含停止原因与已用名额）指标；`/api/v1/memories/activity` 返回候选数量、后台任务状态与命令结果追踪（含"需要后续诊断"标记）。
 - REST 管理接口在 `/api/v1/memories`（列表/详情/编辑/确认/暂停/删除/检索/活动/失败任务重试），前端"记忆"入口展示认识、步骤、条件、限制、来源和版本对照，确认的是已查看的具体版本。编辑生成待确认新版本，旧版本继续召回；暂停版本重新确认前不可使用。晚到失败提供“发起后续诊断”入口，失败的记忆任务可手动重试。旧案例不迁入 memory。
+- 运维经验种子：`packages/backend/seed/ops_memories.json` 包含 15 条情景记忆和 16 条经验记忆。情景记忆来自仿真中真实复现的运维问题，附诊断和命令 ID（见 [联调记录](docs/integration-testing.md)）；经验记忆是从中总结的处置规律。经验中有 2 条（WiFi 断开原因码、NTC 开路/短路）尚未在 Wokwi 中复现，因此作为待确认候选。写入命令为 `docker compose exec backend python -m scripts.seed_ops_memories --username admin`，需先运行 `scripts.bootstrap_local_mcp` 注册 IoT MCP。每条记忆有固定的事件键，重复执行不会新增。
 - 旧案例 REST 接口（`/api/v1/fault-cases`、`/api/v1/diagnosis`）与 MCP 案例工具（`list_fault_cases` 等）已删除，调用返回 404；历史工具目录条目保持不可调用。
 - 删除聊天默认保留长期记忆（`memory_policy=keep`）；勾选清除时撤回来源和受影响正文，多来源经验仅保留独立有效证据并重新审核。保留后也可从记忆详情清除已删除聊天的来源。删除的记忆正文按默认 30 天保留期由到期任务和周期扫描清理。
-- 默认记忆检索使用 SQL 关键词降级。可通过共享的 `RETRIEVAL_QDRANT_URL`、`RETRIEVAL_EMBEDDING_BASE_URL`、`RETRIEVAL_EMBEDDING_MODEL`、`RETRIEVAL_EMBEDDING_DIMENSIONS` 和可选 API Key 配置模型连接；`MEMORY_*` 与 `DIAGNOSIS_*` 的对应专用配置优先，索引集合、记忆指纹和检索规则仍分别管理。单独启用 MCP 检索模型档位不会自动打开后端记忆向量配置；显式设置共享连接地址才会同时启用记忆向量。embedding 地址支持服务根地址及 `/v1` 基地址。Docker 地址使用 `http://qdrant:6333` 和 `http://retrieval-models:9010/v1`，宿主机使用 `127.0.0.1` 对应端口。共享配置与覆盖规则见 [架构简化说明](docs/architecture-simplification.md)。
+- 默认记忆检索使用 SQL 关键词降级。可通过共享的 `RETRIEVAL_QDRANT_URL`、`RETRIEVAL_EMBEDDING_BASE_URL`、`RETRIEVAL_EMBEDDING_MODEL`、`RETRIEVAL_EMBEDDING_DIMENSIONS` 和可选 API Key 配置模型连接；`MEMORY_*` 与 `DIAGNOSIS_*` 的对应专用配置优先，索引集合、记忆指纹和检索规则仍分别管理。单独启用 MCP 检索模型档位不会自动打开后端记忆向量配置；显式设置共享连接地址才会同时启用记忆向量。embedding 地址支持服务根地址及 `/v1` 基地址。如果开启向量前已经写入过记忆，或者更换过 embedding 模型，需要运行 `docker compose exec backend python -m app.cli reindex-memories` 为有效记忆补建索引，后台任务会完成同步。Docker 地址使用 `http://qdrant:6333` 和 `http://retrieval-models:9010/v1`，宿主机使用 `127.0.0.1` 对应端口。共享配置与覆盖规则见 [架构简化说明](docs/architecture-simplification.md)。
 
 ## 常用维护命令
 

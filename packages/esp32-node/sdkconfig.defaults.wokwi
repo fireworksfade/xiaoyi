@@ -1,0 +1,7 @@
+# Wokwi: real WiFi association to Wokwi-GUEST and an NTC thermistor on ADC1.
+CONFIG_XIAOYI_NET_WIFI=y
+CONFIG_XIAOYI_SENSOR_NTC=y
+CONFIG_ETH_USE_OPENETH=n
+CONFIG_XIAOYI_DEFAULT_DEVICE_ID="ESP32_06"
+CONFIG_XIAOYI_DEFAULT_BROKER_URI="mqtt://host.wokwi.internal:1883"
+CONFIG_XIAOYI_DEFAULT_OTA_BASE_URL="http://host.wokwi.internal:8070"

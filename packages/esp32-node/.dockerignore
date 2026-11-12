@@ -1,0 +1,8 @@
+build/
+build-*/
+managed_components/
+sdkconfig
+sdkconfig.old
+wokwi.toml
+diagram.json
+README.md

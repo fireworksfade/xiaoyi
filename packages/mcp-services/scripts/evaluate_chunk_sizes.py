@@ -62,8 +62,8 @@ def _load_document_mapping() -> list[tuple[str, str, str, str]]:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return [
-        (filename, source, document_id, title)
-        for filename, source, document_id, title in module.DOCUMENTS
+        (f"{entry['document_id']}.md", entry["source"], entry["document_id"], entry["title"])
+        for entry in module.load_manifest()
     ]
 
 
